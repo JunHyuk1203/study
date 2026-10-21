@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSegment, facePose, paintAvatar } from '../camera-avatar.js';
+import { checkSegment, facePose, mergePath, paintAvatar } from '../camera-avatar.js';
 
 test('avatar follows mirrored head position and tilt within safe display bounds', () => {
   assert.deepEqual(facePose({ 1: { x: .5, y: .5 }, 33: { x: .3, y: .4 }, 263: { x: .7, y: .4 } }), { x: 0, y: 0, roll: -0 });
@@ -35,9 +35,12 @@ test('recognition check completes despite frequent tracking updates', context =>
   assert.equal(mount.dataset.avatarPhase, 'searching');
   paintAvatar(mount, pose, true, 'tracking');
   assert.equal(mount.dataset.avatarPhase, 'success');
-  context.mock.timers.tick(800);
+  context.mock.timers.tick(560);
+  assert.equal(mount.dataset.avatarPhase, 'check');
   paintAvatar(mount, pose, true, 'tracking');
-  context.mock.timers.tick(100);
+  context.mock.timers.tick(699);
+  assert.equal(mount.dataset.avatarPhase, 'check');
+  context.mock.timers.tick(1);
   assert.equal(mount.dataset.avatarPhase, 'avatar');
 });
 
@@ -46,11 +49,32 @@ test('losing a face cancels the check and reacquisition plays it again', context
   const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };
   paintAvatar(mount, pose, true, 'tracking');
   context.mock.timers.tick(300);
-  paintAvatar(mount, null, true, 'scanning');
+  paintAvatar(mount, null, false, 'paused');
   context.mock.timers.tick(1000);
   assert.equal(mount.dataset.avatarPhase, 'searching');
   paintAvatar(mount, pose, true, 'tracking');
   assert.equal(mount.dataset.avatarPhase, 'success');
-  context.mock.timers.tick(900);
+  context.mock.timers.tick(560);
+  assert.equal(mount.dataset.avatarPhase, 'check');
+  context.mock.timers.tick(700);
   assert.equal(mount.dataset.avatarPhase, 'avatar');
+});
+
+test('SVG path interpolation writes actual geometry rather than CSS-only paths', () => {
+  assert.equal(mergePath([[0, 0], [10, 10]], [[20, 30], [40, 50]], 0), 'M0.000 0.000L10.000 10.000');
+  assert.equal(mergePath([[0, 0], [10, 10]], [[20, 30], [40, 50]], .5), 'M10.000 15.000L25.000 30.000');
+  assert.equal(mergePath([[0, 0], [10, 10]], [[20, 30], [40, 50]], 1), 'M20.000 30.000L40.000 50.000');
+});
+
+test('a single missed frame during the grace period does not cancel the check', context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };
+  paintAvatar(mount, pose, true, 'tracking');
+  context.mock.timers.tick(200);
+  paintAvatar(mount, null, true, 'scanning');
+  assert.equal(mount.dataset.avatarPhase, 'success');
+  context.mock.timers.tick(360);
+  assert.equal(mount.dataset.avatarPhase, 'check');
+  paintAvatar(mount, null, true, 'scanning');
+  assert.equal(mount.dataset.avatarPhase, 'check');
 });

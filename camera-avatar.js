@@ -20,24 +20,63 @@ function captureFace(mount) {
   const order = [0, 7, 1, 6, 2, 5, 3, 4];
   return [...mount.querySelectorAll('.recognition-piece')].map((piece, index) => {
     const target = checkSegment(order[index]);
-    const length = piece.getTotalLength();
-    const matrix = piece.ownerSVGElement.getScreenCTM()?.inverse().multiply(piece.getScreenCTM());
-    const source = target.map((_, step) => {
-      const point = piece.getPointAtLength(length * step / (target.length - 1));
-      const transformed = matrix ? point.matrixTransform(matrix) : point;
-      return [transformed.x, transformed.y];
-    });
-    return { piece, source, target };
+    const original = piece.getAttribute('d');
+    let source = target;
+    try {
+      const length = piece.getTotalLength();
+      const screen = piece.ownerSVGElement.getScreenCTM(), local = piece.getScreenCTM();
+      const matrix = screen && local ? screen.inverse().multiply(local) : null;
+      source = target.map((_, step) => {
+        const point = piece.getPointAtLength(length * step / (target.length - 1));
+        return matrix ? [matrix.a * point.x + matrix.c * point.y + matrix.e, matrix.b * point.x + matrix.d * point.y + matrix.f] : [point.x, point.y];
+      });
+    } catch { /* A hidden/detached SVG can lack a screen matrix; still show its assembled check. */ }
+    return { piece, source, target, original };
   });
 }
-function mergeFace(parts) {
-  const path = points => `path("${points.map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(3)} ${y.toFixed(3)}`).join('')}")`;
-  const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 560;
-  // Each original stroke becomes its own connected section of the check. No overlay check.
-  return parts.map(({ piece, source, target }) => piece.animate([
-    { d: path(source), transform: 'none', strokeWidth: 4 },
-    { d: path(target), transform: 'none', strokeWidth: 5.5 },
-  ], { duration, easing: 'cubic-bezier(.65,0,.12,1)', fill: 'forwards' }));
+export function mergePath(source, target, progress) {
+  return target.map(([x, y], index) => {
+    const start = source[index];
+    return `${index ? 'L' : 'M'}${(start[0] + (x - start[0]) * progress).toFixed(3)} ${(start[1] + (y - start[1]) * progress).toFixed(3)}`;
+  }).join('');
+}
+function mergeFace(parts, completed) {
+  const duration = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 560;
+  let frameId, deadline, done = false, started;
+  const draw = progress => {
+    for (const { piece, source, target } of parts) {
+      piece.style.transform = 'none';
+      piece.setAttribute('d', mergePath(source, target, progress));
+      piece.setAttribute('stroke-width', String(4 + progress * 1.5));
+    }
+  };
+  const finish = () => {
+    if (done) return;
+    done = true; clearTimeout(deadline);
+    if (frameId != null) cancelAnimationFrame(frameId);
+    draw(1); completed();
+  };
+  const tick = now => {
+    if (done) return;
+    started ??= now;
+    const progress = Math.min(1, (now - started) / duration);
+    draw(progress < .5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2);
+    if (progress >= 1) finish();
+    else frameId = requestAnimationFrame(tick);
+  };
+  draw(0);
+  // Direct SVG attributes work even in browsers that do not animate CSS `d`.
+  if (parts.length) {
+    frameId = requestAnimationFrame(tick);
+    deadline = setTimeout(finish, duration + 250);
+  } else deadline = setTimeout(finish, duration);
+  return () => {
+    done = true; clearTimeout(deadline);
+    if (frameId != null) cancelAnimationFrame(frameId);
+    for (const { piece, original } of parts) {
+      piece.setAttribute('d', original); piece.removeAttribute('stroke-width'); piece.style.removeProperty('transform');
+    }
+  };
 }
 
 export function facePose(landmarks) {
@@ -74,23 +113,27 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
       </g>
     </svg>`;
   }
-  const desired = status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   let presentation = presentations.get(mount);
+  const finishing = active && status === 'scanning' && ['success', 'check'].includes(mount.dataset.avatarPhase) && presentation?.desired === 'recognized';
+  const desired = finishing || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   if (!presentation || presentation.desired !== desired) {
     const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
-    for (const animation of presentation?.animations || []) animation.cancel();
-    presentation = { desired, timer: null, animations: [] };
+    presentation?.cancelMerge?.();
+    presentation = { desired, timer: null, cancelMerge: null };
     presentations.set(mount, presentation);
     mount.dataset.avatarPhase = desired === 'recognized' ? 'success' : desired;
-    if (parts.length) presentation.animations = mergeFace(parts);
-    if (desired === 'recognized') presentation.timer = setTimeout(() => {
+    if (desired === 'recognized') presentation.cancelMerge = mergeFace(parts, () => {
       if (presentations.get(mount) !== presentation) return;
-      mount.dataset.avatarPhase = 'avatar';
-      mount.querySelector('.cam-avatar').setAttribute('aria-hidden', 'false');
-      mount.querySelector('.cam-recognition').setAttribute('aria-hidden', 'true');
-      presentation.timer = null;
-    }, 900);
+      mount.dataset.avatarPhase = 'check';
+      presentation.timer = setTimeout(() => {
+        if (presentations.get(mount) !== presentation) return;
+        mount.dataset.avatarPhase = 'avatar';
+        mount.querySelector('.cam-avatar').setAttribute('aria-hidden', 'false');
+        mount.querySelector('.cam-recognition').setAttribute('aria-hidden', 'true');
+        presentation.timer = null;
+      }, 700);
+    });
   }
   mount.querySelector('.cam-recognition').setAttribute('aria-label', desired === 'recognized' ? '얼굴 인식 완료' : desired === 'error' ? '얼굴 인식 연결 대기' : '얼굴을 찾는 중');
   const avatar = mount.querySelector('.cam-avatar');
