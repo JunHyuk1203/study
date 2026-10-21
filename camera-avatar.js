@@ -3,7 +3,7 @@ const presentations = new WeakMap();
 const checkVertex = [152, 179];
 const checkLeft = Math.hypot(19, 19), checkRight = Math.hypot(37, 40);
 const checkTurn = checkLeft / (checkLeft + checkRight);
-export const MERGE_DURATION_MS = 1200;
+export const MERGE_DURATION_MS = 1320;
 
 export function checkReach(progress) {
   const start = 18 / (checkLeft + checkRight);
@@ -64,18 +64,10 @@ function mergeFace(parts, completed) {
   const duration = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : MERGE_DURATION_MS;
   let frameId, deadline, done = false, started;
   const draw = progress => {
-    const gathering = progress < .34;
     for (const { piece, source, line, slot } of parts) {
       piece.style.transform = 'none';
-      // Wind every original stroke outward, then sweep them into one visible
-      // upper-left line. Staggered curved trajectories make the gathering legible.
-      const windup = Math.min(1, progress / .085);
-      const phase = clamp((progress - .085 - slot * .004) / (.255 - slot * .004), 0, 1);
-      const eased = phase ** 2 * (3 - 2 * phase);
-      const launched = source.map(([x, y]) => [160 + (x - 160) * (1 + .22 * windup), 160 + (y - 160) * (1 + .22 * windup)]);
-      const gathered = line.map(([x, y]) => [x + Math.sin(Math.PI * phase) * (slot - 3.5) * 5, y - Math.sin(Math.PI * phase) * 26]);
-      const traced = gathering ? null : checkSegment(slot, 8, checkReach(progress));
-      piece.setAttribute('d', gathering ? mergePath(launched, gathered, eased) : mergePath(traced, traced, 1));
+      const points = mergeStroke(source, line, slot, progress);
+      piece.setAttribute('d', mergePath(points, points, 1));
       piece.setAttribute('stroke-width', String(4 + progress * 1.5));
     }
   };
@@ -106,6 +98,26 @@ function mergeFace(parts, completed) {
       piece.setAttribute('d', original); piece.removeAttribute('stroke-width'); piece.style.removeProperty('transform');
     }
   };
+}
+
+export function mergeStroke(source, line, slot, progress) {
+  const ease = value => 1 - (1 - clamp(value, 0, 1)) ** 3;
+  // First carry the entire face left intact. Fold there, then carry the same
+  // strokes back to the right while their leading edge draws the check.
+  if (progress <= .22) {
+    const travel = ease(progress / .22);
+    return source.map(([x, y]) => [x - 54 * travel, y - 4 * Math.sin(Math.PI * travel)]);
+  }
+  if (progress < .4) {
+    const phase = (progress - .22) / .18;
+    const fold = phase * phase * (3 - 2 * phase);
+    return line.map(([x, y], index) => [
+      source[index][0] + (x - source[index][0]) * fold - 54,
+      source[index][1] + (y - source[index][1]) * fold - Math.sin(Math.PI * phase) * 14,
+    ]);
+  }
+  const returnOffset = -54 * (1 - ease((progress - .4) / .24));
+  return checkSegment(slot, 8, checkReach(progress)).map(([x, y]) => [x + returnOffset, y]);
 }
 
 export function facePose(landmarks) {
