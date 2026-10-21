@@ -164,15 +164,7 @@ document.addEventListener('click', async event => {
     } else if (action === 'verify-email') {
       if (!services.auth.currentUser) throw new Error('Not signed in');
       await services.sendEmailVerification(services.auth.currentUser);
-      message('인증 메일을 보냈습니다. 메일에서 인증한 뒤 인증 상태 확인을 눌러 주세요.');
-    } else if (action === 'refresh-user') {
-      if (!services.auth.currentUser) throw new Error('Not signed in');
-      await services.reload(services.auth.currentUser);
-      await services.auth.currentUser.getIdToken(true);
-      currentUser = services.auth.currentUser;
-      paintAccount();
-      window.dispatchEvent(new Event('study:auth-changed'));
-      message(currentUser.emailVerified ? '이메일 인증이 확인됐습니다.' : '이메일 인증이 아직 확인되지 않았습니다.');
+      message('인증 메일을 보냈습니다. 메일에서 인증한 뒤 돌아오면 자동으로 확인됩니다.');
     }
   } catch (error) {
     message(friendlyError(error), true);
@@ -181,6 +173,28 @@ document.addEventListener('click', async event => {
   }
 });
 
-window.addEventListener('study:navigated', paintAccount);
+let checkingVerification = false;
+async function refreshVerification() {
+  const user = services?.auth.currentUser;
+  if (!user || user.emailVerified || checkingVerification) return;
+  checkingVerification = true;
+  try {
+    await services.reload(user);
+    if (services.auth.currentUser?.uid !== user.uid || !user.emailVerified) return;
+    await user.getIdToken(true);
+    if (services.auth.currentUser?.uid !== user.uid) return;
+    currentUser = user;
+    paintAccount();
+    window.dispatchEvent(new Event('study:auth-changed'));
+    message('이메일 인증이 확인됐습니다.');
+  } catch {
+    // A temporary network failure is retried when the user returns again.
+  } finally {
+    checkingVerification = false;
+  }
+}
+window.addEventListener('focus', refreshVerification);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshVerification(); });
+window.addEventListener('study:navigated', () => { paintAccount(); void refreshVerification(); });
 window.addEventListener('study:page-prepared', paintAccount);
 document.addEventListener('DOMContentLoaded', paintAccount);

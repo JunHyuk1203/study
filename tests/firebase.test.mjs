@@ -8,10 +8,12 @@ import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAut
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
 import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
+import { spendFocusTime } from '../functions/focus-time.js';
 import { generateForUser } from '../functions/ai-service.js';
 import { allowance, MONTHLY_LIMIT, tokenCost } from '../functions/ai-budget.js';
 import { schoolDates } from '../functions/integrations-domain.js';
 import { chatWithStudy, getAiUsage, getSchoolOverview, searchSchools, saveSchool } from '../functions/integrations.js';
+import { schoolAgent } from '../functions/school-agent.js';
 
 const projectId = 'demo-study';
 function mockProvider(context, generate) {
@@ -54,6 +56,30 @@ test('near monthly limit provider is capped mid-answer and tokens settle below 1
   const result=await generateForUser({user,model,key:'test-only',contents:[{role:'user',parts:[{text:'질문'}]}],onChunk:text=>chunks.push(text)});
   assert.equal(cap,80);assert.equal(result.cutoff,true);assert.ok(chunks.length);assert.ok(result.text);
   const saved=(await ref.get()).data();assert.equal(saved.reserved,0);assert.ok(saved.spent<=MONTHLY_LIMIT);
+});
+
+test('streamed tool calls are metered, preserve signatures and do not consume an extra Argon daily use',async context=>{
+  const user='quota-school-agent',model='gemini-4-argon';let calls=0;
+  const args={start:'2026-11-02',end:'2026-11-02',types:['meals']};
+  mockProvider(context,body=>{
+    calls++;
+    assert.ok(body.tools[0].functionDeclarations.length);
+    if(calls===1){
+      assert.equal(body.toolConfig.functionCallingConfig.mode,'AUTO');
+      return new Response(`data: ${JSON.stringify({candidates:[{content:{parts:[{functionCall:{name:'get_school_data',args},thoughtSignature:'test-signature'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:20,candidatesTokenCount:10}})}\n\n`);
+    }
+    assert.equal(body.toolConfig.functionCallingConfig.mode,'NONE');
+    assert.equal(body.contents.at(-2).parts[0].thoughtSignature,'test-signature');
+    assert.equal(body.contents.at(-1).parts[0].functionResponse.response.meals[0].name,'중식');
+    return streamAnswer(body);
+  });
+  const result=await schoolAgent({school:{name:'테스트학교',kind:'중학교',officeCode:'B10',schoolCode:'7010057',grade:'2',className:'3'},
+    contents:[{role:'user',parts:[{text:'11월 2일 급식 알려줘'}]}],
+    lookup:async()=>[{MLSV_YMD:'20261102',MMEAL_SC_NM:'중식',DDISH_NM:'밥<br>국'}],
+    generate:options=>generateForUser({...options,user,model,key:'test-only',requested:128})});
+  assert.equal(calls,2);assert.ok(result.text);assert.equal(result.usage.argonRemaining,1);
+  const monthly=(await getFirestore('study-data').doc(`users/${user}/aiUsage/${schoolDates().date.slice(0,7)}`).get()).data();
+  assert.equal(monthly.reserved,0);assert.ok(monthly.spent>0);
 });
 
 test('simultaneous requests reserve balance atomically across models',async context=>{
@@ -112,6 +138,8 @@ test('clients cannot forge profiles, school membership, sessions, or ranking sco
   for (const [path, data] of [
     ['users/alice', { uid: 'alice', schoolId: 'school-b' }],
     ['users/alice/sessions/fake', { creditedSeconds: 999999 }],
+    ['users/alice/stats/focusTime', { balanceSeconds: 999999 }],
+    ['users/alice/focusTimeTransactions/spend_fake', { type: 'spend', seconds: 1 }],
     ['users/alice/dailyStats/2026-10-21', { totalSeconds: 999999 }],
     ['leaderboards/2026-10-19/entries/alice', { totalSeconds: 999999 }],
   ]) await assertFails(setDoc(doc(db, path), data, { merge: true }));
@@ -168,6 +196,10 @@ test('session finish is idempotent and atomically updates statistics and ranking
   assert.equal(summary.totalSeconds, first.creditedSeconds);
   assert.equal(summary.sessionCount, 1);
   assert.equal(summary.currentStreak, 1);
+  const wallet = (await db.doc(`users/${auth.uid}/stats/focusTime`).get()).data();
+  assert.equal(wallet.balanceSeconds, first.creditedSeconds);
+  assert.equal(wallet.earnedSeconds, first.creditedSeconds);
+  assert.equal((await db.doc(`users/${auth.uid}/focusTimeTransactions/earn_${sessionId}`).get()).data().seconds, first.creditedSeconds);
   const session = (await db.doc(`users/${auth.uid}/sessions/${sessionId}`).get()).data();
   assert.equal(session.status, 'finished');
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId, null);
@@ -193,6 +225,44 @@ test('session finish is idempotent and atomically updates statistics and ranking
     assert.equal(row.displayName, '바뀐닉네임');
     assert.equal(row.totalSeconds, seconds);
   }
+});
+
+test('Focus Time spending is atomic, retryable and independent of study totals', async () => {
+  const db = getFirestore(undefined, 'study-data');
+  const uid = 'focus-buyer';
+  const wallet = db.doc(`users/${uid}/stats/focusTime`);
+  const summary = db.doc(`users/${uid}/stats/summary`);
+  await wallet.set({ balanceSeconds: 100, earnedSeconds: 100 });
+  await summary.set({ totalSeconds: 500 });
+  const purchase = { uid, purchaseId: 'one', itemId: 'hat', costSeconds: 60 };
+  const grant = transaction => transaction.set(db.doc(`users/${uid}/inventory/hat`), { owned: true });
+  const results = await Promise.all([spendFocusTime(db, purchase, grant), spendFocusTime(db, purchase, grant)]);
+  assert.equal(results.filter(result => !result.alreadySpent).length, 1);
+  assert.equal((await wallet.get()).data().balanceSeconds, 40);
+  assert.equal((await wallet.get()).data().spentSeconds, 60);
+  assert.equal((await db.doc(`users/${uid}/inventory/hat`).get()).data().owned, true);
+  await assert.rejects(() => spendFocusTime(db, { ...purchase, itemId: 'other' }), error => error.code === 'already-exists');
+  await assert.rejects(() => spendFocusTime(db, { ...purchase, purchaseId: 'two' }), error => error.code === 'failed-precondition');
+  for (const costSeconds of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(() => spendFocusTime(db, { ...purchase, costSeconds }), error => error.code === 'invalid-argument');
+  }
+  await assert.rejects(() => spendFocusTime(db, { ...purchase, purchaseId: 'failed-grant', costSeconds: 10 }, () => { throw new Error('grant failed'); }));
+  assert.equal((await wallet.get()).data().balanceSeconds, 40);
+  assert.equal((await summary.get()).data().totalSeconds, 500);
+  assert.equal((await db.doc(`users/${uid}/focusTimeTransactions/spend_failed-grant`).get()).exists, false);
+  await assert.rejects(() => spendFocusTime(db, { ...purchase, uid: 'no-wallet' }), error => error.code === 'failed-precondition');
+  const competing = await Promise.allSettled(['a', 'b'].map(purchaseId => spendFocusTime(db, { ...purchase, purchaseId, costSeconds: 30 })));
+  assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal((await wallet.get()).data().balanceSeconds, 10);
+});
+
+test('zero-credit camera completion creates no currency', async () => {
+  const auth = { uid: 'focus-zero', token: { email_verified: true } };
+  await ensureProfile.run({ auth, data: { displayName: '일시정지' } });
+  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId: '12345678-1234-1234-1234-123456789abc' } });
+  const results = await Promise.all([finishStudySession.run({ auth, data: { sessionId } }), finishStudySession.run({ auth, data: { sessionId } })]);
+  assert.ok(results.every(result => result.creditedSeconds === 0));
+  assert.equal((await getFirestore(undefined, 'study-data').doc(`users/${auth.uid}/stats/focusTime`).get()).exists, false);
 });
 
 test('concurrent starts permit exactly one active session', async () => {
@@ -225,6 +295,7 @@ test('camera sessions enforce controller ownership, sequence and active-window c
   assert.equal((await ref.get()).data().activeSinceMs, null);
   const finished = await finishStudySession.run({ auth, data: { sessionId, durationSeconds: 999999 } });
   assert.equal(finished.creditedSeconds, 30);
+  assert.equal((await db.doc(`users/${auth.uid}/stats/focusTime`).get()).data().balanceSeconds, 30);
   assert.equal((await db.doc(`users/${auth.uid}/stats/summary`).get()).data().totalSeconds, 30);
   assert.equal((await finishStudySession.run({ auth, data: { sessionId } })).creditedSeconds, 30);
   await assert.rejects(() => syncStudyCamera.run({ auth, data: { ...request.data, sequence: 3 } }), error => error.code === 'failed-precondition');

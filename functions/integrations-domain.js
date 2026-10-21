@@ -51,7 +51,9 @@ export function schoolEvents(rows) {
     const date = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
     const description = plainText(row.EVENT_CNTNT);
     const key = JSON.stringify([date, name, description]);
-    events.set(key, {date, name, description});
+    const flags=['ONE','TW','THREE','FR','FIV','SIX'].map(prefix=>row[`${prefix}_GRADE_EVENT_YN`]);
+    const grades=flags.flatMap((flag,index)=>flag==='Y'?[String(index+1)]:[]);
+    events.set(key, {date, name, description, ...(grades.length?{grades}:{})});
   }
   return [...events.values()].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name, 'ko'));
 }

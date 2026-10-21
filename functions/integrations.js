@@ -2,8 +2,10 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { schoolCodes, classroom, neisRows, plainText, schoolRecord, chatContents, schoolDates, schoolCalendarRange, schoolEvents } from './integrations-domain.js';
+import { schoolCodes, classroom, neisRows, schoolRecord, chatContents, schoolDates, schoolCalendarRange } from './integrations-domain.js';
 import { generateForUser, usageFor } from './ai-service.js';
+import { schoolMonth, loadSchoolData, loadUpcomingExams } from './school-service.js';
+import { schoolAgent } from './school-agent.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const neisKey = defineSecret('NEIS_API_KEY');
@@ -75,29 +77,42 @@ export const getSchoolOverview = onCall({...options, secrets:[neisKey]}, async r
   await rateLimit(user, 'school', 20);
   const school = (await db.doc(`users/${user}`).get()).data()?.school;
   const dates = schoolDates();
+  const month = input(() => schoolMonth(request.data?.month ?? dates.date.slice(0,7)));
   if (!school) return {school:null, ...dates};
-  const codes = {ATPT_OFCDC_SC_CODE:school.officeCode, SD_SCHUL_CODE:school.schoolCode};
-  const endpoint = {'초등학교':'elsTimetable', '중학교':'misTimetable', '고등학교':'hisTimetable', '특수학교':'spsTimetable'}[school.kind];
-  const compact = date => date.replaceAll('-', '');
-  const calendarRange = schoolCalendarRange(dates.date);
-  const results = await Promise.allSettled([
-    neis('mealServiceDietInfo', {...codes, MLSV_YMD:compact(dates.date)}),
-    endpoint ? neis(endpoint, {...codes, GRADE:school.grade, CLASS_NM:school.className, TI_FROM_YMD:compact(dates.days[0]), TI_TO_YMD:compact(dates.days[4])}) : Promise.resolve([]),
-    neis('SchoolSchedule', {...codes, AA_FROM_YMD:compact(calendarRange.start), AA_TO_YMD:compact(calendarRange.end)}),
+  const calendarRange = schoolCalendarRange(`${month}-01`);
+  if (request.data?.eventsOnly === true) {
+    const eventData = await loadSchoolData(school, {start:calendarRange.start,end:calendarRange.end,types:['events']}, neis);
+    return {school, ...dates, calendarRange, ...eventData};
+  }
+  const [mealData, timetableData, eventData] = await Promise.all([
+    loadSchoolData(school, {start:dates.date, end:dates.date, types:['meals']}, neis),
+    loadSchoolData(school, {start:dates.days[0], end:dates.days[4], types:['timetable']}, neis),
+    loadSchoolData(school, {start:calendarRange.start,end:calendarRange.end,types:['events']}, neis),
   ]);
   return {school, ...dates,
-    meals:results[0].status === 'fulfilled' ? results[0].value.map(row => ({name:plainText(row.MMEAL_SC_NM), items:plainText(row.DDISH_NM).split('\n').filter(Boolean), calories:plainText(row.CAL_INFO)})) : [],
-    timetable:results[1].status === 'fulfilled' ? results[1].value.map(row => ({date:row.ALL_TI_YMD, period:Number(row.PERIO), subject:plainText(row.ITRT_CNTNT)})).filter(row=>row.period>0 && row.period<=12) : [],
+    meals:mealData.meals,
+    timetable:timetableData.timetable,
     calendarRange,
-    events:results[2].status === 'fulfilled' ? schoolEvents(results[2].value) : [],
-    errors:{meals:results[0].status==='rejected', timetable:results[1].status==='rejected', events:results[2].status==='rejected'},
+    events:eventData.events,
+    errors:{...mealData.errors,...timetableData.errors,...eventData.errors},
   };
 });
 export const getAiUsage = onCall(options, request => usageFor(uid(request)));
-export const chatWithStudy = onCall({...options, secrets:[googleKey]}, async (request,response) => {
+export const getUpcomingExams = onCall({...options,secrets:[neisKey]},async request=>{
+  const user=uid(request);
+  await rateLimit(user,'school',20);
+  const school=(await db.doc(`users/${user}`).get()).data()?.school;
+  return loadUpcomingExams(school,neis);
+});
+export const chatWithStudy = onCall({...options, timeoutSeconds:240, secrets:[googleKey,neisKey]}, async (request,response) => {
   const user = uid(request, true), contents = input(() => chatContents(request.data));
   await rateLimit(user, 'ai', 10);
-  return generateForUser({user,model:request.data?.model,contents,key:googleKey.value(),onChunk:request.acceptsStreaming?text=>response.sendChunk({text}):undefined,signal:response?.signal});
+  const school = (await db.doc(`users/${user}`).get()).data()?.school;
+  const result = await schoolAgent({school,contents,lookup:neis,generate:parameters=>generateForUser({
+    ...parameters,user,model:request.data?.model,key:googleKey.value(),
+    onChunk:request.acceptsStreaming?text=>response.sendChunk({text}):undefined,signal:response?.signal,
+  })});
+  return {text:result.text,model:result.model,cutoff:result.cutoff,interrupted:result.interrupted||false,usage:result.usage};
 });
 export const getStudyBriefing = onCall({...options, secrets:[googleKey]}, async request => {
   const user = uid(request, true), {date, days} = schoolDates();

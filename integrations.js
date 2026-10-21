@@ -1,6 +1,7 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-26';
-import { getStudyData } from './data.js?v=20261021-26';
+import { authReady, getAuthUser } from './auth.js?v=20261022-1';
+import { getStudyData } from './data.js?v=20261022-5';
 import { firebaseConfig } from './firebase-config.js';
+import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
 
 let callable;
 async function client(name) {
@@ -10,7 +11,7 @@ async function client(name) {
     const [appSdk, functionsSdk] = await Promise.all([import('https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js'), import('https://www.gstatic.com/firebasejs/13.0.0/firebase-functions.js')]);
     const app = appSdk.getApps()[0] ?? appSdk.initializeApp(firebaseConfig);
     const functions = functionsSdk.getFunctions(app, 'asia-northeast3');
-    callable = name => functionsSdk.httpsCallable(functions, name, {timeout:85000});
+    callable = name => functionsSdk.httpsCallable(functions, name, {timeout:name==='chatWithStudy'?245000:85000});
   }
   return callable(name);
 }
@@ -25,7 +26,21 @@ function errorMessage(error) {
 const text = (selector, value) => { for (const element of document.querySelectorAll(selector)) element.textContent = value; };
 let owner, generation = 0, schoolKey, schoolState = {status:'idle'}, briefing = {status:'idle'}, messages = [], chatting = false, chatError = '';
 let schoolSelection = null, searching = false;
+const currentSchoolMonth = () => new Date(Date.now()+9*3600000).toISOString().slice(0,7);
+let calendarMonth = currentSchoolMonth();
+let calendarKey, calendarState = {status:'idle'};
+const schoolRendered = new WeakMap();
 let aiUsage, usageLoading=false, usageError='';
+let examKey, examState={status:'idle'};
+function renderExams() {
+  const hint=schoolHint();
+  const data=examState.data;
+  const exams=data?.exams||[];
+  const days=exams.length?Math.round((Date.parse(`${exams[0].date}T00:00:00Z`)-Date.parse(`${data.start}T00:00:00Z`))/86400000):0;
+  const nextTypes=exams.filter((exam,index)=>exams.findIndex(other=>other.type===exam.type)===index);
+  text('[data-upcoming-exam]',hint?'미등록':examState.status==='error'?'조회 실패':examState.status!=='ready'?'로딩 중…':data.errors?.events?'확인 필요':exams.length?`${exams[0].type} ${days===0?'D-day':`D-${days}`}`:'일정 없음');
+  text('[data-upcoming-exam-details]',hint|| (examState.status==='error'?examState.error:examState.status!=='ready'?'학사일정을 확인하고 있습니다.':data.errors?.events?'학사일정 일부를 불러오지 못했습니다. 새로고침해 주세요.':exams.length?`${nextTypes.map(exam=>`${exam.date} ${exam.name}`).join(' · ')} · 나이스 학사일정`:'앞으로 180일 내 등록된 모의고사·중간·기말 일정이 없습니다.'));
+}
 function status(selector, message, failed = false) {
   for (const element of document.querySelectorAll(selector)) {element.textContent=message; element.classList.toggle('is-error', failed); element.hidden=!message;}
 }
@@ -39,17 +54,34 @@ function renderSchool() {
   for (const form of document.querySelectorAll('[data-school-search]')) {
     for (const field of form.elements) field.disabled = !user || searching;
   }
+  const registration = document.querySelector('[data-school-registration]');
+  if (registration && !searching && !registration.dataset.initialized && profile?.school) {
+    schoolSelection = profile.school;
+    registration.hidden = false;
+    registration.dataset.initialized = 'true';
+    registration.querySelector('[data-selected-school]').textContent = profile.school.name;
+    registration.elements.grade.value = profile.school.grade;
+    registration.elements.className.value = profile.school.className;
+  }
   for (const button of document.querySelectorAll('[data-school-refresh]')) button.disabled = !user || schoolState.status==='loading';
+  for (const control of document.querySelectorAll('[data-school-month], [data-school-month-step], [data-school-month-today]')) {
+    control.disabled = Boolean(hint) || calendarState.status==='loading';
+    if (control.matches('[data-school-month]')) control.value=calendarMonth;
+  }
   for (const container of document.querySelectorAll('[data-school-meals], [data-school-timetable], [data-school-events]')) {
+    const sectionState=container.hasAttribute('data-school-events')?calendarState:schoolState;
+    const previous=schoolRendered.get(container);
+    if(previous?.state===sectionState&&previous.hint===hint)continue;
+    schoolRendered.set(container,{state:sectionState,hint});
     if (hint) {container.textContent=hint; continue;}
-    if (schoolState.status==='idle' || schoolState.status==='loading') {container.textContent='로딩 중…'; continue;}
-    if (schoolState.status==='error') {container.textContent=schoolState.error; continue;}
-    const data=schoolState.data;
+    if (sectionState.status==='idle' || sectionState.status==='loading') {container.textContent='로딩 중…'; continue;}
+    if (sectionState.status==='error') {container.textContent=sectionState.error; continue;}
+    const data=sectionState.data;
     container.replaceChildren();
     if (container.hasAttribute('data-school-events')) {
       if (data.errors?.events) {container.textContent='학사일정을 불러오지 못했습니다. 새로고침해 주세요.';continue;}
       if (!Array.isArray(data.events)) {container.textContent='학사일정 서비스를 준비 중입니다.';continue;}
-      if (!data.events.length) {container.textContent='이번 달 등록된 학사일정이 없습니다.';continue;}
+      if (!data.events.length) {container.textContent='선택한 달에 등록된 학사일정이 없습니다.';continue;}
       const list=document.createElement('ul');list.className='school-events';
       for (const event of data.events) {
         const item=document.createElement('li');
@@ -91,7 +123,7 @@ function renderSchool() {
     }
   }
   if (schoolState.data) text('[data-school-date]', schoolState.data.date);
-  text('[data-school-calendar-month]', schoolState.data?.calendarRange?.start ? `${Number(schoolState.data.calendarRange.start.slice(5,7))}월` : '이번 달');
+  text('[data-school-calendar-month]', `${calendarMonth.slice(0,4)}년 ${Number(calendarMonth.slice(5,7))}월`);
 }
 function renderBriefing() {
   const {ready,user}=getStudyData();
@@ -113,7 +145,7 @@ function renderChat() {
   }
   for(const message of messages) {
     const row=document.createElement('div');row.className=`message${message.role==='user'?' user':''}`;
-    const avatar=document.createElement('span');avatar.className='chat-avatar';avatar.textContent=message.role==='user'?'나':'✳';
+    const avatar=document.createElement('span');avatar.className='chat-avatar';avatar.textContent=message.role==='user'?'나':'S';
     const bubble=document.createElement('div');bubble.className='bubble';bubble.textContent=message.text;
     row.append(avatar,bubble);container.append(row);
   }
@@ -126,21 +158,34 @@ function renderChat() {
 }
 async function sync() {
   const {ready,user,profile}=getStudyData();
-  if(owner!==user?.uid) {owner=user?.uid;generation++;schoolKey=null;schoolState={status:'idle'};briefing={status:'idle'};messages=[];chatting=false;chatError='';schoolSelection=null;aiUsage=null;usageLoading=false;usageError='';}
+  if(owner!==user?.uid) {owner=user?.uid;generation++;schoolKey=null;calendarKey=null;calendarMonth=currentSchoolMonth();schoolState={status:'idle'};calendarState={status:'idle'};briefing={status:'idle'};messages=[];chatting=false;chatError='';schoolSelection=null;aiUsage=null;usageLoading=false;usageError='';}
   const token=generation;
   renderSchool();renderBriefing();renderChat();
+  const examsKey=JSON.stringify([user?.uid,profile?.school||null,new Date(Date.now()+9*3600000).toISOString().slice(0,10)]);
+  if(examKey!==examsKey){examKey=examsKey;examState={status:'idle'};}
+  renderExams();
   if(!ready||!user)return;
+  if(document.querySelector('[data-upcoming-exam]')&&profile?.school&&examState.status==='idle') {
+    examState={status:'loading'};renderExams();
+    void call('getUpcomingExams').then(data=>{if(token===generation&&examKey===examsKey){examState={status:'ready',data};renderExams();}}).catch(error=>{if(token===generation&&examKey===examsKey){examState={status:'error',error:errorMessage(error)};renderExams();}});
+  }
   if(document.querySelector('[data-ai-usage]')&&!aiUsage&&!usageLoading&&!usageError){
     usageLoading=true;
     void call('getAiUsage').then(data=>{if(token===generation){aiUsage=data;usageLoading=false;renderChat();}}).catch(error=>{if(token===generation){usageError=errorMessage(error);usageLoading=false;text('[data-ai-usage]',usageError);}});
   }
-  const key=JSON.stringify(profile?.school||null);
+  const key=JSON.stringify([profile?.school||null,currentSchoolMonth(),new Date(Date.now()+9*3600000).toISOString().slice(0,10)]);
+  const monthKey=JSON.stringify([key,calendarMonth]);
   if(document.querySelector('[data-school-meals]')&&schoolKey!==key) {
     schoolKey=key;
     if(profile?.school) {
+      calendarKey=monthKey;calendarState={status:'loading'};
       schoolState={status:'loading'};renderSchool();
-      void call('getSchoolOverview').then(data=>{if(token===generation&&schoolKey===key){schoolState={status:'ready',data};renderSchool();}}).catch(error=>{if(token===generation&&schoolKey===key){schoolState={status:'error',error:errorMessage(error)};renderSchool();}});
+      void call('getSchoolOverview',{month:calendarMonth}).then(data=>{if(token===generation&&schoolKey===key){schoolState={status:'ready',data};if(calendarKey===monthKey)calendarState={status:'ready',data};renderSchool();}}).catch(error=>{if(token===generation&&schoolKey===key){schoolState={status:'error',error:errorMessage(error)};if(calendarKey===monthKey)calendarState={status:'error',error:errorMessage(error)};renderSchool();}});
     }
+  }
+  if(document.querySelector('[data-school-meals]')&&profile?.school&&calendarKey!==monthKey) {
+    calendarKey=monthKey;calendarState={status:'loading'};renderSchool();
+    void call('getSchoolOverview',{month:calendarMonth,eventsOnly:true}).then(data=>{if(token===generation&&schoolKey===key&&calendarKey===monthKey){calendarState={status:'ready',data};renderSchool();}}).catch(error=>{if(token===generation&&schoolKey===key&&calendarKey===monthKey){calendarState={status:'error',error:errorMessage(error)};renderSchool();}});
   }
   if(document.querySelector('[data-ai-briefing]')&&user.emailVerified&&briefing.status==='idle') {
     briefing={status:'loading'};renderBriefing();
@@ -162,7 +207,7 @@ document.addEventListener('submit',async event=>{
       for(const school of data.schools) {
         const button=document.createElement('button');button.type='button';button.className='school-result';
         const name=document.createElement('strong'),address=document.createElement('span');name.textContent=school.name;address.textContent=school.address;button.append(name,address);
-        button.addEventListener('click',()=>{schoolSelection=school;registration.hidden=false;registration.querySelector('[data-selected-school]').textContent=school.name;for(const item of results.children)item.setAttribute('aria-pressed',String(item===button));});results.append(button);
+        button.addEventListener('click',()=>{schoolSelection=school;registration.hidden=false;registration.dataset.initialized='true';registration.querySelector('[data-selected-school]').textContent=school.name;for(const item of results.children)item.setAttribute('aria-pressed',String(item===button));});results.append(button);
       }
     }catch(error){if(token===generation)results.textContent=errorMessage(error);}
     finally{searching=false;renderSchool();}
@@ -178,22 +223,33 @@ document.addEventListener('submit',async event=>{
     event.preventDefault();if(chatting||!form.reportValidity())return;
     const field=form.elements.message,value=field.value.trim();if(!value)return;
     const token=generation;
-    const history=messages.slice(-12).map(item=>({role:item.role,text:item.text.slice(0,4000)}));
-    while(history.reduce((sum,item)=>sum+item.text.length,0)+value.length>24000)history.splice(0,2);
-    history.push({role:'user',text:value});messages.push({role:'user',text:value});field.value='';chatting=true;chatError='';renderChat();
+    const history=chatHistory(messages,value);
+    messages.push({role:'user',text:value});field.value='';chatting=true;chatError='';renderChat();
     const model=document.querySelector('[data-ai-model]').value;
     const answer={role:'model',text:''};messages.push(answer);
     try {
       const request=await (await client('chatWithStudy')).stream({messages:history,model});
       for await(const chunk of request.stream){if(token!==generation)break;answer.text+=chunk.text||'';renderChat();}
       const data=await request.data;
-      if(token===generation){answer.text=data.text;aiUsage=data.usage;chatError=data.cutoff?'월 이용 한도에 맞춰 답변 생성을 중단했습니다.':data.interrupted?'연결이 중단되어 여기까지의 답변을 표시합니다.':'';}
+      if(token===generation){answer.text=completedAnswer(data,answer.text);aiUsage=data.usage;chatError=data.cutoff?'월 이용 한도에 맞춰 답변 생성을 중단했습니다.':data.interrupted?'연결이 중단되어 여기까지의 답변을 표시합니다.':'';}
     }
-    catch(error){if(token===generation){chatError=errorMessage(error);if(!answer.text){messages.splice(-2);field.value=value;}else answer.text+='\n\n(답변이 중단되었습니다.)';aiUsage=null;usageError='';}}
+    catch(error){if(token===generation){chatError=errorMessage(error);if(!answer.text.trim()){messages.splice(-2);field.value=value;}else answer.text+='\n\n(답변이 중단되었습니다.)';aiUsage=null;usageError='';}}
     finally{if(token===generation){chatting=false;renderChat();void sync();}}
   }
 });
+document.addEventListener('change',event=>{
+  if(event.target.matches('[data-school-month]')&&event.target.validity.valid&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(event.target.value)) {
+    calendarMonth=event.target.value;void sync();
+  }
+});
 document.addEventListener('click',event=>{
+  const monthStep=event.target.closest('[data-school-month-step]');
+  if(monthStep&&!monthStep.disabled){
+    const date=new Date(`${calendarMonth}-01T00:00:00Z`);date.setUTCMonth(date.getUTCMonth()+Number(monthStep.dataset.schoolMonthStep));
+    const next=date.toISOString().slice(0,7);
+    if(/^20\d{2}-/.test(next)){calendarMonth=next;void sync();}
+  }
+  if(event.target.closest('[data-school-month-today]:not(:disabled)')){calendarMonth=currentSchoolMonth();void sync();}
   if(event.target.closest('[data-school-refresh]')){schoolKey=null;void sync();}
   if(event.target.closest('[data-briefing-retry]')){briefing={status:'idle'};void sync();}
   const suggestion=event.target.closest('[data-ai-suggestion]');

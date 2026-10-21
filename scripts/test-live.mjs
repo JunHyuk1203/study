@@ -60,13 +60,16 @@ try {
   const summary = await getDoc(doc(db, 'users', uid, 'stats', 'summary'));
   assert.equal(summary.data().totalSeconds, result.data.creditedSeconds);
   assert.equal(summary.data().sessionCount, 1);
+  const wallet = await getDoc(doc(db, 'users', uid, 'stats', 'focusTime'));
+  assert.equal(wallet.data().balanceSeconds, result.data.creditedSeconds);
+  assert.equal(wallet.data().earnedSeconds, result.data.creditedSeconds);
   const session = (await getDoc(doc(db, 'users', uid, 'sessions', sessionId))).data();
   for (const segment of splitStudyInterval(session.startedAt.toMillis(), session.endedAt.toMillis())) {
     const rank = await getDoc(doc(db, 'leaderboards', segment.week, 'entries', uid));
     assert.equal(rank.data().totalSeconds, segment.seconds);
   }
   successful = true;
-  console.log('PASS: live email signup/login, account creation/update, study start/finish, private stats read, ranking read and idempotent finish.');
+  console.log('PASS: live email signup/login, account creation/update, study start/finish, private stats, Focus Time credit without duplicate credit, ranking and idempotent finish.');
 } finally {
   await signOut(auth).catch(() => {});
   if (uid) {

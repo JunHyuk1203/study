@@ -1,8 +1,9 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { creditFocusTime } from './focus-time.js';
 import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, SUBJECTS, validDisplayName, weekKey } from './domain.js';
-export { searchSchools, saveSchool, getSchoolOverview, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
+export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 
 const app = getApps()[0] ?? initializeApp();
 const db = getFirestore(app, 'study-data');
@@ -119,6 +120,7 @@ export const finishStudySession = onCall(options, async (request) => {
       transaction.set(db.doc(path), { uid, totalSeconds: FieldValue.increment(seconds), subjectSeconds: { [session.subjectId]: FieldValue.increment(seconds) }, updatedAt: now }, { merge: true });
     }
     if (creditedSeconds > 0) {
+      creditFocusTime(transaction, db, uid, sessionId, creditedSeconds, now);
       const streak = advanceStreak(summaryDoc.data() ?? {}, segments.map(segment => segment.date));
       transaction.set(summaryRef, { uid, totalSeconds: FieldValue.increment(creditedSeconds), sessionCount: FieldValue.increment(1), ...streak, updatedAt: now }, { merge: true });
       for (const [week, seconds] of weeks) {

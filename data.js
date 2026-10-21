@@ -1,4 +1,4 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-26';
+import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261021-26';
 
@@ -36,6 +36,21 @@ let schoolId;
 let busy = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
 let cameraPauseAt = null;
+let cameraResumeSequence = null;
+let sessionClock = null;
+// Session timestamps come from the server; the device clock may be seconds ahead.
+function observeSession(session) {
+  const serverMs = (session?.updatedAt || session?.createdAt || session?.startedAt)?.toMillis?.();
+  sessionClock = Number.isFinite(serverMs) ? {serverMs, localMs:performance.now()} : null;
+  if (!session) {cameraPauseAt=null;cameraResumeSequence=null;}
+  if (cameraResumeSequence != null && session?.sequence >= cameraResumeSequence && session.activeSinceMs != null) {
+    cameraResumeSequence=null;cameraPauseAt=null;
+  }
+  state.active = session;
+}
+function sessionNow() {
+  return sessionClock ? sessionClock.serverMs + Math.max(0, performance.now() - sessionClock.localMs) : Date.now();
+}
 let previewSession = null;
 let authResolved = false;
 export function getStudyData() { return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser()}; }
@@ -51,13 +66,13 @@ function updatePreviewTimer() {
 let state = emptyState();
 
 function emptyState() {
-  return { profile: null, today: {}, week: {}, month: {}, summary: {}, lastWeek: {}, days: [], ranking: [], schoolRanking: [], ownRanking: null, active: null, notice: '', error: false, pending:new Set(['profile','today','week','month','summary','lastWeek','days','ranking','ownRanking']), failed:new Set() };
+  return { profile: null, today: {}, week: {}, month: {}, summary: {}, focusTime: {}, lastWeek: {}, days: [], ranking: [], schoolRanking: [], ownRanking: null, active: null, notice: '', error: false, pending:new Set(['profile','today','week','month','summary','focusTime','lastWeek','days','ranking','ownRanking']), failed:new Set() };
 }
 function notice(text, error = false) { state.notice = text; state.error = error; paint(); }
 function errorText(error) {
   const messages = {
     'functions/unauthenticated': '다시 로그인해 주세요.',
-    'functions/failed-precondition': '계정 화면에서 이메일을 인증하고 인증 상태를 확인해 주세요.',
+    'functions/failed-precondition': '계정 화면에서 이메일 인증을 완료한 뒤 돌아와 주세요.',
     'functions/already-exists': '진행 중인 학습 기록이 있습니다. 먼저 종료해 주세요.',
     'functions/not-found': '학습 기록을 찾지 못했습니다. 새로고침해 주세요.',
     'functions/unavailable': '저장 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -127,6 +142,7 @@ function paint() {
   const value = (key, result) => !authResolved || user && state.pending.has(key) ? '로딩 중…' : !user ? '로그인 필요' : state.failed.has(key) ? '불러오기 실패' : result;
   for (const key of ['today', 'week', 'month', 'summary']) textAll(`[data-time="${key}"]`, value(key, time(state[key].totalSeconds)));
   textAll('[data-streak]', value('summary', `${state.summary.currentStreak || 0}일`));
+  textAll('[data-focus-balance]', value('focusTime', clock(state.focusTime?.balanceSeconds ?? 0)));
   const rank = state.ranking.findIndex(row => row.uid === user?.uid);
   textAll('[data-my-rank]', value('ownRanking', value('ranking', rank >= 0 ? `${rank + 1}위` : state.ownRanking?.totalSeconds ? '50위 밖' : '—')));
   textAll('[data-data-badge]', value('today', '실시간 기록'));
@@ -137,6 +153,8 @@ function paint() {
   const previous = state.lastWeek.totalSeconds || 0;
   textAll('[data-week-comparison]', value('week', value('lastWeek', previous ? `지난주 대비 ${Math.round(((state.week.totalSeconds || 0) - previous) / previous * 100)}%` : '지난주 기록 없음')));
   textAll('[data-school-name]', value('profile', state.profile?.school?.name || '등록된 학교 없음'));
+  textAll('[data-account-school]', value('profile', state.profile?.school?.name || '미등록'));
+  textAll('[data-account-classroom]', value('profile', state.profile?.school ? `${state.profile.school.grade}학년 ${state.profile.school.className}반` : '미등록'));
   for (const element of document.querySelectorAll('[data-ranking]')) paintRanking(element, element.dataset.ranking === 'school' ? state.schoolRanking : state.ranking, element.dataset.ranking === 'school');
   for (const element of document.querySelectorAll('[data-chart]')) paintChart(element);
   for (const element of document.querySelectorAll('[data-sync-status]')) {
@@ -150,6 +168,7 @@ function paint() {
     if (input && document.activeElement !== input) input.value = state.profile?.displayName || user?.displayName || '';
   }
   paintTimer();
+  openLinkedSettings();
   window.dispatchEvent(new Event('study:data-changed'));
 }
 
@@ -158,10 +177,12 @@ function paintTimer() {
   const session = state.active;
   const camera = cameraState();
   const isCamera = session?.cameraMode;
-  const expired = isCamera && (!session.activeSinceMs || Date.now() >= session.leaseUntilMs);
-  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || cameraSyncFailed);
+  const now = isCamera ? sessionNow() : Date.now();
+  const expired = isCamera && (session.activeSinceMs == null || now >= session.leaseUntilMs);
+  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || cameraSyncFailed || cameraResumeSequence != null);
   const running = isCamera && !expired && !locallyPaused;
-  const windowEnd = Math.min(Date.now(), session?.leaseUntilMs || 0, locallyPaused ? cameraPauseAt ?? Date.now() : Infinity);
+  const pausedAt = cameraPauseAt == null ? now : now - Math.max(0, Date.now() - cameraPauseAt);
+  const windowEnd = Math.min(now, session?.leaseUntilMs || 0, locallyPaused ? pausedAt : Infinity);
   const elapsed = previewSession ? (previewSession.totalMs + (previewSession.activeSince != null ? Date.now() - previewSession.activeSince : 0)) / 1000 : isCamera ? (session.accumulatedSeconds || 0) + (session.activeSinceMs != null ? Math.max(0, (windowEnd - session.activeSinceMs) / 1000) : 0) : started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
   textAll('[data-active-timer]', clock(elapsed));
   for (const button of document.querySelectorAll('[data-camera-pause]')) {
@@ -171,7 +192,8 @@ function paintTimer() {
     button.title = camera.manuallyPaused ? '학습 재개' : '학습 수동 일시정지';
   }
   for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId || previewSession || camera.enabled) : !(state.profile?.activeSessionId || previewSession || camera.enabled));
-  if (busy && camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
+  // The focus window must remain dismissible even after camera startup fails.
+  if (!busy || camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
   for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
   for (const selector of document.querySelectorAll('[data-study-subject]')) {
     selector.disabled = busy || Boolean(state.profile?.activeSessionId || previewSession || camera.enabled);
@@ -241,10 +263,10 @@ async function connectUser() {
     if (newActive !== activeId) {
       activeUnsubscribe?.();
       activeId = newActive;
-      state.active = null;
+      observeSession(null);
       if (newActive) activeUnsubscribe = sdk.onSnapshot(sdk.doc(db, 'users', uid, 'sessions', newActive), record => {
         if (token !== generation) return;
-        state.active = record.data() || null;
+        observeSession(record.data() || null);
         paintTimer();
       }, error => { if (token === generation) notice(errorText(error), true); });
     }
@@ -261,7 +283,7 @@ async function connectUser() {
       }, error => { if (token === generation) { state.pending.delete('schoolRanking'); state.failed.add('schoolRanking'); notice(errorText(error), true); } });
     }
   }, token, 'profile');
-  for (const [key, path] of [['today', ['dailyStats', today]], ['week', ['weeklyStats', week]], ['month', ['monthlyStats', today.slice(0, 7)]], ['summary', ['stats', 'summary']], ['lastWeek', ['weeklyStats', previousWeek]]]) {
+  for (const [key, path] of [['today', ['dailyStats', today]], ['week', ['weeklyStats', week]], ['month', ['monthlyStats', today.slice(0, 7)]], ['summary', ['stats', 'summary']], ['focusTime', ['stats', 'focusTime']], ['lastWeek', ['weeklyStats', previousWeek]]]) {
     watch(sdk.doc(db, 'users', uid, ...path), snapshot => { state[key] = snapshot.data() || {}; }, token, key);
   }
   watch(sdk.query(sdk.collection(db, 'users', uid, 'dailyStats'), sdk.orderBy(sdk.documentId()), sdk.startAt(dateKey(Date.now() - 6 * 86400000)), sdk.endAt(today), sdk.limit(7)), rows => { state.days = rows.docs.map(row => ({ ...row.data(), date: row.id })); }, token, 'days');
@@ -322,6 +344,59 @@ document.addEventListener('click', async event => {
   finally { busy = false; paintTimer(); void syncCamera(); }
 });
 
+async function closeAccountSettings() {
+  const settings = document.querySelector('#account-settings');
+  if (!settings?.open || settings.classList.contains('is-closing')) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    settings.close();
+    return;
+  }
+  settings.classList.add('is-closing');
+  const animation = settings.animate([
+    { transform: 'translateY(0)', opacity: 1 },
+    { transform: 'translateY(48px)', opacity: 0 },
+  ], { duration: 240, easing: 'cubic-bezier(.4,0,1,1)', fill: 'both' });
+  try {
+    await animation.finished;
+  } catch {
+    // Closing still completes if navigation cancels the animation.
+  } finally {
+    settings.close();
+    animation.cancel();
+    settings.classList.remove('is-closing');
+  }
+}
+document.addEventListener('cancel', event => {
+  if (event.target.id !== 'account-settings') return;
+  event.preventDefault();
+  void closeAccountSettings();
+}, true);
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-account-settings-close]')) {
+    void closeAccountSettings();
+    return;
+  }
+  if (!event.target.closest('[data-account-settings-toggle]')) return;
+  const settings = document.querySelector('#account-settings');
+  if (!settings || !getAuthUser() || settings.open) return;
+  settings.showModal();
+});
+document.addEventListener('toggle', event => {
+  if (event.target.id !== 'account-settings') return;
+  document.querySelector('[data-account-settings-toggle]')?.setAttribute('aria-expanded', String(event.target.open));
+}, true);
+function openLinkedSettings() {
+  if (window.location?.hash !== '#account-settings' || !getAuthUser()) return;
+  const settings = document.querySelector('#account-settings');
+  if (settings && !settings.open && !settings.dataset.linkOpened) {
+    settings.dataset.linkOpened = 'true';
+    settings.showModal();
+  }
+}
+window.addEventListener('hashchange', openLinkedSettings);
+window.addEventListener('study:navigated', openLinkedSettings);
+document.addEventListener('DOMContentLoaded', openLinkedSettings);
+
 document.addEventListener('submit', async event => {
   const form = event.target.closest('[data-profile-form]');
   if (!form) return;
@@ -344,7 +419,12 @@ document.addEventListener('submit', async event => {
 window.addEventListener('study:auth-changed', () => { void connectUser(); });
 window.addEventListener('study:navigated', paint);
 window.addEventListener('study:page-prepared', paint);
-window.addEventListener('study:camera-changed', () => { updatePreviewTimer(); cameraPauseAt = cameraState().tracking ? null : cameraPauseAt ?? Date.now(); paintTimer(); void syncCamera(true); });
+window.addEventListener('study:camera-changed', () => {
+  updatePreviewTimer();
+  if (!cameraState().tracking) {cameraPauseAt ??= Date.now();cameraResumeSequence=null;}
+  else if (cameraPauseAt != null) cameraResumeSequence=(state.active?.sequence || 0)+1;
+  paintTimer();void syncCamera(true);
+});
 window.setInterval(() => {
   if (connectedDay && connectedDay !== dateKey()) void connectUser();
   paintTimer();

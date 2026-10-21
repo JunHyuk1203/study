@@ -7,7 +7,12 @@
 /* Two opaque viewport panels slide together without a page-load transition. */
 .tab-slide-stage{position:fixed;inset:0;z-index:100;overflow:hidden;background:#eae9df;pointer-events:none}
 .tab-slide-page{position:absolute;inset:0;overflow:hidden;background:#eae9df;transform:translateX(0);will-change:transform;isolation:isolate}
-.bottom-nav{z-index:101;background:var(--bg)}
+.bottom-nav{z-index:101;background:var(--bg);grid-template-columns:repeat(4,1fr)}
+.bottom-nav{--active-tab:0;isolation:isolate}.bottom-nav::before{content:"";position:absolute;left:25px;top:7px;bottom:max(7px,env(safe-area-inset-bottom));width:calc((100% - 30px)/4 - 20px);border-radius:14px;background:#e8eddf;opacity:0;pointer-events:none;transform:translateX(calc(var(--active-tab) * (100% + 20px)));transition:transform .44s cubic-bezier(.22,.61,.36,1),opacity .2s ease}
+.bottom-nav:has(a[aria-current="page"])::before{opacity:1}.bottom-nav:has(a:nth-child(2)[aria-current="page"]){--active-tab:1}.bottom-nav:has(a:nth-child(3)[aria-current="page"]){--active-tab:2}.bottom-nav:has(a:nth-child(4)[aria-current="page"]){--active-tab:3}
+.bottom-nav>a,.bottom-nav>a[aria-current]{position:relative;z-index:1;color:#788371;font-weight:500}
+@media(prefers-reduced-motion:reduce){.bottom-nav::before{transition:none}}
+.bottom-nav .nav-icon{display:grid;place-items:center;width:30px}.bottom-nav .nav-icon svg{display:block;width:24px;height:24px}
 .tab-navigation-active .header{z-index:101;transform:translateY(0);transition:none}
 .tab-slide-page>.app{margin:0 auto;min-height:100%;border-top:0;border-bottom:0;border-radius:0}
 
@@ -28,6 +33,12 @@
 .auth-divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:10px;margin:24px 0}
 .auth-divider:before,.auth-divider:after{content:"";height:1px;background:var(--border);flex:1}
 .form-field{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:600;margin:17px 0}
+.account-settings{width:min(432px,calc(100% - 32px));max-height:calc(100dvh - 64px);padding:24px;border:1px solid var(--border);border-radius:24px;background:var(--bg);color:var(--text);box-shadow:0 24px 80px #25322526;overscroll-behavior:contain}.account-settings::backdrop{background:#26322855;backdrop-filter:blur(4px)}.settings-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.settings-heading h2{font-size:20px}.settings-heading button{font-size:24px;cursor:pointer}.settings-section{margin-top:22px;padding-top:20px;border-top:1px solid var(--border)}.settings-description{margin-top:8px;line-height:1.8}.school-settings-link{margin:-6px 0 20px;font-size:11px;color:var(--green)}.account-row{gap:18px}.account-row>span:last-child{text-align:right;overflow-wrap:anywhere}.settings{cursor:pointer}
+.account-settings[open]{animation:settings-enter .36s cubic-bezier(.22,.61,.36,1) both}.account-settings[open]::backdrop{animation:settings-backdrop-enter .3s ease both}.account-settings.is-closing::backdrop{animation:settings-backdrop-leave .24s ease both}
+@keyframes settings-enter{from{opacity:0;transform:translateY(48px)}to{opacity:1;transform:translateY(0)}}
+@keyframes settings-backdrop-enter{from{opacity:0}to{opacity:1}}
+@keyframes settings-backdrop-leave{from{opacity:1}to{opacity:0}}
+@media(prefers-reduced-motion:reduce){.account-settings[open],.account-settings[open]::backdrop{animation:none}}
 .form-field input{font:inherit;font-weight:400;border:1px solid var(--border);border-radius:10px;padding:12px;background:#fbfcf6;color:var(--text);min-width:0;width:100%;font-size:16px}
 .form-field input:focus-visible{outline:2px solid #8fa484;outline-offset:1px}
 .form-field input::placeholder{font-size:12px;color:#a0a596}
@@ -96,6 +107,10 @@
 .school-panels .school-schedule th:first-child{width:28px}
 .school-panels .section-title{flex-wrap:wrap}
 .school-events{list-style:none;margin:0;padding:0}
+.school-calendar-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.school-calendar-controls input{min-width:0;flex:1;padding:7px;border:1px solid var(--border);border-radius:8px;background:var(--paper);color:var(--text);font:inherit}
+.school-calendar-controls .secondary-button{width:auto;margin:0;padding:7px 10px;font-size:11px}
+.school-calendar-controls button:disabled,.school-calendar-controls input:disabled{opacity:.45}
 .school-events li{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid var(--border)}
 .school-events li:last-child{border-bottom:0}
 .school-events time{flex:0 0 40px;color:var(--green);font-size:12px;font-variant-numeric:tabular-nums}
@@ -142,6 +157,30 @@
 .recognition-piece{transform-origin:160px 160px}
 .recognition-ring-entry{transform-origin:160px 160px}
 .model-selector select{max-width:100%;font:inherit;color:inherit;background:transparent;border:0;outline:none}.ai-composer button:disabled{opacity:.4}.school-data:empty{min-height:80px}
+/* Quiet AI entry and a vertically sliding conversation surface. */
+.agent-bar{border-radius:20px;padding:16px;gap:13px;background:var(--paper);color:var(--text);transition:border-color .2s,box-shadow .2s}
+.agent-bar:hover{border-color:#a8b59c;box-shadow:0 5px 20px #354b3610}
+.ai-mark{display:grid;place-items:center;flex-shrink:0;width:42px;height:42px;border-radius:14px;background:var(--sage);color:var(--green)}
+.ai-mark svg{width:25px;height:25px}.agent-label{display:grid;gap:3px}.agent-label strong{font-size:13px;font-weight:600}.agent-label>span{font-size:11px;color:var(--muted)}
+.agent-open{display:grid;place-items:center;width:30px;height:30px;margin-left:auto;border:1px solid var(--border);border-radius:50%;font-size:18px;color:var(--green)}
+.ai-page{display:flex;flex-direction:column;min-height:calc(100dvh - 52px);padding:10px 24px 100px;background:var(--bg);border-radius:24px 24px 0 0}
+.ai-sheet-handle{width:32px;height:4px;border-radius:4px;background:#cdd3c5;margin:0 auto 23px}
+.ai-heading{margin-bottom:24px}.ai-eyebrow{font-size:9px;letter-spacing:1.5px;color:var(--muted);margin-bottom:5px}.ai-heading h1{font-size:25px;letter-spacing:-1px}.ai-heading h1 span{font-size:15px;font-weight:500;color:var(--green);margin-left:4px}
+.ai-close{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--border);border-radius:50%;background:var(--paper)}.ai-close svg{width:18px;height:18px}
+.ai-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px}.ai-toolbar .model-selector{margin:0;padding:8px 11px}.ai-private-label{font-size:10px;color:var(--muted)}
+.ai-page [data-ai-usage]{font-size:10px;margin:10px 0 0;min-height:16px}
+.ai-page .chat-card{flex:1;min-height:260px;border:0;background:transparent;padding:28px 0 16px;border-radius:0}
+.ai-page .empty-data{font-size:13px;line-height:1.9;color:var(--muted);text-align:center;padding:65px 12px}
+.ai-page .message{gap:10px;margin-bottom:22px}.ai-page .chat-avatar{width:26px;height:26px;border-radius:9px;font-size:13px;font-weight:700;font-family:Arial,sans-serif}.ai-page .message.user .chat-avatar{display:none}
+.ai-page .bubble{max-width:calc(100% - 36px);background:transparent;padding:2px 0;font-size:13px;line-height:1.85}.ai-page .message.user .bubble{background:#e8eddf;padding:12px 16px;border-radius:18px 18px 5px 18px}
+.ai-page .suggestions{margin:0;gap:8px}.ai-page .suggestions button{font-size:11px;background:var(--paper);border-color:var(--border);padding:8px 12px;cursor:pointer;transition:background .2s}.ai-page .suggestions button:hover{background:var(--sage)}
+.ai-input-area{position:sticky;bottom:83px;margin-top:20px;padding-top:10px;background:var(--bg)}
+.ai-page .ai-composer{margin:0;border-radius:22px;padding:14px 14px 14px 17px;align-items:flex-end;box-shadow:0 3px 18px #354b3608;transition:border-color .2s,box-shadow .2s}
+.ai-page .ai-composer:focus-within{border-color:#8d9e80;box-shadow:0 0 0 3px #8d9e8012}.ai-page .ai-composer textarea{font-size:13px;resize:none;min-height:44px}.ai-page .send{display:grid;place-items:center;width:34px;height:34px;flex-shrink:0;cursor:pointer}.ai-page .send svg{width:19px;height:19px}.ai-page .ai-privacy{font-size:9px;text-align:center;margin:9px 0 0}
+.sheet-slide-stage .tab-slide-page{background:transparent}.sheet-slide-stage .ai-page,.sheet-slide-stage .account-page{box-shadow:0 -12px 40px #263a2612}.sheet-slide-stage .ai-input-area{position:static}
+.account-page{min-height:calc(100dvh - 52px);border-radius:24px 24px 0 0;background:var(--bg)}.account-title{display:flex;align-items:center;gap:10px}.account-close{display:grid;place-items:center;width:30px;height:30px;border:1px solid var(--border);border-radius:50%;background:var(--paper)}.account-close svg{width:18px;height:18px}
+@media(max-width:360px){.ai-page{padding-left:16px;padding-right:16px}.ai-private-label{display:none}}
+@media(prefers-reduced-motion:reduce){.agent-bar,.ai-page .ai-composer,.ai-page .suggestions button{transition:none}}
 .school-registration summary{cursor:pointer;font-weight:600}.school-registration form{margin-top:16px}.school-results{display:grid;gap:8px;margin-top:12px}.school-result{display:grid;gap:5px;padding:12px;text-align:left;border:1px solid var(--line,#dce0d5);border-radius:12px;background:transparent;color:inherit}.school-result span{font-size:12px;opacity:.7}.school-result[aria-pressed="true"]{background:#e2ead9;border-color:#809775}.classroom-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}.classroom-fields select,.classroom-fields input{width:100%;padding:12px;border:1px solid #d7ddcf;border-radius:10px;background:transparent;color:inherit}.school-data{margin-top:16px;overflow-x:auto;min-height:80px;line-height:1.7}.school-data h3{font-size:14px;margin:16px 0 4px}.school-schedule{width:100%;border-collapse:separate;border-spacing:4px;text-align:center;font-size:12px}.school-schedule caption{font-size:11px;color:#76806e;margin-bottom:10px}.school-schedule th{padding:6px 2px;font-weight:500}.school-schedule td{background:#e8eddf;border-radius:7px;padding:9px 3px;min-width:34px;word-break:keep-all}.school-source{padding:12px 0}.ai-composer textarea{flex:1;min-width:0;resize:vertical;max-height:180px;background:transparent;border:0;outline:none;font:inherit;line-height:1.5;color:inherit}.ai-composer .send{flex-shrink:0}.bubble{white-space:pre-wrap;overflow-wrap:anywhere}.suggestions button{padding:9px 12px;border:1px solid #d9dece;border-radius:18px;background:transparent;color:inherit;font:inherit;font-size:12px}.ai-privacy{margin:12px 4px;line-height:1.6}
 [data-avatar-phase="searching"] .recognition-ring-entry{animation:recognition-ring-enter .72s cubic-bezier(.2,.8,.2,1) both}
 [data-avatar-phase="searching"] .recognition-ring-track{animation:recognition-ring-draw .8s ease-out both}
