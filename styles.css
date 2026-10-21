@@ -118,6 +118,14 @@
 .recognition-spinner{fill:none;stroke:currentColor;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:125 45 38 307;transform-origin:160px 160px;animation:recognition-orbit 1.5s linear infinite}
 .recognition-face{transform-origin:160px 160px}
 .recognition-piece{transform-origin:160px 160px}
+.recognition-ring-entry{transform-origin:160px 160px}
+[data-avatar-phase="searching"] .recognition-ring-entry{animation:recognition-ring-enter .72s cubic-bezier(.2,.8,.2,1) both}
+[data-avatar-phase="searching"] .recognition-ring-track{animation:recognition-ring-draw .8s ease-out both}
+[data-avatar-phase="searching"] .recognition-corner-entry{animation:recognition-corner-enter .6s cubic-bezier(.2,.8,.2,1) both}
+.camera-focus.is-morphing [data-avatar-phase="searching"] .recognition-ring-entry,.camera-focus.is-morphing [data-avatar-phase="searching"] .recognition-corner-entry{animation:none;opacity:0}
+@keyframes recognition-ring-enter{from{opacity:0;transform:scale(.72)}to{opacity:1;transform:scale(1)}}
+@keyframes recognition-ring-draw{from{stroke-dasharray:515;stroke-dashoffset:515}to{stroke-dasharray:515;stroke-dashoffset:0}}
+@keyframes recognition-corner-enter{from{opacity:0;transform:translate(var(--corner-x),var(--corner-y))}to{opacity:1;transform:translate(0,0)}}
 [data-avatar-phase="searching"] .recognition-bracket{animation:recognition-frame-look 3.6s linear infinite}
 [data-avatar-phase="searching"] .recognition-features{transform-origin:160px 160px;animation:recognition-head-sweep 3.6s linear infinite}
 [data-avatar-phase="searching"] .recognition-eye{animation:recognition-eye-sweep 3.6s linear infinite;transform-origin:160px 148px}
@@ -146,4 +154,5 @@
 @keyframes recognition-lock{0%{transform:rotate(0);stroke-dasharray:125 45 38 307}70%{transform:rotate(280deg);stroke-dasharray:515 0}100%{transform:rotate(360deg);stroke-dasharray:515 0;opacity:.3}}
 @media(prefers-reduced-motion:reduce){.cam-recognition,.cam-video-mount .cam-avatar{transition:none}[data-avatar-phase] .cam-recognition,[data-avatar-phase] .recognition-spinner,[data-avatar-phase] .recognition-face,[data-avatar-phase] .recognition-features,[data-avatar-phase] .recognition-piece,.cam-toggle:hover .cam-face{animation:none}}
 @media(prefers-reduced-motion:reduce){.avatar-person,.avatar-head{transition:none}}
+@media(prefers-reduced-motion:reduce){[data-avatar-phase] .recognition-ring-entry,[data-avatar-phase] .recognition-ring-track,[data-avatar-phase] .recognition-corner-entry{animation:none}}
 @media(prefers-reduced-motion:reduce){.cam-viewport,.cam-corner,.cam-face{transition:none}.cam-scan{animation:none}}

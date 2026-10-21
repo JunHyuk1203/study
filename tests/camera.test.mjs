@@ -88,13 +88,16 @@ test('a single missed frame during the grace period does not cancel the check', 
   assert.equal(mount.dataset.avatarPhase, 'check');
 });
 
-test('face travels left intact before folding and returning as a continuous check', () => {
+test('face breaks into small leftward fragments before returning as a continuous check', () => {
   const source = Array.from({ length: 17 }, (_, i) => [111 + i, 115 + i / 2]);
   const line = source.map((_, i) => [133 + i / 16 / 8 * 18 / Math.SQRT2, 160 + i / 16 / 8 * 18 / Math.SQRT2]);
   assert.deepEqual(mergeStroke(source, line, 0, 0), source);
   const left = mergeStroke(source, line, 0, .22);
-  assert.ok(Math.abs(left[0][0] - (source[0][0] - 54)) < 1e-9);
-  assert.ok(Math.abs((left.at(-1)[0] - left[0][0]) - 16) < 1e-9);
+  assert.ok(left[0][0] < source[0][0] - 20);
+  assert.ok(left.at(-1)[0] - left[0][0] < 16 * .2);
+  const other = mergeStroke(source, line, 7, .22);
+  assert.ok(other[0][0] > left[0][0] + 20);
+  assert.ok(other[0][1] > left[0][1] + 20);
   const beforeTurn = mergeStroke(source, line, 0, .4 - 1e-7);
   const turn = mergeStroke(source, line, 0, .4);
   assert.ok(beforeTurn.every((p, i) => Math.hypot(p[0] - turn[i][0], p[1] - turn[i][1]) < .001));

@@ -102,18 +102,28 @@ function mergeFace(parts, completed) {
 
 export function mergeStroke(source, line, slot, progress) {
   const ease = value => 1 - (1 - clamp(value, 0, 1)) ** 3;
-  // First carry the entire face left intact. Fold there, then carry the same
-  // strokes back to the right while their leading edge draws the check.
+  const center = source.reduce((sum, point) => [sum[0] + point[0] / source.length, sum[1] + point[1] / source.length], [0, 0]);
+  const fragment = (phase) => {
+    const travel = ease(phase);
+    const shrink = 1 - .82 * ease(phase * 2);
+    const destination = [90 + slot * 3, 146 + (slot - 3.5) * 3.5];
+    return source.map(([x, y]) => [
+      center[0] + (destination[0] - center[0]) * travel + (x - center[0]) * shrink,
+      center[1] + (destination[1] - center[1]) * travel + (y - center[1]) * shrink - Math.sin(Math.PI * phase) * (8 + slot * 2),
+    ]);
+  };
+  // Shrink each original stroke independently into a small travelling fragment.
+  // The separated fragments sweep left, fold together, then return as the check.
   if (progress <= .22) {
-    const travel = ease(progress / .22);
-    return source.map(([x, y]) => [x - 54 * travel, y - 4 * Math.sin(Math.PI * travel)]);
+    return fragment(clamp((progress - slot * .008) / (.22 - slot * .008), 0, 1));
   }
   if (progress < .4) {
     const phase = (progress - .22) / .18;
     const fold = phase * phase * (3 - 2 * phase);
+    const pieces = fragment(1);
     return line.map(([x, y], index) => [
-      source[index][0] + (x - source[index][0]) * fold - 54,
-      source[index][1] + (y - source[index][1]) * fold - Math.sin(Math.PI * phase) * 14,
+      pieces[index][0] + (x - 54 - pieces[index][0]) * fold,
+      pieces[index][1] + (y - pieces[index][1]) * fold - Math.sin(Math.PI * phase) * 14,
     ]);
   }
   const returnOffset = -54 * (1 - ease((progress - .4) / .24));
@@ -140,13 +150,14 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
         <g class="avatar-head"><circle cx="160" cy="101" r="36"/><path class="avatar-eyes" d="M148 96v4m24-4v4"/><path d="M150 113q10 8 20 0"/></g>
       </g><path class="avatar-ground" d="M75 277h170"/>
     </svg><svg class="cam-recognition" viewBox="0 0 320 320" role="img" aria-label="얼굴을 찾는 중">
-      <circle class="recognition-ring-track" cx="160" cy="160" r="82"/>
+      <g class="recognition-ring-entry"><circle class="recognition-ring-track" cx="160" cy="160" r="82"/>
       <circle class="recognition-spinner" cx="160" cy="160" r="82"/>
+      </g>
       <g class="recognition-face" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-        <path class="recognition-piece recognition-bracket bracket-tl" d="M127 115h-9q-7 0-7 7v9"/>
-        <path class="recognition-piece recognition-bracket bracket-tr" d="M193 115h9q7 0 7 7v9"/>
-        <path class="recognition-piece recognition-bracket bracket-bl" d="M111 189v9q0 7 7 7h9"/>
-        <path class="recognition-piece recognition-bracket bracket-br" d="M209 189v9q0 7-7 7h-9"/>
+        <g class="recognition-corner-entry" style="--corner-x:28px;--corner-y:28px"><path class="recognition-piece recognition-bracket bracket-tl" d="M127 115h-9q-7 0-7 7v9"/></g>
+        <g class="recognition-corner-entry" style="--corner-x:-28px;--corner-y:28px"><path class="recognition-piece recognition-bracket bracket-tr" d="M193 115h9q7 0 7 7v9"/></g>
+        <g class="recognition-corner-entry" style="--corner-x:28px;--corner-y:-28px"><path class="recognition-piece recognition-bracket bracket-bl" d="M111 189v9q0 7 7 7h9"/></g>
+        <g class="recognition-corner-entry" style="--corner-x:-28px;--corner-y:-28px"><path class="recognition-piece recognition-bracket bracket-br" d="M209 189v9q0 7-7 7h-9"/></g>
         <g class="recognition-features">
         <path class="recognition-piece recognition-eye eye-left" d="M140 143v10"/>
         <path class="recognition-piece recognition-eye eye-right" d="M180 143v10"/>
