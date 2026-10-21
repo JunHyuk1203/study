@@ -23,15 +23,24 @@
       const nextApp = nextDocument.querySelector('.app');
       const currentApp = document.querySelector('.app');
       if (!nextApp || !currentApp) throw new Error('Page layout is missing');
+      const currentNav = currentApp.querySelector('.bottom-nav');
+      const nextNav = nextApp.querySelector('.bottom-nav');
+      const nextHeader = nextApp.querySelector('.header');
+      const nextMain = nextApp.querySelector('main');
+      if (!currentNav || !nextNav || !nextHeader || !nextMain) throw new Error('Page structure is missing');
 
       stage = document.createElement('div');
       stage.className = 'tab-slide-stage';
+      stage.style.bottom = `${window.innerHeight - currentNav.getBoundingClientRect().top}px`;
       stage.setAttribute('aria-hidden', 'true');
       stage.inert = true;
       const outgoing = document.createElement('div');
       const incoming = document.createElement('div');
       outgoing.className = incoming.className = 'tab-slide-page';
-      outgoing.append(currentApp.cloneNode(true));
+      const outgoingApp = currentApp.cloneNode(true);
+      outgoingApp.querySelector('.bottom-nav').remove();
+      nextNav.remove();
+      outgoing.append(outgoingApp);
       incoming.append(nextApp);
       stage.append(outgoing, incoming);
       document.body.append(stage);
@@ -51,7 +60,14 @@
       ];
       await Promise.all(animations.map(animation => animation.finished));
 
-      currentApp.replaceWith(nextApp);
+      // Preserve the actual navigation node outside both sliding panels.
+      currentApp.querySelector('.header').replaceWith(nextHeader);
+      currentApp.querySelector('main').replaceWith(nextMain);
+      const selectedHref = nextNav.querySelector('[aria-current="page"]')?.getAttribute('href');
+      for (const link of currentNav.querySelectorAll('a')) {
+        if (link.getAttribute('href') === selectedHref) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+      }
       document.title = nextDocument.title;
       if (pushHistory) window.history.pushState(null, '', url.href);
       displayedUrl = url;

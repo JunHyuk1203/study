@@ -7,6 +7,7 @@
 /* Two opaque viewport panels slide together without a page-load transition. */
 .tab-slide-stage{position:fixed;inset:0;z-index:100;overflow:hidden;background:#eae9df;pointer-events:none}
 .tab-slide-page{position:absolute;inset:0;overflow:hidden;background:#eae9df;transform:translateX(0);will-change:transform;isolation:isolate}
+.bottom-nav{z-index:101;background:var(--bg)}
 
 /* Suppress browser tap flashes while keeping keyboard focus visible. */
 *{-webkit-tap-highlight-color:transparent}
