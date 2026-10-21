@@ -8,10 +8,78 @@ import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAut
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
 import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
+import { generateForUser } from '../functions/ai-service.js';
+import { allowance, MONTHLY_LIMIT, tokenCost } from '../functions/ai-budget.js';
+import { schoolDates } from '../functions/integrations-domain.js';
+import { chatWithStudy, getAiUsage, getSchoolOverview, searchSchools, saveSchool } from '../functions/integrations.js';
 
 const projectId = 'demo-study';
+function mockProvider(context, generate) {
+  const original=globalThis.fetch;
+  globalThis.fetch=async(url,options)=>{
+    if(String(url).includes('eurofxref'))return new Response("<Cube currency='USD' rate='1.2'/><Cube currency='KRW' rate='1800'/>");
+    if(String(url).endsWith(':countTokens'))return Response.json({totalTokens:20});
+    assert.ok(String(url).includes(':streamGenerateContent'));
+    return generate(JSON.parse(options.body));
+  };
+  context.after(()=>{globalThis.fetch=original;});
+}
+function streamAnswer(body, finishReason='STOP') {
+  return new Response(`data: ${JSON.stringify({candidates:[{content:{parts:[{text:'실제 스트림 부분 답변'}]},finishReason}],usageMetadata:{promptTokenCount:20,candidatesTokenCount:body.generationConfig.maxOutputTokens,thoughtsTokenCount:0}})}\n\n`,{headers:{'content-type':'text/event-stream'}});
+}
 let environment;
 let clientApp;
+
+test('integration callables require authentication and AI requires verified email',async()=>{
+  for(const callable of [chatWithStudy,getAiUsage,getSchoolOverview,searchSchools,saveSchool])await assert.rejects(()=>callable.run({data:{}}),error=>error.code==='unauthenticated');
+  await assert.rejects(()=>chatWithStudy.run({auth:{uid:'unverified',token:{email_verified:false}},data:{}}),error=>error.code==='failed-precondition');
+});
+
+test('Argon shares monthly ledger and rejects its third Korean-day generation',async context=>{
+  let calls=0;mockProvider(context,body=>{calls++;return streamAnswer(body);});
+  const args={user:'quota-argon',model:'gemini-4-argon',key:'test-only',contents:[{role:'user',parts:[{text:'질문'}]}],requested:128};
+  await generateForUser(args);await generateForUser(args);
+  await assert.rejects(()=>generateForUser(args),error=>error.code==='resource-exhausted'&&error.message.includes('하루 2회'));
+  assert.equal(calls,2);
+  const status=await getAiUsage.run({auth:{uid:args.user,token:{}},data:{}});
+  assert.equal(status.argonRemaining,0);assert.ok(status.usedWon>0&&status.usedWon<=1000);
+});
+
+test('near monthly limit provider is capped mid-answer and tokens settle below 1000 won',async context=>{
+  const user='quota-partial',model='gemini-4-argon',inputBound=278,rate=2640;
+  const month=schoolDates().date.slice(0,7),ref=getFirestore('study-data').doc(`users/${user}/aiUsage/${month}`);
+  await ref.set({spent:MONTHLY_LIMIT-tokenCost(model,inputBound,80,rate),reserved:0});
+  let cap;mockProvider(context,body=>{cap=body.generationConfig.maxOutputTokens;return streamAnswer(body,'MAX_TOKENS');});
+  const chunks=[];
+  const result=await generateForUser({user,model,key:'test-only',contents:[{role:'user',parts:[{text:'질문'}]}],onChunk:text=>chunks.push(text)});
+  assert.equal(cap,80);assert.equal(result.cutoff,true);assert.ok(chunks.length);assert.ok(result.text);
+  const saved=(await ref.get()).data();assert.equal(saved.reserved,0);assert.ok(saved.spent<=MONTHLY_LIMIT);
+});
+
+test('simultaneous requests reserve balance atomically across models',async context=>{
+  const user='quota-parallel',model='gemini-3.8-flash',rate=2640;
+  const quote=allowance({model,inputTokens:20,exchangeRate:rate});
+  const ref=getFirestore('study-data').doc(`users/${user}/aiUsage/${schoolDates().date.slice(0,7)}`);
+  await ref.set({spent:MONTHLY_LIMIT-quote.amount,reserved:0});
+  let enter,release;const entered=new Promise(resolve=>{enter=resolve}),waiting=new Promise(resolve=>{release=resolve});
+  mockProvider(context,async body=>{enter();await waiting;return streamAnswer(body);});
+  const args={user,model,key:'test-only',contents:[{role:'user',parts:[{text:'질문'}]}]};
+  const first=generateForUser(args);await entered;
+  try{await assert.rejects(()=>generateForUser({...args,model:'gemini-4-argon'}),error=>error.code==='resource-exhausted');}finally{release();}
+  await first;const saved=(await ref.get()).data();assert.equal(saved.reserved,0);assert.ok(saved.spent<=MONTHLY_LIMIT);
+});
+
+test('ambiguous provider failures retain reserved cost and clients cannot alter usage',async context=>{
+  mockProvider(context,()=>{throw new Error('provider contained test-private-key');});
+  const user='quota-failure';
+  await assert.rejects(()=>generateForUser({user,model:'gemini-3.8-flash',key:'test-only',contents:[{role:'user',parts:[{text:'질문'}]}]}),error=>error.code==='unavailable'&&!error.message.includes('private'));
+  const path=`users/${user}/aiUsage/${schoolDates().date.slice(0,7)}`;
+  const saved=(await getFirestore('study-data').doc(path).get()).data();assert.equal(saved.reserved,0);assert.ok(saved.spent>0);
+  const client=environment.authenticatedContext(user).firestore();
+  await assertFails(setDoc(doc(client,path),{spent:0,reserved:0}));
+  await assertFails(setDoc(doc(client,`users/${user}/aiDaily/${schoolDates().date}`),{argonCalls:0}));
+  await assertFails(getDoc(doc(client,'aiReservations/private')));
+});
 
 before(async () => {
   assert.ok(process.env.FIRESTORE_EMULATOR_HOST, 'Tests must run only inside Firestore emulator');

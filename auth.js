@@ -3,6 +3,7 @@ import { firebaseConfig } from './firebase-config.js';
 let currentUser = null;
 let services;
 let registering = false;
+let resolved = false;
 
 export function getAuthUser() { return currentUser; }
 
@@ -15,6 +16,8 @@ function message(text, error = false) {
 }
 
 function paintAccount() {
+  for (const node of document.querySelectorAll('[data-account-loading]')) node.hidden = resolved;
+  if (!resolved) return;
   const name = currentUser?.displayName || '회원';
   for (const avatar of document.querySelectorAll('.profile-dot, [data-auth-avatar]')) avatar.textContent = currentUser ? name.slice(0, 1).toUpperCase() : '·';
   for (const node of document.querySelectorAll('[data-auth-name]')) node.textContent = name;
@@ -60,17 +63,21 @@ async function initialize() {
   services = { ...authSdk, auth };
   authSdk.onAuthStateChanged(auth, user => {
     currentUser = user;
+    resolved = true;
     paintAccount();
     if (!registering) window.dispatchEvent(new Event('study:auth-changed'));
   });
   await auth.authStateReady();
   currentUser = auth.currentUser;
+  resolved = true;
   paintAccount();
   for (const button of document.querySelectorAll('[data-auth-form] [type="submit"], [data-auth-action="google"]')) button.disabled = false;
   return services;
 }
 
 export const authReady = initialize().catch(error => {
+  resolved = true;
+  paintAccount();
   message('로그인을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.', true);
   return null;
 });

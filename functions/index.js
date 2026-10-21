@@ -2,6 +2,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, SUBJECTS, validDisplayName, weekKey } from './domain.js';
+export { searchSchools, saveSchool, getSchoolOverview, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 
 const app = getApps()[0] ?? initializeApp();
 const db = getFirestore(app, 'study-data');

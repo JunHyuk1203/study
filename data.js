@@ -1,6 +1,6 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-24';
+import { authReady, getAuthUser } from './auth.js?v=20261021-25';
 import { firebaseConfig } from './firebase-config.js';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-24';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-25';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;
@@ -37,6 +37,8 @@ let busy = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
 let cameraPauseAt = null;
 let previewSession = null;
+let authResolved = false;
+export function getStudyData() { return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser()}; }
 function updatePreviewTimer() {
   if (!previewSession) return;
   const active = cameraState().tracking && !document.hidden;
@@ -49,7 +51,7 @@ function updatePreviewTimer() {
 let state = emptyState();
 
 function emptyState() {
-  return { profile: null, today: {}, week: {}, month: {}, summary: {}, lastWeek: {}, days: [], ranking: [], schoolRanking: [], ownRanking: null, active: null, notice: '', error: false };
+  return { profile: null, today: {}, week: {}, month: {}, summary: {}, lastWeek: {}, days: [], ranking: [], schoolRanking: [], ownRanking: null, active: null, notice: '', error: false, pending:new Set(['profile','today','week','month','summary','lastWeek','days','ranking','ownRanking']), failed:new Set() };
 }
 function notice(text, error = false) { state.notice = text; state.error = error; paint(); }
 function errorText(error) {
@@ -68,6 +70,11 @@ function textAll(selector, value) { for (const element of document.querySelector
 
 function paintRanking(container, rows, school = false) {
   container.replaceChildren();
+  const key = school ? 'schoolRanking' : 'ranking';
+  if (!authResolved || getAuthUser() && (state.pending.has(key) || school && state.pending.has('profile'))) {
+    container.textContent = '로딩 중…'; return;
+  }
+  if (state.failed.has(key)) { container.textContent = '랭킹을 불러오지 못했습니다. 새로고침해 주세요.'; return; }
   if (!getAuthUser() || !rows.length) {
     const empty = document.createElement('p');
     empty.className = 'empty-data';
@@ -90,6 +97,10 @@ function paintRanking(container, rows, school = false) {
 
 function paintChart(container) {
   const isSubjects = container.dataset.chart === 'subjects';
+  const key = isSubjects ? 'week' : 'days';
+  if (!authResolved || getAuthUser() && state.pending.has(key)) { container.textContent = '로딩 중…'; return; }
+  if (!getAuthUser()) { container.textContent = '로그인하면 공부 기록을 볼 수 있습니다.'; return; }
+  if (state.failed.has(key)) { container.textContent = '기록을 불러오지 못했습니다.'; return; }
   const rows = isSubjects ? Object.entries(subjects).map(([id, label]) => ({ label, seconds: state.week.subjectSeconds?.[id] || 0 })) : Array.from({ length: 7 }, (_, index) => {
     const key = dateKey(Date.now() - (6 - index) * 86400000);
     const record = state.days.find(row => row.date === key);
@@ -113,17 +124,19 @@ function paintChart(container) {
 
 function paint() {
   const user = getAuthUser();
-  for (const key of ['today', 'week', 'month', 'summary']) textAll(`[data-time="${key}"]`, time(state[key].totalSeconds));
-  textAll('[data-streak]', String(state.summary.currentStreak || 0));
+  const value = (key, result) => !authResolved || user && state.pending.has(key) ? '로딩 중…' : !user ? '로그인 필요' : state.failed.has(key) ? '불러오기 실패' : result;
+  for (const key of ['today', 'week', 'month', 'summary']) textAll(`[data-time="${key}"]`, value(key, time(state[key].totalSeconds)));
+  textAll('[data-streak]', value('summary', `${state.summary.currentStreak || 0}일`));
   const rank = state.ranking.findIndex(row => row.uid === user?.uid);
-  textAll('[data-my-rank]', rank >= 0 ? `${rank + 1}위` : state.ownRanking?.totalSeconds ? '50위 밖' : '—');
-  textAll('[data-data-badge]', user ? '실시간 기록' : '로그인 필요');
-  textAll('[data-week-goal]', `${Math.floor((state.week.totalSeconds || 0) / 3600)} / 30시간`);
-  textAll('[data-week-remaining]', `목표까지 ${time(Math.max(0, 108000 - (state.week.totalSeconds || 0)))}`);
-  for (const bar of document.querySelectorAll('[data-week-progress]')) bar.style.width = `${Math.min(100, (state.week.totalSeconds || 0) / 108000 * 100)}%`;
+  textAll('[data-my-rank]', value('ownRanking', value('ranking', rank >= 0 ? `${rank + 1}위` : state.ownRanking?.totalSeconds ? '50위 밖' : '—')));
+  textAll('[data-data-badge]', value('today', '실시간 기록'));
+  const goal = state.profile?.weeklyGoalSeconds || 0;
+  textAll('[data-week-goal]', value('profile', goal ? `${Math.floor((state.week.totalSeconds || 0) / 3600)} / ${goal/3600}시간` : '미설정'));
+  textAll('[data-week-remaining]', value('profile', goal ? `목표까지 ${time(Math.max(0, goal - (state.week.totalSeconds || 0)))}` : '등록된 학습 목표가 없습니다.'));
+  for (const bar of document.querySelectorAll('[data-week-progress]')) bar.style.width = `${goal ? Math.min(100, (state.week.totalSeconds || 0) / goal * 100) : 0}%`;
   const previous = state.lastWeek.totalSeconds || 0;
-  textAll('[data-week-comparison]', previous ? `지난주 대비 ${Math.round(((state.week.totalSeconds || 0) - previous) / previous * 100)}%` : '지난주 기록 없음');
-  textAll('[data-school-name]', state.profile?.schoolId || '등록된 학교 없음');
+  textAll('[data-week-comparison]', value('week', value('lastWeek', previous ? `지난주 대비 ${Math.round(((state.week.totalSeconds || 0) - previous) / previous * 100)}%` : '지난주 기록 없음')));
+  textAll('[data-school-name]', value('profile', state.profile?.school?.name || '등록된 학교 없음'));
   for (const element of document.querySelectorAll('[data-ranking]')) paintRanking(element, element.dataset.ranking === 'school' ? state.schoolRanking : state.ranking, element.dataset.ranking === 'school');
   for (const element of document.querySelectorAll('[data-chart]')) paintChart(element);
   for (const element of document.querySelectorAll('[data-sync-status]')) {
@@ -137,6 +150,7 @@ function paint() {
     if (input && document.activeElement !== input) input.value = state.profile?.displayName || user?.displayName || '';
   }
   paintTimer();
+  window.dispatchEvent(new Event('study:data-changed'));
 }
 
 function paintTimer() {
@@ -183,12 +197,14 @@ async function syncCamera(force = false) {
   }
 }
 
-function watch(reference, callback, token) {
+function watch(reference, callback, token, key) {
   const unsubscribe = sdk.onSnapshot(reference, snapshot => {
     if (token !== generation) return;
     callback(snapshot);
+    state.pending.delete(key);
+    state.failed.delete(key);
     paint();
-  }, error => { if (token === generation) notice(errorText(error), true); });
+  }, error => { if (token === generation) { state.pending.delete(key); state.failed.add(key); notice(errorText(error), true); } });
   subscriptions.push(unsubscribe);
 }
 
@@ -203,6 +219,8 @@ async function connectUser() {
   activeUnsubscribe?.(); schoolUnsubscribe?.();
   activeId = schoolId = undefined;
   state = emptyState();
+  authResolved = true;
+  if (!user) state.pending.clear();
   connectedUid = user?.uid || null;
   connectedDay = today;
   paint();
@@ -228,18 +246,20 @@ async function connectUser() {
       schoolUnsubscribe?.();
       schoolId = newSchool;
       state.schoolRanking = [];
+      if (newSchool) state.pending.add('schoolRanking');
       if (newSchool) schoolUnsubscribe = sdk.onSnapshot(sdk.query(sdk.collection(db, 'schoolLeaderboards', newSchool, 'weeks', week, 'entries'), sdk.orderBy('totalSeconds', 'desc'), sdk.orderBy('uid'), sdk.limit(50)), rows => {
         if (token !== generation) return;
+        state.pending.delete('schoolRanking'); state.failed.delete('schoolRanking');
         state.schoolRanking = rows.docs.map(row => row.data()); paint();
-      }, error => { if (token === generation) notice(errorText(error), true); });
+      }, error => { if (token === generation) { state.pending.delete('schoolRanking'); state.failed.add('schoolRanking'); notice(errorText(error), true); } });
     }
-  }, token);
+  }, token, 'profile');
   for (const [key, path] of [['today', ['dailyStats', today]], ['week', ['weeklyStats', week]], ['month', ['monthlyStats', today.slice(0, 7)]], ['summary', ['stats', 'summary']], ['lastWeek', ['weeklyStats', previousWeek]]]) {
-    watch(sdk.doc(db, 'users', uid, ...path), snapshot => { state[key] = snapshot.data() || {}; }, token);
+    watch(sdk.doc(db, 'users', uid, ...path), snapshot => { state[key] = snapshot.data() || {}; }, token, key);
   }
-  watch(sdk.query(sdk.collection(db, 'users', uid, 'dailyStats'), sdk.orderBy(sdk.documentId()), sdk.startAt(dateKey(Date.now() - 6 * 86400000)), sdk.endAt(today), sdk.limit(7)), rows => { state.days = rows.docs.map(row => ({ ...row.data(), date: row.id })); }, token);
-  watch(sdk.query(sdk.collection(db, 'leaderboards', week, 'entries'), sdk.orderBy('totalSeconds', 'desc'), sdk.orderBy('uid'), sdk.limit(50)), rows => { state.ranking = rows.docs.map(row => row.data()); }, token);
-  watch(sdk.doc(db, 'leaderboards', week, 'entries', uid), snapshot => { state.ownRanking = snapshot.data() || null; }, token);
+  watch(sdk.query(sdk.collection(db, 'users', uid, 'dailyStats'), sdk.orderBy(sdk.documentId()), sdk.startAt(dateKey(Date.now() - 6 * 86400000)), sdk.endAt(today), sdk.limit(7)), rows => { state.days = rows.docs.map(row => ({ ...row.data(), date: row.id })); }, token, 'days');
+  watch(sdk.query(sdk.collection(db, 'leaderboards', week, 'entries'), sdk.orderBy('totalSeconds', 'desc'), sdk.orderBy('uid'), sdk.limit(50)), rows => { state.ranking = rows.docs.map(row => row.data()); }, token, 'ranking');
+  watch(sdk.doc(db, 'leaderboards', week, 'entries', uid), snapshot => { state.ownRanking = snapshot.data() || null; }, token, 'ownRanking');
   const displayName = (user.displayName || '회원').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 20);
   profileReady = call('ensureProfile')({ displayName: displayName.length >= 2 ? displayName : '회원' });
   try { await profileReady; } catch (error) { if (token === generation) notice(errorText(error), true); }
@@ -321,6 +341,7 @@ window.setInterval(() => {
 
 try {
   authServices = await authReady;
+  if (!authServices) { authResolved = true; state.pending.clear(); notice('서비스를 불러오지 못했습니다. 새로고침해 주세요.', true); }
   if (authServices) {
     const [appSdk, firestoreSdk, callableSdk] = await Promise.all([
       import('https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js'),

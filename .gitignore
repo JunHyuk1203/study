@@ -6,6 +6,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+.secret.local
+.secret.*
 *-adminsdk-*.json
 service-account*.json
 dist/
