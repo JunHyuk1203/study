@@ -1,2 +1,11 @@
 tmp/
 .serena/
+node_modules/
+*-debug.log
+.firebase/
+.env
+.env.*
+!.env.example
+*-adminsdk-*.json
+service-account*.json
+dist/

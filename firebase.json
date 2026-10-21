@@ -1,0 +1,31 @@
+{
+  "auth": {
+    "authorizedDomains": ["localhost", "127.0.0.1", "junhyuk1203.github.io", "study-junhyuk1203-20261021.firebaseapp.com", "study-junhyuk1203-20261021.web.app"],
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "STUDY",
+        "supportEmail": "tntgame1203@gmail.com"
+      }
+    }
+  },
+  "firestore": {
+    "database": "study-data",
+    "location": "asia-northeast3",
+    "edition": "enterprise",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [{
+    "source": "functions",
+    "codebase": "study",
+    "runtime": "nodejs22"
+  }],
+  "emulators": {
+    "auth": { "host": "127.0.0.1", "port": 19099 },
+    "firestore": { "host": "127.0.0.1", "port": 18080, "edition": "enterprise" },
+    "functions": { "host": "127.0.0.1", "port": 15001 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

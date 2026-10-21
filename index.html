@@ -4,21 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>study — 나의 공부 공간</title>
-  <link rel="stylesheet" href="styles.css">
-<script src="navigation.js"></script></head>
+  <link rel="stylesheet" href="styles.css?v=20261021-4">
+<script src="navigation.js?v=20261021-4"></script><script type="module" src="app.js?v=20261021-4"></script></head>
 <body>
   <div class="app">
     <header class="header"><a class="brand" href="index.html">STUDY.</a><a class="profile-dot" href="account.html" aria-label="내 계정">J</a></header>
     <main>
       <div class="page-heading"><h1>홈</h1></div>
-      <section class="card overview"><div class="section-title"><h2>오늘의 공부</h2><span class="badge">좋은 흐름이에요</span></div><p class="hero-number">4<span>시간</span> 32<span>분</span></p><div class="week-chart" aria-label="요일별 학습 시간 예시"><div><i style="--bar:35%"></i><span>목</span></div><div><i style="--bar:62%"></i><span>금</span></div><div><i style="--bar:44%"></i><span>토</span></div><div><i style="--bar:24%"></i><span>일</span></div><div><i style="--bar:75%"></i><span>월</span></div><div><i style="--bar:58%"></i><span>화</span></div><div class="today"><i style="--bar:90%"></i><span>수</span></div></div><div class="card-foot"><span>이번 주 총 24시간 18분</span><span class="green">↗ 지난주보다 12%</span></div></section>
-      <div class="two-columns"><section class="card mini-card"><span class="mini-icon sand">◷</span><p class="muted">이번 주 목표</p><p class="metric">24<span> / 30시간</span></p><div class="progress"><i style="width:80%"></i></div><p class="tiny muted">목표까지 6시간 남았어요</p></section><section class="card mini-card"><span class="mini-icon lavender">⚑</span><p class="muted">다가오는 시험</p><p class="metric">D–14</p><p class="tiny muted">2학기 중간고사</p><div class="subject-tags"><span>국어</span><span>수학</span><span>영어</span></div></section></div>
+      <section class="card overview"><div class="section-title"><h2>오늘의 공부</h2><span class="badge" data-data-badge>로그인 필요</span></div><p class="hero-number" data-time="today">0시간 00분</p><div class="week-chart" data-chart="days" aria-label="최근 7일 학습 시간"></div><div class="card-foot"><span>이번 주 <span data-time="week">0시간 00분</span></span><span class="green" data-week-comparison>지난주 기록 없음</span></div></section>
+      <div class="two-columns"><section class="card mini-card"><span class="mini-icon sand">◷</span><p class="muted">이번 주 목표</p><p class="metric" data-week-goal>0 / 30시간</p><div class="progress"><i data-week-progress style="width:0%"></i></div><p class="tiny muted" data-week-remaining>목표까지 30시간 00분</p></section><section class="card mini-card"><span class="mini-icon lavender">⚑</span><p class="muted">다가오는 시험</p><p class="metric">미등록</p><p class="tiny muted">등록된 시험 일정이 없습니다.</p></section></div>
       <a href="school.html" class="card school-link"><span class="mini-icon sage">▦</span><div><strong>나의 학교</strong><p class="tiny muted">시간표와 오늘의 급식을 한눈에</p></div><span class="arrow">↗</span></a>
-      <section class="card briefing"><div class="section-title"><h2><span class="green">✧</span> AI 브리핑</h2><span class="tiny muted">오늘의 한마디</span></div><p>수학에 가장 집중한 한 주였어요.<br>오늘은 영어 복습에 조금 더 시간을 써볼까요?</p><div class="briefing-foot"><span class="tiny muted">나의 공부 기록을 바탕으로 한 제안</span><a href="ai.html" aria-label="AI 화면 보기">↗</a></div></section>
+      <section class="card briefing"><div class="section-title"><h2><span class="green">✧</span> AI 브리핑</h2><span class="tiny muted">오늘의 한마디</span></div><p>AI 브리핑은 준비 중입니다.</p><div class="briefing-foot"><span class="tiny muted">공부 기록은 학습 탭에서 확인할 수 있습니다.</span><a href="ai.html" aria-label="AI 화면 보기">↗</a></div></section>
       <a class="agent-bar" href="ai.html"><span class="agent-orb">✳</span><span>AI 채팅</span><span class="arrow" aria-hidden="true">↗</span></a>
-      <p class="demo-note">UI PREVIEW · 모든 기록은 화면 예시입니다</p>
+      <p class="auth-status" data-sync-status role="status" aria-live="polite" hidden></p>
     </main>
     <nav class="bottom-nav" aria-label="주 메뉴"><a href="index.html" aria-current="page"><span>⌂</span>홈</a><a href="study.html"><span>◷</span>학습</a><a href="school.html"><span>▦</span>학교</a><a href="play.html"><span>♧</span>플레이</a><a href="account.html"><span>♙</span>계정</a></nav>
   </div>
-<script src="header.js" defer></script></body>
+<script src="header.js?v=20261021-4" defer></script></body>
 </html>

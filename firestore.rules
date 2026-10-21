@@ -1,0 +1,35 @@
+rules_version = '2';
+// Private accounts: users/{uid}; sessions and daily/weekly/monthly statistics below it.
+// Authenticated ranking rows contain only uid, displayName, totalSeconds, updatedAt.
+// All writes are server-only. Auth users cannot create/edit scores, school membership or profiles.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() { return request.auth != null; }
+    function isOwner(uid) { return isAuthenticated() && request.auth.uid == uid; }
+    function isBoundedQuery() { return request.query.limit != null && request.query.limit <= 50; }
+    function isSchoolMember(schoolId) {
+      return isAuthenticated()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+    }
+    match /users/{uid} {
+      allow get: if isOwner(uid);
+      allow list, write: if false;
+      match /{collection}/{document} {
+        allow get: if isOwner(uid) && collection in ['sessions', 'dailyStats', 'weeklyStats', 'monthlyStats', 'stats'];
+        allow list: if isOwner(uid) && collection in ['sessions', 'dailyStats', 'weeklyStats', 'monthlyStats', 'stats'] && isBoundedQuery();
+        allow write: if false;
+      }
+    }
+    match /leaderboards/{week}/entries/{uid} {
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && isBoundedQuery();
+      allow write: if false;
+    }
+    match /schoolLeaderboards/{schoolId}/weeks/{week}/entries/{uid} {
+      allow get: if isSchoolMember(schoolId);
+      allow list: if isSchoolMember(schoolId) && isBoundedQuery();
+      allow write: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

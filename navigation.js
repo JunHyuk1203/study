@@ -24,13 +24,18 @@
       const currentApp = document.querySelector('.app');
       if (!nextApp || !currentApp) throw new Error('Page layout is missing');
       const currentNav = currentApp.querySelector('.bottom-nav');
+      const currentHeader = currentApp.querySelector('.header');
       const nextNav = nextApp.querySelector('.bottom-nav');
       const nextHeader = nextApp.querySelector('.header');
       const nextMain = nextApp.querySelector('main');
-      if (!currentNav || !nextNav || !nextHeader || !nextMain) throw new Error('Page structure is missing');
+      if (!currentNav || !currentHeader || !nextNav || !nextHeader || !nextMain) throw new Error('Page structure is missing');
+
+      document.documentElement.classList.add('tab-navigation-active');
+      const contentTop = Math.max(0, currentHeader.getBoundingClientRect().bottom);
 
       stage = document.createElement('div');
       stage.className = 'tab-slide-stage';
+      stage.style.top = `${contentTop}px`;
       stage.style.bottom = `${window.innerHeight - currentNav.getBoundingClientRect().top}px`;
       stage.setAttribute('aria-hidden', 'true');
       stage.inert = true;
@@ -39,12 +44,15 @@
       outgoing.className = incoming.className = 'tab-slide-page';
       const outgoingApp = currentApp.cloneNode(true);
       outgoingApp.querySelector('.bottom-nav').remove();
+      outgoingApp.querySelector('.header').remove();
       nextNav.remove();
+      nextHeader.remove();
       outgoing.append(outgoingApp);
       incoming.append(nextApp);
       stage.append(outgoing, incoming);
       document.body.append(stage);
-      outgoing.scrollTop = Math.max(0, window.scrollY);
+      window.dispatchEvent(new Event('study:page-prepared'));
+      outgoing.scrollTop = Math.max(0, contentTop - currentApp.querySelector('main').getBoundingClientRect().top);
 
       const direction = to > from ? 1 : -1;
       const timing = { duration: 440, easing: 'cubic-bezier(.22,.61,.36,1)', fill: 'both' };
@@ -61,7 +69,6 @@
       await Promise.all(animations.map(animation => animation.finished));
 
       // Preserve the actual navigation node outside both sliding panels.
-      currentApp.querySelector('.header').replaceWith(nextHeader);
       currentApp.querySelector('main').replaceWith(nextMain);
       const selectedHref = nextNav.querySelector('[aria-current="page"]')?.getAttribute('href');
       for (const link of currentNav.querySelectorAll('a')) {
@@ -77,6 +84,7 @@
       window.location.assign(url.href);
     } finally {
       stage?.remove();
+      document.documentElement.classList.remove('tab-navigation-active');
       navigating = false;
     }
   }
