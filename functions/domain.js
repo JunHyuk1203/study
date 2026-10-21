@@ -2,6 +2,24 @@ const DAY_MS = 86400000;
 const KST_MS = 9 * 3600000;
 export const MAX_SESSION_MS = 12 * 3600000;
 export const SUBJECTS = ['korean', 'math', 'english', 'science', 'social', 'other'];
+export const CAMERA_LEASE_MS = 30000;
+
+// Aggregate only server-observed active windows. An expired lease never credits the gap.
+export function checkpointCamera(session, nowMs, tracking) {
+  const now = Math.floor(nowMs / 1000) * 1000;
+  const deadline = session.startedAtMs + MAX_SESSION_MS;
+  const buckets = new Map((session.segments || []).map(segment => [segment.date, { ...segment }]));
+  if (session.activeSinceMs != null) {
+    const end = Math.min(now, session.leaseUntilMs, deadline);
+    if (end > session.activeSinceMs) for (const segment of splitStudyInterval(session.activeSinceMs, end)) {
+      const previous = buckets.get(segment.date);
+      buckets.set(segment.date, { ...segment, seconds: (previous?.seconds || 0) + segment.seconds });
+    }
+  }
+  const active = tracking && now < deadline;
+  const segments = [...buckets.values()];
+  return { segments, accumulatedSeconds: segments.reduce((sum, row) => sum + row.seconds, 0), activeSinceMs: active ? now : null, leaseUntilMs: active ? Math.min(now + CAMERA_LEASE_MS, deadline) : null, cameraStatus: active ? 'tracking' : 'paused' };
+}
 
 export function validDisplayName(value) {
   return typeof value === 'string' && value.trim().length >= 2 && value.trim().length <= 20 && !/[\p{Cc}\p{Cf}]/u.test(value);

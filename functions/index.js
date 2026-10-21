@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { advanceStreak, MAX_SESSION_MS, splitStudyInterval, SUBJECTS, validDisplayName, weekKey } from './domain.js';
+import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, SUBJECTS, validDisplayName, weekKey } from './domain.js';
 
 const app = getApps()[0] ?? initializeApp();
 const db = getFirestore(app, 'study-data');
@@ -51,6 +51,9 @@ export const startStudySession = onCall(options, async (request) => {
   const uid = userId(request, true);
   const subjectId = request.data?.subjectId;
   if (!SUBJECTS.includes(subjectId)) throw new HttpsError('invalid-argument', '과목을 선택해 주세요.');
+  const cameraMode = request.data?.cameraMode === true;
+  const controllerId = request.data?.controllerId;
+  if (cameraMode && (typeof controllerId !== 'string' || !/^[a-f0-9-]{36}$/.test(controllerId))) throw new HttpsError('invalid-argument', '카메라 제어 ID가 올바르지 않습니다.');
   const profileRef = db.doc(`users/${uid}`);
   const sessionRef = profileRef.collection('sessions').doc();
   await db.runTransaction(async (transaction) => {
@@ -58,10 +61,28 @@ export const startStudySession = onCall(options, async (request) => {
     if (!profile.exists) throw new HttpsError('failed-precondition', '계정 프로필을 먼저 생성해 주세요.');
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
-    transaction.create(sessionRef, { uid, subjectId, status: 'active', startedAt: now, createdAt: now });
+    transaction.create(sessionRef, { uid, subjectId, status: 'active', startedAt: now, createdAt: now,
+      ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) });
     transaction.update(profileRef, { activeSessionId: sessionRef.id, updatedAt: now });
   });
   return { sessionId: sessionRef.id };
+});
+
+export const syncStudyCamera = onCall(options, async request => {
+  const uid = userId(request, true);
+  const { sessionId, controllerId, sequence, tracking } = request.data || {};
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean') throw new HttpsError('invalid-argument', '카메라 상태가 올바르지 않습니다.');
+  return db.runTransaction(async transaction => {
+    const ref = db.doc(`users/${uid}/sessions/${sessionId}`);
+    const [record, profile] = await transaction.getAll(ref, db.doc(`users/${uid}`));
+    const session = record.data();
+    if (!session || profile.data()?.activeSessionId !== sessionId || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
+    if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
+    if (sequence <= session.sequence) return { ignored: true };
+    const update = checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking);
+    transaction.update(ref, { ...update, sequence, updatedAt: Timestamp.now() });
+    return { ignored: false, cameraStatus: update.cameraStatus };
+  });
 });
 
 export const finishStudySession = onCall(options, async (request) => {
@@ -81,7 +102,8 @@ export const finishStudySession = onCall(options, async (request) => {
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     const startedMs = session.startedAt.toMillis();
     const endedMs = Math.min(now.toMillis(), startedMs + MAX_SESSION_MS);
-    const segments = splitStudyInterval(startedMs, endedMs);
+    const checkpoint = session.cameraMode ? checkpointCamera({ ...session, startedAtMs: startedMs }, now.toMillis(), false) : null;
+    const segments = checkpoint ? checkpoint.segments : splitStudyInterval(startedMs, endedMs);
     const creditedSeconds = segments.reduce((sum, segment) => sum + segment.seconds, 0);
     const buckets = new Map();
     const weeks = new Map();
@@ -104,7 +126,7 @@ export const finishStudySession = onCall(options, async (request) => {
         if (profile.schoolId) transaction.set(db.doc(`schoolLeaderboards/${profile.schoolId}/weeks/${week}/entries/${uid}`), ranking, { merge: true });
       }
     }
-    transaction.update(sessionRef, { status: 'finished', endedAt: Timestamp.fromMillis(endedMs), creditedSeconds, capped: now.toMillis() > endedMs, updatedAt: now });
+    transaction.update(sessionRef, { ...(checkpoint || {}), status: 'finished', endedAt: Timestamp.fromMillis(endedMs), creditedSeconds, capped: now.toMillis() > endedMs, updatedAt: now });
     transaction.update(profileRef, { activeSessionId: null, updatedAt: now });
     return { creditedSeconds, alreadyFinished: false };
   });

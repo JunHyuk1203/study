@@ -6,7 +6,7 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import { ensureProfile, finishStudySession, startStudySession, updateAccount } from '../functions/index.js';
+import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
 
 const projectId = 'demo-study';
@@ -136,6 +136,30 @@ test('concurrent starts permit exactly one active session', async () => {
   ]);
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.filter(result => result.status === 'rejected' && result.reason.code === 'already-exists').length, 1);
+});
+
+test('camera sessions enforce controller ownership, sequence and active-window credits', async () => {
+  const auth = { uid: 'camera-owner', token: { email_verified: true } };
+  const controllerId = '12345678-1234-1234-1234-123456789abc';
+  const db = getFirestore(undefined, 'study-data');
+  await ensureProfile.run({ auth, data: { displayName: '캠회원' } });
+  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId } });
+  const request = { auth, data: { sessionId, controllerId, tracking: true, sequence: 1 } };
+  await assert.rejects(() => syncStudyCamera.run({ ...request, auth: { uid: 'other', token: { email_verified: true } } }), error => error.code === 'failed-precondition');
+  await assert.rejects(() => syncStudyCamera.run({ ...request, data: { ...request.data, controllerId: 'another' } }), error => error.code === 'permission-denied');
+  await syncStudyCamera.run(request);
+  const ref = db.doc(`users/${auth.uid}/sessions/${sessionId}`);
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  await ref.update({ startedAt: Timestamp.fromMillis(now - 120000), activeSinceMs: now - 60000, leaseUntilMs: now - 30000 });
+  await syncStudyCamera.run({ auth, data: { sessionId, controllerId, tracking: false, sequence: 2 } });
+  assert.equal((await ref.get()).data().accumulatedSeconds, 30);
+  assert.equal((await syncStudyCamera.run(request)).ignored, true);
+  assert.equal((await ref.get()).data().activeSinceMs, null);
+  const finished = await finishStudySession.run({ auth, data: { sessionId, durationSeconds: 999999 } });
+  assert.equal(finished.creditedSeconds, 30);
+  assert.equal((await db.doc(`users/${auth.uid}/stats/summary`).get()).data().totalSeconds, 30);
+  assert.equal((await finishStudySession.run({ auth, data: { sessionId } })).creditedSeconds, 30);
+  await assert.rejects(() => syncStudyCamera.run({ auth, data: { ...request.data, sequence: 3 } }), error => error.code === 'failed-precondition');
 });
 
 test('email registration/login/logout and Google credentials use Auth without creating DB profiles', async () => {

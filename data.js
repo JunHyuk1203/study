@@ -1,5 +1,6 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-4';
+import { authReady, getAuthUser } from './auth.js?v=20261021-10';
 import { firebaseConfig } from './firebase-config.js';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-10';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;
@@ -33,6 +34,18 @@ let schoolUnsubscribe;
 let activeId;
 let schoolId;
 let busy = false;
+let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
+let cameraPauseAt = null;
+let previewSession = null;
+function updatePreviewTimer() {
+  if (!previewSession) return;
+  const active = cameraState().tracking && !document.hidden;
+  if (active && previewSession.activeSince == null) previewSession.activeSince = Date.now();
+  if (!active && previewSession.activeSince != null) {
+    previewSession.totalMs += Math.max(0, Date.now() - previewSession.activeSince);
+    previewSession.activeSince = null;
+  }
+}
 let state = emptyState();
 
 function emptyState() {
@@ -128,14 +141,46 @@ function paint() {
 
 function paintTimer() {
   const started = state.active?.startedAt?.toMillis?.();
-  const elapsed = started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
+  const session = state.active;
+  const camera = cameraState();
+  const isCamera = session?.cameraMode;
+  const expired = isCamera && (!session.activeSinceMs || Date.now() >= session.leaseUntilMs);
+  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || cameraSyncFailed);
+  const running = isCamera && !expired && !locallyPaused;
+  const windowEnd = Math.min(Date.now(), session?.leaseUntilMs || 0, locallyPaused ? cameraPauseAt ?? Date.now() : Infinity);
+  const elapsed = previewSession ? (previewSession.totalMs + (previewSession.activeSince != null ? Date.now() - previewSession.activeSince : 0)) / 1000 : isCamera ? (session.accumulatedSeconds || 0) + (session.activeSinceMs != null ? Math.max(0, (windowEnd - session.activeSinceMs) / 1000) : 0) : started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
   textAll('[data-active-timer]', clock(elapsed));
-  for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId) : !state.profile?.activeSessionId);
+  for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId || previewSession || camera.enabled) : !(state.profile?.activeSessionId || previewSession || camera.enabled));
+  if (busy && camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
+  for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
   for (const selector of document.querySelectorAll('[data-study-subject]')) {
-    selector.disabled = busy || Boolean(state.profile?.activeSessionId);
+    selector.disabled = busy || Boolean(state.profile?.activeSessionId || previewSession || camera.enabled);
     if (state.active?.subjectId) selector.value = state.active.subjectId;
   }
-  textAll('[data-timer-state]', state.profile?.activeSessionId ? '학습 중 · 종료 시 자동 저장' : '학습 시작 대기');
+  textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraSyncFailed ? '연결 확인 중 · 일시정지' : '스터디캠 일시정지 · 얼굴 인식 시 재개' : '학습 중 · 종료 시 자동 저장' : '학습 시작 대기');
+  if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : '얼굴 인식 대기 · 일시정지');
+  for (const panel of document.querySelectorAll('.timer-panel')) panel.classList.toggle('camera-paused', Boolean(previewSession ? !camera.tracking : isCamera && !running));
+}
+
+async function syncCamera(force = false) {
+  const session = state.active;
+  if (!session?.cameraMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
+  const sessionId = state.profile?.activeSessionId;
+  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false; }
+  const tracking = cameraState().tracking && !document.hidden;
+  if (!tracking && cameraLastTracking === false && !cameraSyncFailed) return;
+  if (!force && tracking === cameraLastTracking && Date.now() - cameraLastSync < 10000) return;
+  cameraSyncBusy = true;
+  const sequence = (session.sequence || 0) + 1;
+  try {
+    await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
+    cameraLastTracking = tracking;
+    cameraSyncFailed = false;
+  } catch { cameraSyncFailed = true; cameraPauseAt ??= Date.now(); }
+  finally {
+    cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
+    if (tracking !== (cameraState().tracking && !document.hidden)) void syncCamera(true);
+  }
 }
 
 function watch(reference, callback, token) {
@@ -202,26 +247,47 @@ async function connectUser() {
 
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-study-action]');
+  if (button?.dataset.studyAction === 'stop' && busy && cameraState().status === 'opening' && !state.profile?.activeSessionId) {
+    stopCamera(); previewSession = null; busy = false; await closeCameraFocus(); paintTimer(); return;
+  }
   if (!button || button.disabled || busy) return;
-  if (!getAuthUser()) { window.location.assign('login.html'); return; }
-  if (!getAuthUser().emailVerified) { notice('계정 화면에서 이메일 인증을 완료해 주세요.', true); return; }
-  if (!call) { notice('저장 서비스를 연결 중입니다. 잠시 후 다시 시도해 주세요.', true); return; }
+  const starting = button.dataset.studyAction === 'start';
+  const cameraStart = starting && button.hasAttribute('data-camera-toggle');
+  if (!starting && (previewSession || !state.profile?.activeSessionId)) {
+    stopCamera(); previewSession = null; await closeCameraFocus(); paintTimer(); return;
+  }
+  if (!cameraStart && !getAuthUser()) { window.location.assign('login.html'); return; }
+  if (!cameraStart && !getAuthUser().emailVerified) { notice('계정 화면에서 이메일 인증을 완료해 주세요.', true); return; }
+  if (!cameraStart && !call) { notice('저장 서비스를 연결 중입니다. 잠시 후 다시 시도해 주세요.', true); return; }
   busy = true;
   paintTimer();
   try {
+    if (cameraStart) {
+      openCameraFocus(button);
+      if (!await startCamera()) return;
+      if (!getAuthUser()?.emailVerified || !call) {
+        previewSession = { totalMs: 0, activeSince: null };
+        updatePreviewTimer();
+        notice('체험 모드입니다. 로그인과 이메일 인증 후 시작한 학습부터 계정에 저장됩니다.');
+        return;
+      }
+    }
     await profileReady;
     // Email verification can change before the cached ID token is refreshed.
     await authServices.auth.currentUser.getIdToken(true);
-    if (button.dataset.studyAction === 'start') {
+    if (starting) {
       const subjectId = document.querySelector('[data-study-subject]')?.value || 'other';
-      await call('startStudySession')({ subjectId });
-      notice('학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
+      const cameraMode = cameraState().enabled;
+      await call('startStudySession')({ subjectId, cameraMode, ...(cameraMode ? { controllerId: cameraController } : {}) });
+      notice(cameraMode ? '스터디캠 학습을 시작했습니다. 얼굴이 인식될 때만 시간이 적립됩니다.' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
     } else {
+      stopCamera();
       const result = await call('finishStudySession')({ sessionId: state.profile?.activeSessionId });
       notice(`${Math.floor(result.data.creditedSeconds / 60)}분 ${result.data.creditedSeconds % 60}초를 저장했습니다.`);
+      await closeCameraFocus();
     }
   } catch (error) { notice(errorText(error), true); }
-  finally { busy = false; paintTimer(); }
+  finally { busy = false; paintTimer(); void syncCamera(); }
 });
 
 document.addEventListener('submit', async event => {
@@ -246,9 +312,11 @@ document.addEventListener('submit', async event => {
 window.addEventListener('study:auth-changed', () => { void connectUser(); });
 window.addEventListener('study:navigated', paint);
 window.addEventListener('study:page-prepared', paint);
+window.addEventListener('study:camera-changed', () => { updatePreviewTimer(); cameraPauseAt = cameraState().tracking ? null : cameraPauseAt ?? Date.now(); paintTimer(); void syncCamera(true); });
 window.setInterval(() => {
   if (connectedDay && connectedDay !== dateKey()) void connectUser();
   paintTimer();
+  void syncCamera();
 }, 1000);
 
 try {
