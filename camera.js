@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-13';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-14';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
@@ -92,7 +92,7 @@ function paint() {
   root.dataset.state = status;
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
-  paintAvatar(mount, avatarPose, tracking);
+  paintAvatar(mount, avatarPose, tracking, status);
   root.querySelector('[data-camera-status]').textContent = message;
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
@@ -204,7 +204,7 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · 얼굴 인식 준비 중…');
-    worker = new Worker(new URL('./camera-worker.js?v=20261021-13', import.meta.url));
+    worker = new Worker(new URL('./camera-worker.js?v=20261021-14', import.meta.url));
     worker.onerror = error => { error.preventDefault(); void recoverRecognition(token, error.message); };
     worker.onmessage = ({ data }) => {
       if (token !== revision || fallbackAttempted) return;

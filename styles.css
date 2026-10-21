@@ -109,5 +109,26 @@
 .avatar-person{transform:translate(var(--avatar-x,0px),var(--avatar-y,0px));transition:transform .22s ease-out}
 .avatar-head{transform-origin:160px 136px;transform:rotate(var(--avatar-roll,0deg));transition:transform .22s ease-out}
 .cam-avatar:not(.is-tracked) .avatar-eyes{opacity:.35}
+.cam-video-mount .cam-avatar,.cam-recognition{position:absolute;inset:0;display:block;width:100%;height:100%;transition:opacity .22s,transform .3s}
+.cam-video-mount .cam-avatar{opacity:0;transform:scale(.94)}
+.cam-video-mount[data-avatar-phase="avatar"] .cam-avatar{opacity:1;transform:scale(1)}
+.cam-recognition{color:var(--green);opacity:1;transform:scale(1)}
+[data-avatar-phase="avatar"] .cam-recognition,[data-avatar-phase="idle"] .cam-recognition{opacity:0;transform:scale(.9);pointer-events:none}
+.recognition-ring-track{fill:none;stroke:currentColor;stroke-width:3;opacity:.12}
+.recognition-spinner{fill:none;stroke:currentColor;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:125 45 38 307;transform-origin:160px 160px;animation:recognition-orbit 1.5s linear infinite}
+.recognition-face{transform-origin:160px 160px;animation:recognition-look 2.8s ease-in-out infinite}
+.recognition-features{animation:recognition-glance 2.8s ease-in-out infinite}
+.recognition-check{fill:none;stroke:currentColor;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:85;stroke-dashoffset:85;opacity:0;transform-origin:160px 160px}
+[data-avatar-phase="success"] .recognition-face{animation:recognition-face-out .22s ease-in forwards}
+[data-avatar-phase="success"] .recognition-spinner{animation:recognition-lock .45s cubic-bezier(.16,1,.3,1) forwards}
+[data-avatar-phase="success"] .recognition-check{animation:recognition-check-in .48s .12s cubic-bezier(.16,1,.3,1) forwards}
+[data-avatar-phase="error"] .recognition-spinner,[data-avatar-phase="error"] .recognition-face,[data-avatar-phase="error"] .recognition-features{animation:none;opacity:.4}
+@keyframes recognition-orbit{to{transform:rotate(360deg)}}
+@keyframes recognition-look{0%,100%{transform:translate(0,0) rotate(0)}20%{transform:translate(-8px,-3px) rotate(-7deg)}45%{transform:translate(7px,-5px) rotate(6deg)}70%{transform:translate(4px,6px) rotate(3deg)}}
+@keyframes recognition-glance{0%,100%{transform:translate(0,0)}20%{transform:translate(-5px,-2px)}45%{transform:translate(5px,-3px)}70%{transform:translate(2px,4px)}}
+@keyframes recognition-face-out{to{opacity:0;transform:scale(.65) rotate(10deg)}}
+@keyframes recognition-lock{0%{transform:rotate(0);stroke-dasharray:125 45 38 307}70%{transform:rotate(280deg);stroke-dasharray:515 0}100%{transform:rotate(360deg);stroke-dasharray:515 0;opacity:.3}}
+@keyframes recognition-check-in{0%{opacity:0;stroke-dashoffset:85;transform:scale(.7)}60%{opacity:1;stroke-dashoffset:0;transform:scale(1.12)}100%{opacity:1;stroke-dashoffset:0;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.cam-recognition,.cam-video-mount .cam-avatar{transition:none}[data-avatar-phase] .recognition-spinner,[data-avatar-phase] .recognition-face,[data-avatar-phase] .recognition-features{animation:none}[data-avatar-phase="success"] .recognition-face{opacity:0}[data-avatar-phase="success"] .recognition-check{animation:none;opacity:1;stroke-dashoffset:0}}
 @media(prefers-reduced-motion:reduce){.avatar-person,.avatar-head{transition:none}}
 @media(prefers-reduced-motion:reduce){.cam-viewport,.cam-corner,.cam-face{transition:none}.cam-scan{animation:none}}
