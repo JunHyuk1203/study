@@ -118,11 +118,13 @@
 .recognition-spinner{fill:none;stroke:currentColor;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:125 45 38 307;transform-origin:160px 160px;animation:recognition-orbit 1.5s linear infinite}
 .recognition-face{transform-origin:160px 160px}
 .recognition-piece{transform-origin:160px 160px}
+[data-avatar-phase="searching"] .recognition-bracket{animation:recognition-frame-look 3.6s linear infinite}
 [data-avatar-phase="searching"] .recognition-features{transform-origin:160px 160px;animation:recognition-head-sweep 3.6s linear infinite}
 [data-avatar-phase="searching"] .recognition-eye{animation:recognition-eye-sweep 3.6s linear infinite;transform-origin:160px 148px}
 [data-avatar-phase="searching"] .recognition-nose{animation:recognition-nose-turn 3.6s linear infinite}
 [data-avatar-phase="searching"] .recognition-mouth{animation:recognition-mouth-turn 3.6s linear infinite}
-[data-avatar-phase="success"] .recognition-face{animation:recognition-merge-pop .78s linear forwards}
+[data-avatar-phase="success"] .recognition-face{animation:recognition-merge-pop 1.2s linear forwards}
+[data-avatar-phase="check"] .recognition-face{transform:scale(1.25)}
 [data-avatar-phase="success"] .recognition-spinner{animation:recognition-lock .45s cubic-bezier(.16,1,.3,1) forwards}
 [data-avatar-phase="check"] .recognition-spinner{animation:none;stroke-dasharray:515 0;opacity:.3}
 [data-avatar-phase="error"] .recognition-spinner,[data-avatar-phase="error"] .recognition-face,[data-avatar-phase="error"] .recognition-features{animation:none;opacity:.4}
@@ -131,7 +133,8 @@
 @keyframes recognition-eye-sweep{0%,6%{transform:translate(0,0)}10%,16%{transform:translate(-10px,0)}19%,22%{transform:translate(4px,-2px)}25%,34%{transform:translate(-11px,0)}40%,47%{transform:translate(12px,0)}50%,54%{transform:translate(-4px,-2px)}57%,65%{transform:translate(12px,0)}70%,76%{transform:translate(0,5px)}79%{transform:translate(0,0) scaleY(1)}80%,81%{transform:translate(0,0) scaleY(.08)}82%,100%{transform:translate(0,0) scaleY(1)}}
 @keyframes recognition-nose-turn{0%,6%{transform:translate(0,0)}11%,34%{transform:translate(-6px,0) scaleX(.8)}41%,65%{transform:translate(7px,0) scaleX(.8)}72%{transform:translate(0,4px)}77%,100%{transform:translate(0,0)}}
 @keyframes recognition-mouth-turn{0%,8%{transform:translate(0,0) scaleX(1)}14%,34%{transform:translate(-4px,1px) scaleX(.92)}44%,65%{transform:translate(4px,1px) scaleX(.92)}73%{transform:translate(0,2px) scaleX(1.08)}78%,100%{transform:translate(0,0) scaleX(1)}}
-@keyframes recognition-merge-pop{0%{transform:scale(1)}18%{transform:scale(.95,1.05)}34%{transform:scale(1)}64%,72%{transform:scale(1.04,.97)}84%{transform:scale(.98,1.03)}93%{transform:scale(1.015,.99)}100%{transform:scale(1)}}
+@keyframes recognition-frame-look{0%,6%{transform:translate(0,0)}10%,34%{transform:translate(-15px,-2px) rotate(-3deg)}40%,65%{transform:translate(16px,-2px) rotate(3deg)}72%{transform:translate(0,5px)}82%,100%{transform:translate(0,0)}}
+@keyframes recognition-merge-pop{0%,40%{transform:scale(1)}64%,72%{transform:scale(1.45,1.23) rotate(-7deg)}84%{transform:scale(.95,1.4) rotate(5deg)}93%{transform:scale(1.36,1.16) rotate(-2deg)}100%{transform:scale(1.25)}}
 [data-avatar-phase="searching"] .cam-recognition{animation:recognition-appear .72s linear both}
 .camera-focus [data-avatar-phase="searching"] .cam-recognition{animation:none}
 .camera-focus.is-morphing .cam-recognition{animation:none}

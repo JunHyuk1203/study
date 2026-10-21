@@ -3,11 +3,11 @@ const presentations = new WeakMap();
 const checkVertex = [152, 179];
 const checkLeft = Math.hypot(19, 19), checkRight = Math.hypot(37, 40);
 const checkTurn = checkLeft / (checkLeft + checkRight);
-export const MERGE_DURATION_MS = 840;
+export const MERGE_DURATION_MS = 1200;
 
 export function checkReach(progress) {
   const start = 18 / (checkLeft + checkRight);
-  const stops = [[.34, start], [.64, 1.18], [.72, 1.18], [.84, .95], [.93, 1.035], [1, 1]];
+  const stops = [[.40, start], [.64, 1.5], [.72, 1.5], [.84, .78], [.93, 1.12], [1, 1]];
   if (progress <= stops[0][0]) return start;
   for (let index = 1; index < stops.length; index++) {
     const [end, value] = stops[index], [begin, previous] = stops[index - 1];
@@ -20,7 +20,7 @@ export function checkReach(progress) {
 }
 
 export function checkSegment(index, count = 8, reach = 1) {
-  const visible = clamp(reach, 0, 1.2);
+  const visible = clamp(reach, 0, 1.6);
   const start = index / count * visible, end = (index + 1) / count * visible;
   const positions = Array.from({ length: 17 }, (_, step) => start + (end - start) * step / 16);
   if (start < checkTurn && end > checkTurn) positions.push(checkTurn);
@@ -65,14 +65,17 @@ function mergeFace(parts, completed) {
   let frameId, deadline, done = false, started;
   const draw = progress => {
     const gathering = progress < .34;
-    const phase = Math.min(1, progress / .34);
-    const eased = 1 + 2.70158 * (phase - 1) ** 3 + 1.70158 * (phase - 1) ** 2;
     for (const { piece, source, line, slot } of parts) {
       piece.style.transform = 'none';
-      // Gather into ONE short straight stroke, then extend its tip down to the
-      // elbow and up the right arm. The check is drawn in order, not assembled.
+      // Wind every original stroke outward, then sweep them into one visible
+      // upper-left line. Staggered curved trajectories make the gathering legible.
+      const windup = Math.min(1, progress / .085);
+      const phase = clamp((progress - .085 - slot * .004) / (.255 - slot * .004), 0, 1);
+      const eased = phase ** 2 * (3 - 2 * phase);
+      const launched = source.map(([x, y]) => [160 + (x - 160) * (1 + .22 * windup), 160 + (y - 160) * (1 + .22 * windup)]);
+      const gathered = line.map(([x, y]) => [x + Math.sin(Math.PI * phase) * (slot - 3.5) * 5, y - Math.sin(Math.PI * phase) * 26]);
       const traced = gathering ? null : checkSegment(slot, 8, checkReach(progress));
-      piece.setAttribute('d', gathering ? mergePath(source, line, eased) : mergePath(traced, traced, 1));
+      piece.setAttribute('d', gathering ? mergePath(launched, gathered, eased) : mergePath(traced, traced, 1));
       piece.setAttribute('stroke-width', String(4 + progress * 1.5));
     }
   };
