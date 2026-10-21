@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-18';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-19';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
@@ -40,7 +40,16 @@ export function openCameraFocus(origin) {
     document.body.append(frame); morphFrame = frame;
     const geometry = rect => ({ top: `${rect.top}px`, left: `${rect.left}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     panel.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 450, fill: 'both', easing: 'ease-out' });
-    if (face) face.animate([{ opacity: 1, transform: 'translate(-50%,-50%) scale(1)' }, { opacity: 0, transform: 'translate(-50%,-50%) scale(1.4)' }], { duration: 230, fill: 'forwards' });
+    if (face) {
+      const destination = Math.min(target.width, target.height) * 120 / 320;
+      face.style.strokeWidth = '4';
+      face.animate([
+        { width: '48px', height: '48px', strokeWidth: '5.75', transform: 'translate(-50%,-50%) scale(1)' },
+        { width: `${destination}px`, height: `${destination}px`, transform: 'translate(-50%,-50%) scale(1.1,.92)', offset: .7 },
+        { width: `${destination}px`, height: `${destination}px`, transform: 'translate(-50%,-50%) scale(.96,1.05)', offset: .86 },
+        { width: `${destination}px`, height: `${destination}px`, transform: 'translate(-50%,-50%) scale(1)' },
+      ], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.2,.7,.2,1)' });
+    }
     for (const corner of frame.querySelectorAll('.cam-corner')) corner.animate([{ width: '19px', height: '19px' }, { width: '40px', height: '40px' }], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.22,.68,.1,1)' });
     frame.animate([geometry(focusOrigin), geometry(target)], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.22,.68,.1,1)' }).finished.then(() => {
       if (panel.dataset.closing) { frame.remove(); return; }
@@ -204,7 +213,7 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · 얼굴 인식 준비 중…');
-    worker = new Worker(new URL('./camera-worker.js?v=20261021-18', import.meta.url));
+    worker = new Worker(new URL('./camera-worker.js?v=20261021-19', import.meta.url));
     worker.onerror = error => { error.preventDefault(); void recoverRecognition(token, error.message); };
     worker.onmessage = ({ data }) => {
       if (token !== revision || fallbackAttempted) return;

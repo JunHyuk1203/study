@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSegment, facePose, mergePath, paintAvatar } from '../camera-avatar.js';
+import { checkReach, checkSegment, facePose, mergePath, MERGE_DURATION_MS, paintAvatar } from '../camera-avatar.js';
 
 test('avatar follows mirrored head position and tilt within safe display bounds', () => {
   assert.deepEqual(facePose({ 1: { x: .5, y: .5 }, 33: { x: .3, y: .4 }, 263: { x: .7, y: .4 } }), { x: 0, y: 0, roll: -0 });
@@ -44,7 +44,7 @@ test('recognition check completes despite frequent tracking updates', context =>
   assert.equal(mount.dataset.avatarPhase, 'searching');
   paintAvatar(mount, pose, true, 'tracking');
   assert.equal(mount.dataset.avatarPhase, 'success');
-  context.mock.timers.tick(560);
+  context.mock.timers.tick(MERGE_DURATION_MS);
   assert.equal(mount.dataset.avatarPhase, 'check');
   paintAvatar(mount, pose, true, 'tracking');
   context.mock.timers.tick(699);
@@ -63,7 +63,7 @@ test('losing a face cancels the check and reacquisition plays it again', context
   assert.equal(mount.dataset.avatarPhase, 'searching');
   paintAvatar(mount, pose, true, 'tracking');
   assert.equal(mount.dataset.avatarPhase, 'success');
-  context.mock.timers.tick(560);
+  context.mock.timers.tick(MERGE_DURATION_MS);
   assert.equal(mount.dataset.avatarPhase, 'check');
   context.mock.timers.tick(700);
   assert.equal(mount.dataset.avatarPhase, 'avatar');
@@ -82,8 +82,19 @@ test('a single missed frame during the grace period does not cancel the check', 
   context.mock.timers.tick(200);
   paintAvatar(mount, null, true, 'scanning');
   assert.equal(mount.dataset.avatarPhase, 'success');
-  context.mock.timers.tick(360);
+  context.mock.timers.tick(MERGE_DURATION_MS - 200);
   assert.equal(mount.dataset.avatarPhase, 'check');
   paintAvatar(mount, null, true, 'scanning');
   assert.equal(mount.dataset.avatarPhase, 'check');
+});
+
+test('check tip overshoots, holds, recoils and settles at the exact endpoint', () => {
+  assert.ok(checkReach(.64) > 1);
+  assert.equal(checkReach(.64), checkReach(.7));
+  assert.ok(checkReach(.84) < 1);
+  assert.ok(checkReach(.93) > 1);
+  assert.equal(checkReach(1), 1);
+  const extended = checkSegment(7, 8, checkReach(.64)).at(-1);
+  assert.ok(extended[0] > 189 && extended[1] < 139);
+  assert.deepEqual(checkSegment(7, 8, checkReach(1)).at(-1), [189, 139]);
 });
