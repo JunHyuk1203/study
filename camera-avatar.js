@@ -7,7 +7,7 @@ export const MERGE_DURATION_MS = 1320;
 
 export function checkReach(progress) {
   const start = 18 / (checkLeft + checkRight);
-  const stops = [[.40, start], [.64, 1.5], [.72, 1.5], [.84, .78], [.93, 1.12], [1, 1]];
+  const stops = [[.40, start], [.64, 1.12], [.72, 1.12], [.84, 1.03], [.93, 1], [1, 1]];
   if (progress <= stops[0][0]) return start;
   for (let index = 1; index < stops.length; index++) {
     const [end, value] = stops[index], [begin, previous] = stops[index - 1];

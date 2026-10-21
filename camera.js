@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-23';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-24';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
@@ -213,7 +213,7 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · 얼굴 인식 준비 중…');
-    worker = new Worker(new URL('./camera-worker.js?v=20261021-23', import.meta.url));
+    worker = new Worker(new URL('./camera-worker.js?v=20261021-24', import.meta.url));
     worker.onerror = error => { error.preventDefault(); void recoverRecognition(token, error.message); };
     worker.onmessage = ({ data }) => {
       if (token !== revision || fallbackAttempted) return;

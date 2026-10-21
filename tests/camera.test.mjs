@@ -105,11 +105,12 @@ test('face breaks into small leftward fragments before returning as a continuous
   assert.deepEqual(mergeStroke(source, line, 0, 1), checkSegment(0));
 });
 
-test('check tip overshoots, holds, recoils and settles at the exact endpoint', () => {
+test('only the check tip extends slightly and returns once without a second bounce', () => {
   assert.ok(checkReach(.64) > 1);
   assert.equal(checkReach(.64), checkReach(.7));
-  assert.ok(checkReach(.84) < 1);
-  assert.ok(checkReach(.93) > 1);
+  assert.ok(checkReach(.64) <= 1.12);
+  assert.ok(checkReach(.84) > 1 && checkReach(.84) < checkReach(.72));
+  assert.equal(checkReach(.93), 1);
   assert.equal(checkReach(1), 1);
   const extended = checkSegment(7, 8, checkReach(.64)).at(-1);
   assert.ok(extended[0] > 189 && extended[1] < 139);
