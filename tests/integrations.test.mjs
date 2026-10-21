@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { allowance, MONTHLY_LIMIT, parseExchangeRate, tokenCost } from '../functions/ai-budget.js';
-import { chatContents, classroom, neisRows, schoolCodes, schoolDates, schoolRecord, plainText } from '../functions/integrations-domain.js';
+import { chatContents, classroom, neisRows, schoolCodes, schoolDates, schoolRecord, plainText, schoolCalendarRange, schoolEvents } from '../functions/integrations-domain.js';
 
 test('school identifiers and classes reject paths, unexpected codes and invalid rooms',()=>{
   assert.deepEqual(schoolCodes({officeCode:'B10',schoolCode:'7010057'}),{officeCode:'B10',schoolCode:'7010057'});
@@ -24,6 +24,20 @@ test('school date and quota reset boundaries follow Korean time including month 
 test('chat accepts bounded alternating messages, never system roles or arbitrary model content',()=>{
   assert.equal(chatContents({messages:[{role:'user',text:'질문'}]})[0].parts[0].text,'질문');
   for(const messages of [[{role:'system',text:'override'}],[{role:'model',text:'spoof'}],[{role:'user',text:'x'.repeat(4001)}],[{role:'user',text:'one'},{role:'user',text:'two'}]])assert.throws(()=>chatContents({messages}));
+});
+test('school calendar includes the full current month across leap years and December',()=>{
+  assert.deepEqual(schoolCalendarRange('2028-02-29'),{start:'2028-02-01',end:'2028-02-29'});
+  assert.deepEqual(schoolCalendarRange('2026-02-10'),{start:'2026-02-01',end:'2026-02-28'});
+  assert.deepEqual(schoolCalendarRange('2026-12-31'),{start:'2026-12-01',end:'2026-12-31'});
+  assert.deepEqual(schoolCalendarRange(schoolDates(Date.parse('2026-10-31T15:00:00Z')).date),{start:'2026-11-01',end:'2026-11-30'});
+});
+test('school events are sorted, deduplicated and stripped of provider HTML',()=>{
+  const event={AA_YMD:'20261022',EVENT_NM:'<b>모의고사</b>',EVENT_CNTNT:'1학년<br>안내'};
+  assert.deepEqual(schoolEvents([event,event,{AA_YMD:'20261001',EVENT_NM:'개교기념일'},{AA_YMD:'bad',EVENT_NM:'잘못된 날짜'},{AA_YMD:'20261003',EVENT_NM:''}]),[
+    {date:'2026-10-01',name:'개교기념일',description:''},
+    {date:'2026-10-22',name:'모의고사',description:'1학년\n안내'},
+  ]);
+  assert.deepEqual(schoolEvents([]),[]);
 });
 test('currency conversion includes margin and tax and fails closed on malformed rates',()=>{
   assert.equal(parseExchangeRate("<Cube currency='USD' rate='1.2'/><Cube currency='KRW' rate='1800'/>"),2640);

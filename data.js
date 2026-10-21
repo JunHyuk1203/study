@@ -1,6 +1,6 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-25';
+import { authReady, getAuthUser } from './auth.js?v=20261021-26';
 import { firebaseConfig } from './firebase-config.js';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-25';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261021-26';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;
@@ -164,6 +164,12 @@ function paintTimer() {
   const windowEnd = Math.min(Date.now(), session?.leaseUntilMs || 0, locallyPaused ? cameraPauseAt ?? Date.now() : Infinity);
   const elapsed = previewSession ? (previewSession.totalMs + (previewSession.activeSince != null ? Date.now() - previewSession.activeSince : 0)) / 1000 : isCamera ? (session.accumulatedSeconds || 0) + (session.activeSinceMs != null ? Math.max(0, (windowEnd - session.activeSinceMs) / 1000) : 0) : started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
   textAll('[data-active-timer]', clock(elapsed));
+  for (const button of document.querySelectorAll('[data-camera-pause]')) {
+    button.disabled = busy || !camera.enabled || ['opening', 'error', 'off'].includes(camera.status);
+    button.setAttribute('aria-pressed', String(camera.manuallyPaused));
+    button.setAttribute('aria-label', camera.manuallyPaused ? '학습 재개' : '학습 수동 일시정지');
+    button.title = camera.manuallyPaused ? '학습 재개' : '학습 수동 일시정지';
+  }
   for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId || previewSession || camera.enabled) : !(state.profile?.activeSessionId || previewSession || camera.enabled));
   if (busy && camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
   for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
@@ -173,6 +179,7 @@ function paintTimer() {
   }
   textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraSyncFailed ? '연결 확인 중 · 일시정지' : '스터디캠 일시정지 · 얼굴 인식 시 재개' : '학습 중 · 종료 시 자동 저장' : '학습 시작 대기');
   if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : '얼굴 인식 대기 · 일시정지');
+  if (camera.manuallyPaused) textAll('[data-timer-state]', '수동 일시정지 · 재개 버튼을 눌러 주세요');
   for (const panel of document.querySelectorAll('.timer-panel')) panel.classList.toggle('camera-paused', Boolean(previewSession ? !camera.tracking : isCamera && !running));
 }
 
@@ -266,6 +273,11 @@ async function connectUser() {
 }
 
 document.addEventListener('click', async event => {
+  const pauseButton = event.target.closest('[data-camera-pause]');
+  if (pauseButton) {
+    if (!pauseButton.disabled && !busy) toggleCameraPause();
+    return;
+  }
   const button = event.target.closest('[data-study-action]');
   if (button?.dataset.studyAction === 'stop' && busy && cameraState().status === 'opening' && !state.profile?.activeSessionId) {
     stopCamera(); previewSession = null; busy = false; await closeCameraFocus(); paintTimer(); return;

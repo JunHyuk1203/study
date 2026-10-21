@@ -2,7 +2,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { schoolCodes, classroom, neisRows, plainText, schoolRecord, chatContents, schoolDates } from './integrations-domain.js';
+import { schoolCodes, classroom, neisRows, plainText, schoolRecord, chatContents, schoolDates, schoolCalendarRange, schoolEvents } from './integrations-domain.js';
 import { generateForUser, usageFor } from './ai-service.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
@@ -79,14 +79,18 @@ export const getSchoolOverview = onCall({...options, secrets:[neisKey]}, async r
   const codes = {ATPT_OFCDC_SC_CODE:school.officeCode, SD_SCHUL_CODE:school.schoolCode};
   const endpoint = {'초등학교':'elsTimetable', '중학교':'misTimetable', '고등학교':'hisTimetable', '특수학교':'spsTimetable'}[school.kind];
   const compact = date => date.replaceAll('-', '');
+  const calendarRange = schoolCalendarRange(dates.date);
   const results = await Promise.allSettled([
     neis('mealServiceDietInfo', {...codes, MLSV_YMD:compact(dates.date)}),
     endpoint ? neis(endpoint, {...codes, GRADE:school.grade, CLASS_NM:school.className, TI_FROM_YMD:compact(dates.days[0]), TI_TO_YMD:compact(dates.days[4])}) : Promise.resolve([]),
+    neis('SchoolSchedule', {...codes, AA_FROM_YMD:compact(calendarRange.start), AA_TO_YMD:compact(calendarRange.end)}),
   ]);
   return {school, ...dates,
     meals:results[0].status === 'fulfilled' ? results[0].value.map(row => ({name:plainText(row.MMEAL_SC_NM), items:plainText(row.DDISH_NM).split('\n').filter(Boolean), calories:plainText(row.CAL_INFO)})) : [],
     timetable:results[1].status === 'fulfilled' ? results[1].value.map(row => ({date:row.ALL_TI_YMD, period:Number(row.PERIO), subject:plainText(row.ITRT_CNTNT)})).filter(row=>row.period>0 && row.period<=12) : [],
-    errors:{meals:results[0].status==='rejected', timetable:results[1].status==='rejected'},
+    calendarRange,
+    events:results[2].status === 'fulfilled' ? schoolEvents(results[2].value) : [],
+    errors:{meals:results[0].status==='rejected', timetable:results[1].status==='rejected', events:results[2].status==='rejected'},
   };
 });
 export const getAiUsage = onCall(options, request => usageFor(uid(request)));

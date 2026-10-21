@@ -37,3 +37,21 @@ export function schoolDates(now = Date.now()) {
   const days = Array.from({length:5}, (_,i) => new Date(monday.getTime() + i * 86400000).toISOString().slice(0,10));
   return {date, days};
 }
+export function schoolCalendarRange(date) {
+  const start = `${date.slice(0, 7)}-01`;
+  const end = new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  return {start, end};
+}
+export function schoolEvents(rows) {
+  const events = new Map();
+  for (const row of rows) {
+    const rawDate = String(row.AA_YMD || '');
+    const name = plainText(row.EVENT_NM);
+    if (!/^\d{8}$/.test(rawDate) || !name) continue;
+    const date = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
+    const description = plainText(row.EVENT_CNTNT);
+    const key = JSON.stringify([date, name, description]);
+    events.set(key, {date, name, description});
+  }
+  return [...events.values()].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name, 'ko'));
+}

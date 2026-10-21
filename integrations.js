@@ -1,5 +1,5 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-25';
-import { getStudyData } from './data.js?v=20261021-25';
+import { authReady, getAuthUser } from './auth.js?v=20261021-26';
+import { getStudyData } from './data.js?v=20261021-26';
 import { firebaseConfig } from './firebase-config.js';
 
 let callable;
@@ -40,13 +40,26 @@ function renderSchool() {
     for (const field of form.elements) field.disabled = !user || searching;
   }
   for (const button of document.querySelectorAll('[data-school-refresh]')) button.disabled = !user || schoolState.status==='loading';
-  for (const container of document.querySelectorAll('[data-school-meals], [data-school-timetable]')) {
+  for (const container of document.querySelectorAll('[data-school-meals], [data-school-timetable], [data-school-events]')) {
     if (hint) {container.textContent=hint; continue;}
     if (schoolState.status==='idle' || schoolState.status==='loading') {container.textContent='로딩 중…'; continue;}
     if (schoolState.status==='error') {container.textContent=schoolState.error; continue;}
     const data=schoolState.data;
     container.replaceChildren();
-    if (container.hasAttribute('data-school-meals')) {
+    if (container.hasAttribute('data-school-events')) {
+      if (data.errors?.events) {container.textContent='학사일정을 불러오지 못했습니다. 새로고침해 주세요.';continue;}
+      if (!Array.isArray(data.events)) {container.textContent='학사일정 서비스를 준비 중입니다.';continue;}
+      if (!data.events.length) {container.textContent='이번 달 등록된 학사일정이 없습니다.';continue;}
+      const list=document.createElement('ul');list.className='school-events';
+      for (const event of data.events) {
+        const item=document.createElement('li');
+        const date=document.createElement('time');date.dateTime=event.date;date.textContent=`${Number(event.date.slice(5,7))}/${Number(event.date.slice(8,10))}`;
+        const content=document.createElement('div'),title=document.createElement('strong');title.textContent=event.name;content.append(title);
+        if(event.description && event.description!==event.name) {const description=document.createElement('p');description.textContent=event.description;content.append(description);}
+        item.append(date,content);list.append(item);
+      }
+      container.append(list);
+    } else if (container.hasAttribute('data-school-meals')) {
       if (data.errors.meals) {container.textContent='급식을 불러오지 못했습니다. 새로고침해 주세요.';continue;}
       if (!data.meals.length) {container.textContent='오늘 등록된 급식 정보가 없습니다.';continue;}
       for (const meal of data.meals) {
@@ -78,6 +91,7 @@ function renderSchool() {
     }
   }
   if (schoolState.data) text('[data-school-date]', schoolState.data.date);
+  text('[data-school-calendar-month]', schoolState.data?.calendarRange?.start ? `${Number(schoolState.data.calendarRange.start.slice(5,7))}월` : '이번 달');
 }
 function renderBriefing() {
   const {ready,user}=getStudyData();

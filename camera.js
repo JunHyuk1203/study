@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-25';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-26';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
@@ -13,8 +13,15 @@ let enabled = false, tracking = false, status = 'off', message = '얼굴 인식�
 let ready = false, inFlight = false, lastResult = 0, presenceSince = null, absentSince = null, revision = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
+let manuallyPaused = false;
 export const cameraController = crypto.randomUUID();
-export function cameraState() { return { enabled, tracking, status }; }
+export function cameraState() { return { enabled, tracking, status, manuallyPaused }; }
+export function toggleCameraPause() {
+  if (!enabled || !ready) return;
+  manuallyPaused = !manuallyPaused;
+  presenceSince = absentSince = null;
+  setStatus('scanning', '얼굴을 다시 확인하는 중…');
+}
 export function openCameraFocus(origin) {
   if (focusPanel) return;
   const template = document.querySelector('#camera-focus-template');
@@ -108,13 +115,16 @@ function paint() {
   root.querySelector('[data-camera-resolution]').textContent = enabled && video.videoWidth ? 'AVATAR · 기기 내 인식' : '';
 }
 function setStatus(next, text, active = false) {
+  if (manuallyPaused && next !== 'error' && next !== 'off') {
+    next = 'paused'; text = '수동 일시정지 · 재개 버튼을 눌러 주세요'; active = false;
+  }
   const changed = tracking !== active || status !== next;
   status = next; message = text; tracking = active; paint();
   if (changed) window.dispatchEvent(new Event('study:camera-changed'));
 }
 export function stopCamera(text = '얼굴 인식으로 학습 시작', error = false) {
   revision++;
-  enabled = false; ready = false; inFlight = false;
+  enabled = false; ready = false; inFlight = false; manuallyPaused = false;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
   worker?.terminate(); worker = null;
   stream?.getTracks().forEach(track => track.stop()); stream = null;
@@ -137,7 +147,7 @@ function recognitionError(detail = '') {
 function acceptResult(data) {
   inFlight = false;
   const now = performance.now(); lastResult = now;
-  if (document.hidden || stream?.getVideoTracks()[0]?.muted) return;
+  if (manuallyPaused || document.hidden || stream?.getVideoTracks()[0]?.muted) return;
   // Worker sends only the three points needed by the avatar, never the full face mesh.
   const points = data.landmarks;
   avatarPose = points ? facePose({ 1: points[0], 33: points[1], 263: points[2] }) : null;
@@ -213,7 +223,7 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · 얼굴 인식 준비 중…');
-    worker = new Worker(new URL('./camera-worker.js?v=20261021-25', import.meta.url));
+    worker = new Worker(new URL('./camera-worker.js?v=20261021-26', import.meta.url));
     worker.onerror = error => { error.preventDefault(); void recoverRecognition(token, error.message); };
     worker.onmessage = ({ data }) => {
       if (token !== revision || fallbackAttempted) return;
@@ -252,7 +262,12 @@ window.addEventListener('study:navigated', () => {
 });
 document.addEventListener('keydown', event => {
   if (!focusPanel) return;
-  if (event.key === 'Tab') { event.preventDefault(); focusPanel.querySelector('.cam-end').focus(); }
+  if (event.key === 'Tab') {
+    const buttons = [...focusPanel.querySelectorAll('button:not(:disabled)')];
+    const index = buttons.indexOf(document.activeElement);
+    event.preventDefault();
+    buttons[(index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length]?.focus();
+  }
   if (event.key === 'Escape') focusPanel.querySelector('.cam-end').click();
 });
 window.addEventListener('pagehide', () => stopCamera());
