@@ -1,5 +1,44 @@
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 const presentations = new WeakMap();
+const checkVertex = [152, 179];
+const checkLeft = Math.hypot(19, 19), checkRight = Math.hypot(37, 40);
+const checkTurn = checkLeft / (checkLeft + checkRight);
+
+export function checkSegment(index, count = 8) {
+  const start = index / count, end = (index + 1) / count;
+  const positions = Array.from({ length: 17 }, (_, step) => start + (end - start) * step / 16);
+  if (start < checkTurn && end > checkTurn) positions.push(checkTurn);
+  return positions.sort((a, b) => a - b).map(position => {
+    const progress = position <= checkTurn ? position / checkTurn : (position - checkTurn) / (1 - checkTurn);
+    const from = position <= checkTurn ? [133, 160] : checkVertex;
+    const to = position <= checkTurn ? checkVertex : [189, 139];
+    return from.map((value, axis) => value + (to[axis] - value) * progress);
+  });
+}
+
+function captureFace(mount) {
+  const order = [0, 7, 1, 6, 2, 5, 3, 4];
+  return [...mount.querySelectorAll('.recognition-piece')].map((piece, index) => {
+    const target = checkSegment(order[index]);
+    const length = piece.getTotalLength();
+    const matrix = piece.ownerSVGElement.getScreenCTM()?.inverse().multiply(piece.getScreenCTM());
+    const source = target.map((_, step) => {
+      const point = piece.getPointAtLength(length * step / (target.length - 1));
+      const transformed = matrix ? point.matrixTransform(matrix) : point;
+      return [transformed.x, transformed.y];
+    });
+    return { piece, source, target };
+  });
+}
+function mergeFace(parts) {
+  const path = points => `path("${points.map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(3)} ${y.toFixed(3)}`).join('')}")`;
+  const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 560;
+  // Each original stroke becomes its own connected section of the check. No overlay check.
+  return parts.map(({ piece, source, target }) => piece.animate([
+    { d: path(source), transform: 'none', strokeWidth: 4 },
+    { d: path(target), transform: 'none', strokeWidth: 5.5 },
+  ], { duration, easing: 'cubic-bezier(.65,0,.12,1)', fill: 'forwards' }));
+}
 
 export function facePose(landmarks) {
   const nose = landmarks?.[1], left = landmarks?.[33], right = landmarks?.[263];
@@ -24,25 +63,27 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
       <circle class="recognition-ring-track" cx="160" cy="160" r="82"/>
       <circle class="recognition-spinner" cx="160" cy="160" r="82"/>
       <g class="recognition-face" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-        <path class="recognition-piece recognition-bracket bracket-tl" d="M127 115L118 115L114 116L111 122L111 127L111 131"/>
-        <path class="recognition-piece recognition-bracket bracket-tr" d="M193 115L202 115L206 116L209 122L209 127L209 131"/>
-        <path class="recognition-piece recognition-bracket bracket-bl" d="M111 189L111 198L112 202L118 205L123 205L127 205"/>
-        <path class="recognition-piece recognition-bracket bracket-br" d="M209 189L209 198L208 202L202 205L197 205L193 205"/>
-        <path class="recognition-piece recognition-eye eye-left" d="M140 143L140 145L140 147L140 149L140 151L140 153"/>
-        <path class="recognition-piece recognition-eye eye-right" d="M180 143L180 145L180 147L180 149L180 151L180 153"/>
-        <path class="recognition-piece recognition-nose" d="M161 142L161 151L161 160L161 167L157 167L153 167"/>
-        <path class="recognition-piece recognition-mouth" d="M139 179L147 185L155 188L164 188L173 185L181 179"/>
+        <path class="recognition-piece recognition-bracket bracket-tl" d="M127 115h-9q-7 0-7 7v9"/>
+        <path class="recognition-piece recognition-bracket bracket-tr" d="M193 115h9q7 0 7 7v9"/>
+        <path class="recognition-piece recognition-bracket bracket-bl" d="M111 189v9q0 7 7 7h9"/>
+        <path class="recognition-piece recognition-bracket bracket-br" d="M209 189v9q0 7-7 7h-9"/>
+        <path class="recognition-piece recognition-eye eye-left" d="M140 143v10"/>
+        <path class="recognition-piece recognition-eye eye-right" d="M180 143v10"/>
+        <path class="recognition-piece recognition-nose" d="M161 142v21q0 4-4 4h-4"/>
+        <path class="recognition-piece recognition-mouth" d="M139 179Q160 197 181 179"/>
       </g>
-      <path class="recognition-check" d="m133 160 19 19 37-40"/>
     </svg>`;
   }
   const desired = status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   let presentation = presentations.get(mount);
   if (!presentation || presentation.desired !== desired) {
+    const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
-    presentation = { desired, timer: null };
+    for (const animation of presentation?.animations || []) animation.cancel();
+    presentation = { desired, timer: null, animations: [] };
     presentations.set(mount, presentation);
     mount.dataset.avatarPhase = desired === 'recognized' ? 'success' : desired;
+    if (parts.length) presentation.animations = mergeFace(parts);
     if (desired === 'recognized') presentation.timer = setTimeout(() => {
       if (presentations.get(mount) !== presentation) return;
       mount.dataset.avatarPhase = 'avatar';

@@ -1,6 +1,6 @@
-import { authReady, getAuthUser } from './auth.js?v=20261021-15';
+import { authReady, getAuthUser } from './auth.js?v=20261021-16';
 import { firebaseConfig } from './firebase-config.js';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-15';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus } from './camera.js?v=20261021-16';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;

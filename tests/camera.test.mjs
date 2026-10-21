@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { facePose, paintAvatar } from '../camera-avatar.js';
+import { checkSegment, facePose, paintAvatar } from '../camera-avatar.js';
 
 test('avatar follows mirrored head position and tilt within safe display bounds', () => {
   assert.deepEqual(facePose({ 1: { x: .5, y: .5 }, 33: { x: .3, y: .4 }, 263: { x: .7, y: .4 } }), { x: 0, y: 0, roll: -0 });
@@ -17,8 +17,16 @@ test('missing or non-finite face points produce a neutral avatar', () => {
 function avatarMount() {
   const element = () => ({ classList: { toggle() {} }, style: { setProperty() {} }, setAttribute() {} });
   const avatar = element(), recognition = element();
-  return { dataset: {}, querySelector: selector => selector === '.cam-avatar' ? avatar : recognition };
+  return { dataset: {}, querySelector: selector => selector === '.cam-avatar' ? avatar : recognition, querySelectorAll: () => [] };
 }
+
+test('all eight original strokes tile one connected check including its corner', () => {
+  const segments = Array.from({ length: 8 }, (_, index) => checkSegment(index));
+  assert.deepEqual(segments[0][0], [133, 160]);
+  assert.deepEqual(segments[7].at(-1), [189, 139]);
+  for (let index = 1; index < segments.length; index++) assert.deepEqual(segments[index - 1].at(-1), segments[index][0]);
+  assert.ok(segments.flat().some(([x, y]) => x === 152 && y === 179));
+});
 
 test('recognition check completes despite frequent tracking updates', context => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
