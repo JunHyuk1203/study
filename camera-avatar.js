@@ -132,10 +132,12 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
         <path class="recognition-piece recognition-bracket bracket-tr" d="M193 115h9q7 0 7 7v9"/>
         <path class="recognition-piece recognition-bracket bracket-bl" d="M111 189v9q0 7 7 7h9"/>
         <path class="recognition-piece recognition-bracket bracket-br" d="M209 189v9q0 7-7 7h-9"/>
+        <g class="recognition-features">
         <path class="recognition-piece recognition-eye eye-left" d="M140 143v10"/>
         <path class="recognition-piece recognition-eye eye-right" d="M180 143v10"/>
         <path class="recognition-piece recognition-nose" d="M161 142v21q0 4-4 4h-4"/>
         <path class="recognition-piece recognition-mouth" d="M139 179Q160 197 181 179"/>
+        </g>
       </g>
     </svg>`;
   }

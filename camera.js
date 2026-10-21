@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-19';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-20';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
