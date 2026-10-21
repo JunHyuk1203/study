@@ -99,4 +99,15 @@
 .camera-focus.is-morphing .cam-viewport{visibility:hidden}
 .camera-focus.is-morphing .cam-status,.camera-focus.is-morphing .cam-timer,.camera-focus.is-morphing .cam-caption,.camera-focus.is-morphing .auth-status{opacity:0}
 .camera-focus .cam-status,.camera-focus .cam-timer,.camera-focus .cam-caption,.camera-focus .auth-status{transition:opacity .3s}
+.cam-analysis-video{position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+.cam-video-mount:has(.cam-avatar){background:radial-gradient(ellipse at 50% 45%,#fafbf6 0%,#e8eddf 100%)}
+.cam-avatar{display:block;width:100%;height:100%;color:#76816f}
+.cam-avatar.is-tracked{color:var(--green)}
+.cam-live{color:var(--green);text-shadow:none}
+.avatar-shadow{fill:#54725a13}
+.avatar-ground{fill:none;stroke:#54725a35;stroke-width:2;stroke-linecap:round}
+.avatar-person{transform:translate(var(--avatar-x,0px),var(--avatar-y,0px));transition:transform .22s ease-out}
+.avatar-head{transform-origin:160px 136px;transform:rotate(var(--avatar-roll,0deg));transition:transform .22s ease-out}
+.cam-avatar:not(.is-tracked) .avatar-eyes{opacity:.35}
+@media(prefers-reduced-motion:reduce){.avatar-person,.avatar-head{transition:none}}
 @media(prefers-reduced-motion:reduce){.cam-viewport,.cam-corner,.cam-face{transition:none}.cam-scan{animation:none}}

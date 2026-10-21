@@ -17,7 +17,7 @@ self.onmessage = async ({ data }) => {
     } else if (data.type === 'frame') {
       try {
         const result = detector.detectForVideo(data.bitmap, data.time);
-        self.postMessage({ type: 'result', present: result.faceLandmarks.length === 1 });
+        self.postMessage({ type: 'result', present: result.faceLandmarks.length === 1, landmarks: result.faceLandmarks[0] ? [result.faceLandmarks[0][1], result.faceLandmarks[0][33], result.faceLandmarks[0][263]] : null });
       } finally { data.bitmap.close(); }
     }
   } catch (error) { self.postMessage({ type: 'error', message: String(error?.message || error), stage: data.type }); }
