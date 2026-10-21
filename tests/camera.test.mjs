@@ -28,6 +28,15 @@ test('all eight original strokes tile one connected check including its corner',
   assert.ok(segments.flat().some(([x, y]) => x === 152 && y === 179));
 });
 
+test('check stroke first goes down from upper left, then turns upward at the elbow', () => {
+  const early = Array.from({ length: 8 }, (_, index) => checkSegment(index, 8, .25)).flat();
+  for (const [x, y] of early) assert.ok(Math.abs(y - x - 27) < .000001);
+  const later = Array.from({ length: 8 }, (_, index) => checkSegment(index, 8, .65)).flat();
+  assert.ok(later.some(([x, y]) => x === 152 && y === 179));
+  assert.ok(later.at(-1)[0] > 152 && later.at(-1)[1] < 179);
+  assert.deepEqual(later[0], [133, 160]);
+});
+
 test('recognition check completes despite frequent tracking updates', context => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
   const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };

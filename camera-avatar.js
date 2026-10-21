@@ -4,8 +4,9 @@ const checkVertex = [152, 179];
 const checkLeft = Math.hypot(19, 19), checkRight = Math.hypot(37, 40);
 const checkTurn = checkLeft / (checkLeft + checkRight);
 
-export function checkSegment(index, count = 8) {
-  const start = index / count, end = (index + 1) / count;
+export function checkSegment(index, count = 8, reach = 1) {
+  const visible = clamp(reach, 0, 1);
+  const start = index / count * visible, end = (index + 1) / count * visible;
   const positions = Array.from({ length: 17 }, (_, step) => start + (end - start) * step / 16);
   if (start < checkTurn && end > checkTurn) positions.push(checkTurn);
   return positions.sort((a, b) => a - b).map(position => {
@@ -31,7 +32,11 @@ function captureFace(mount) {
         return matrix ? [matrix.a * point.x + matrix.c * point.y + matrix.e, matrix.b * point.x + matrix.d * point.y + matrix.f] : [point.x, point.y];
       });
     } catch { /* A hidden/detached SVG can lack a screen matrix; still show its assembled check. */ }
-    return { piece, source, target, original };
+    const line = source.map((_, step) => {
+      const offset = (order[index] + step / (source.length - 1)) / 8 * 18 / Math.SQRT2;
+      return [133 + offset, 160 + offset];
+    });
+    return { piece, source, line, slot: order[index], original };
   });
 }
 export function mergePath(source, target, progress) {
@@ -44,9 +49,15 @@ function mergeFace(parts, completed) {
   const duration = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 560;
   let frameId, deadline, done = false, started;
   const draw = progress => {
-    for (const { piece, source, target } of parts) {
+    const gathering = progress < .48;
+    const phase = gathering ? progress / .48 : (progress - .48) / .52;
+    const eased = gathering ? phase < .5 ? 4 * phase ** 3 : 1 - (-2 * phase + 2) ** 3 / 2 : 1 - (1 - phase) ** 2;
+    for (const { piece, source, line, slot } of parts) {
       piece.style.transform = 'none';
-      piece.setAttribute('d', mergePath(source, target, progress));
+      // Gather into ONE short straight stroke, then extend its tip down to the
+      // elbow and up the right arm. The check is drawn in order, not assembled.
+      const traced = gathering ? null : checkSegment(slot, 8, 18 / (checkLeft + checkRight) + (1 - 18 / (checkLeft + checkRight)) * eased);
+      piece.setAttribute('d', gathering ? mergePath(source, line, eased) : mergePath(traced, traced, 1));
       piece.setAttribute('stroke-width', String(4 + progress * 1.5));
     }
   };
@@ -60,7 +71,7 @@ function mergeFace(parts, completed) {
     if (done) return;
     started ??= now;
     const progress = Math.min(1, (now - started) / duration);
-    draw(progress < .5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2);
+    draw(progress);
     if (progress >= 1) finish();
     else frameId = requestAnimationFrame(tick);
   };
