@@ -24,8 +24,14 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
       <circle class="recognition-ring-track" cx="160" cy="160" r="82"/>
       <circle class="recognition-spinner" cx="160" cy="160" r="82"/>
       <g class="recognition-face" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M127 115h-9a7 7 0 0 0-7 7v9m82-16h9a7 7 0 0 1 7 7v9m-98 58v9a7 7 0 0 0 7 7h9m82-16v9a7 7 0 0 1-7 7h-9"/>
-        <g class="recognition-features"><path d="M140 143v10m40-10v10m-19-11v25h-8m-14 12q21 18 42 0"/></g>
+        <path class="recognition-piece recognition-bracket bracket-tl" d="M127 115L118 115L114 116L111 122L111 127L111 131"/>
+        <path class="recognition-piece recognition-bracket bracket-tr" d="M193 115L202 115L206 116L209 122L209 127L209 131"/>
+        <path class="recognition-piece recognition-bracket bracket-bl" d="M111 189L111 198L112 202L118 205L123 205L127 205"/>
+        <path class="recognition-piece recognition-bracket bracket-br" d="M209 189L209 198L208 202L202 205L197 205L193 205"/>
+        <path class="recognition-piece recognition-eye eye-left" d="M140 143L140 145L140 147L140 149L140 151L140 153"/>
+        <path class="recognition-piece recognition-eye eye-right" d="M180 143L180 145L180 147L180 149L180 151L180 153"/>
+        <path class="recognition-piece recognition-nose" d="M161 142L161 151L161 160L161 167L157 167L153 167"/>
+        <path class="recognition-piece recognition-mouth" d="M139 179L147 185L155 188L164 188L173 185L181 179"/>
       </g>
       <path class="recognition-check" d="m133 160 19 19 37-40"/>
     </svg>`;
