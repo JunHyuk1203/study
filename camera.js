@@ -39,21 +39,43 @@ export function openCameraFocus(origin) {
     if (face) face.animate([{ opacity: 1, transform: 'translate(-50%,-50%) scale(1)' }, { opacity: 0, transform: 'translate(-50%,-50%) scale(1.4)' }], { duration: 230, fill: 'forwards' });
     for (const corner of frame.querySelectorAll('.cam-corner')) corner.animate([{ width: '19px', height: '19px' }, { width: '40px', height: '40px' }], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.22,.68,.1,1)' });
     frame.animate([geometry(focusOrigin), geometry(target)], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.22,.68,.1,1)' }).finished.then(() => {
+      if (panel.dataset.closing) { frame.remove(); return; }
       panel.classList.remove('is-morphing');
       frame.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, fill: 'forwards' }).finished.then(() => frame.remove()).catch(() => frame.remove());
       if (morphFrame === frame) morphFrame = null;
-    }).catch(() => { panel.classList.remove('is-morphing'); frame.remove(); });
+    }).catch(() => { if (!panel.dataset.closing) panel.classList.remove('is-morphing'); frame.remove(); });
   }
   focusPanel.querySelector('.cam-end').focus();
 }
 export async function closeCameraFocus() {
   const panel = focusPanel;
   if (!panel) return;
+  panel.dataset.closing = 'true';
+  const currentFrame = morphFrame?.getBoundingClientRect();
+  const currentCorner = morphFrame?.querySelector('.cam-corner')?.getBoundingClientRect().width;
   focusPanel = null;
+  for (const animation of morphFrame?.getAnimations() || []) animation.cancel();
   morphFrame?.remove(); morphFrame = null;
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const inset = `inset(${focusOrigin.top}px ${Math.max(0, innerWidth - focusOrigin.right)}px ${Math.max(0, innerHeight - focusOrigin.bottom)}px ${focusOrigin.left}px round 20px)`;
-    await panel.animate([{ clipPath: 'inset(0px 0px 0px 0px round 0px)', opacity: 1 }, { clipPath: inset, opacity: .6 }], { duration: 350, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => {});
+    const viewport = panel.querySelector('.cam-viewport');
+    const source = currentFrame || viewport.getBoundingClientRect();
+    const origin = document.querySelector('.app > main [data-camera-toggle]');
+    const target = origin?.getBoundingClientRect() || focusOrigin;
+    const frame = document.createElement('div');
+    frame.className = 'cam-morph-frame';
+    frame.setAttribute('aria-hidden', 'true');
+    for (const corner of viewport.querySelectorAll('.cam-corner')) frame.append(corner.cloneNode(true));
+    const face = origin?.querySelector('.cam-face')?.cloneNode(true);
+    if (face) frame.append(face);
+    document.body.append(frame);
+    panel.classList.add('is-morphing');
+    const timing = { duration: 650, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' };
+    const geometry = rect => ({ top: `${rect.top}px`, left: `${rect.left}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+    panel.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 350, fill: 'forwards', easing: 'ease-out' });
+    for (const corner of frame.querySelectorAll('.cam-corner')) corner.animate([{ width: `${currentCorner || 35}px`, height: `${currentCorner || 35}px` }, { width: '19px', height: '19px' }], timing);
+    if (face) face.animate([{ opacity: 0, transform: 'translate(-50%,-50%) scale(1.4)' }, { opacity: 0, offset: .55 }, { opacity: 1, transform: 'translate(-50%,-50%) scale(1)' }], timing);
+    await frame.animate([geometry(source), geometry(target)], timing).finished.catch(() => {});
+    frame.remove();
   }
   panel.remove(); document.querySelector('.app').inert = false;
   document.documentElement.classList.remove('camera-focus-open');
@@ -123,7 +145,7 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · 얼굴 인식 준비 중…');
-    worker = new Worker(new URL('./camera-worker.js?v=20261021-10', import.meta.url));
+    worker = new Worker(new URL('./camera-worker.js?v=20261021-12', import.meta.url));
     worker.onerror = () => { if (token === revision) recognitionError(); };
     worker.onmessage = ({ data }) => {
       if (token !== revision) return;
