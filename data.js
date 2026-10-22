@@ -333,7 +333,7 @@ function paintTimer() {
   if (!busy || camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
   for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
   for (const selector of document.querySelectorAll('[data-study-subject]')) {
-    const choices = studySubjects(), signature = JSON.stringify(choices);
+    const choices = Object.fromEntries(Object.entries(studySubjects()).filter(([,name])=>name!=='영단어')), signature = JSON.stringify(choices);
     if (selector.dataset?.subjects !== signature) {
       const previous = selector.value;
       selector.replaceChildren(...Object.entries(choices).map(([id,name]) => {const option = document.createElement('option');option.value=id;option.textContent=name;return option;}));
@@ -341,7 +341,7 @@ function paintTimer() {
       if (selector.dataset) selector.dataset.subjects = signature;
     }
     selector.disabled = busy || Boolean(state.profile?.activeSessionId || previewSession || camera.enabled);
-    if (state.active?.subjectId) selector.value = state.active.subjectId;
+    if (state.active?.subjectId && Object.hasOwn(choices,state.active.subjectId)) selector.value = state.active.subjectId;
   }
   textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraTimerMessage(camera) : '학습 중 · 종료 시 자동 저장' : camera.enabled || camera.status === 'error' ? cameraTimerMessage(camera) : '학습 시작 대기');
   if (session?.activityMode) textAll('[data-timer-state]', running ? '단어앱에서 영단어 학습 중' : '단어앱 영단어 학습 일시정지');

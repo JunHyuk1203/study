@@ -14,7 +14,7 @@ const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const neisKey = defineSecret('NEIS_API_KEY');
 const googleKey = defineSecret('GOOGLE_AI_API_KEY');
 const options = {region:'asia-northeast3', maxInstances:2, minInstances:0, memory:'256MiB', cpu:'gcf_gen1', concurrency:1, timeoutSeconds:90,
-  cors:[/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/, 'https://junhyuk1203.github.io']};
+  cors:[/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/, 'https://junhyuk1203.github.io', 'https://study.junhyuk.site']};
 function uid(request, verified = false) {
   if (!request.auth) throw new HttpsError('unauthenticated', '로그인해 주세요.');
   if (verified && request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', '이메일 인증 후 AI를 이용할 수 있습니다.');

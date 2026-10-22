@@ -23,6 +23,16 @@ test('production import graph creates only one instance of each shared state mod
   for(const name of ['data.js','camera.js','integrations.js'])assert.ok([...versions.keys()].some(path=>path.endsWith('/'+name)));
 });
 
+test('manual study subject picker excludes linked vocabulary while keeping its statistics label',()=>{
+ const picker={dataset:{},value:'other',replaceChildren(...options){this.options=options;}};
+ const context=vm.createContext({cameraController:'controller',cameraState:()=>({}),getAuthUser:()=>({uid:'owner'}),
+  document:{addEventListener(){},createElement:()=>({}),querySelector:()=>null,querySelectorAll:selector=>selector==='[data-study-subject]'?[picker]:[]},
+  window:{addEventListener(){},setInterval(){}}});
+ vm.runInContext(`${source}\nstate.profile={subjects:[{id:'vocab',name:'영단어'},{id:'math',name:'수학'}]};state.active={subjectId:'vocab',activityMode:true};paintTimer();globalThis.labels=studySubjects();`,context);
+ assert.deepEqual(picker.options.map(row=>row.textContent),['기타','수학']);
+ assert.equal(picker.value,'other');assert.equal(context.labels.vocab,'영단어');
+});
+
 test('page errors stay on their originating page and success messages never occupy inline status',()=>{
   const status={textContent:'',hidden:true,classList:{toggle(){}}};
   const context=vm.createContext({
