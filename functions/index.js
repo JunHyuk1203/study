@@ -71,6 +71,7 @@ export const startStudySession = onCall(options, async (request) => {
     if (!profile.exists) throw new HttpsError('failed-precondition', '계정 프로필을 먼저 생성해 주세요.');
     if (!planSubjects(profile.data()).some(row => row.id === subjectId)) throw new HttpsError('invalid-argument', '설정에 추가한 과목을 선택해 주세요.');
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
+    if(profile.data().wordHandoffUntilMs>Date.now())throw new HttpsError('failed-precondition','단어앱 학습으로 전환 중입니다. 잠시 후 다시 시작해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     session = { uid, subjectId, status: 'active',
       ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) };
@@ -107,12 +108,21 @@ export const finishStudySession = onCall(options, request => finishSession(userI
 // The reply acknowledges that camera credit has finished before word tracking.
 export const prepareWordStudy = onCall(options, async request => {
   const uid=userId(request,true),profileRef=db.doc(`users/${uid}`);
-  const profile=(await profileRef.get()).data(),sessionId=profile?.activeSessionId;
-  if(!sessionId)return {cameraStopped:true};
-  const session=(await profileRef.collection('sessions').doc(sessionId).get()).data();
-  if(session?.status!=='active'||!session.cameraMode)return {cameraStopped:true};
-  await finishSession(uid,sessionId);
-  return {cameraStopped:true,stoppedSessionId:sessionId};
+  const cameraId=await db.runTransaction(async tx=>{
+    const profile=(await tx.get(profileRef)).data();
+    if(!profile)throw new HttpsError('failed-precondition','스터디 계정을 먼저 설정해 주세요.');
+    const sessionId=profile.activeSessionId;
+    const session=sessionId?(await tx.get(profileRef.collection('sessions').doc(sessionId))).data():null;
+    if(session?.status==='active'&&!session.cameraMode){
+      if(session.source==='superword')return null;
+      throw new HttpsError('already-exists','진행 중인 학습을 먼저 종료해 주세요.');
+    }
+    // Reserve the handoff before ending the camera, closing the restart race.
+    tx.update(profileRef,{wordHandoffUntilMs:Date.now()+30000});
+    return session?.status==='active'&&session.cameraMode?sessionId:null;
+  });
+  if(cameraId)await finishSession(uid,cameraId);
+  return {cameraStopped:true,...(cameraId?{stoppedSessionId:cameraId}:{})};
 });
 
 async function finishSession(uid, sessionId, expiredBeforeMs = null) {

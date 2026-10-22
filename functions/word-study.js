@@ -35,7 +35,6 @@ export const startWordStudy = onCall(options, async request => {
     const snapshot = await tx.get(profileRef), profile = snapshot.data();
     if (!profile) throw new HttpsError('failed-precondition','스터디 계정을 먼저 설정해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now()/1000)*1000);
-    let cameraRef, camera;
     if (profile.wordStudySessionId) {
       const existing = await tx.get(profileRef.collection('sessions').doc(profile.wordStudySessionId));
       const session = existing.data();
@@ -46,8 +45,8 @@ export const startWordStudy = onCall(options, async request => {
       const existing = await tx.get(profileRef.collection('sessions').doc(profile.activeSessionId));
       const session = existing.data();
       if (session?.status === 'active' && session.source === 'superword' && session.controllerId === controllerId) return reply(existing.id, session, now);
-      if (session?.status !== 'active' || !session.cameraMode) throw new HttpsError('already-exists','다른 학습이 진행 중입니다. 먼저 해당 학습을 종료해 주세요.');
-      cameraRef=existing.ref;camera=session;
+      if(session?.cameraMode&&session.status==='active')throw new HttpsError('failed-precondition','얼굴인식 종료 확인을 먼저 완료해 주세요.');
+      throw new HttpsError('already-exists','다른 학습이 진행 중입니다. 먼저 해당 학습을 종료해 주세요.');
     }
     const subjects = profile.subjects || [];
     let subject = subjects.find(row => row.name === '영단어');
@@ -55,11 +54,10 @@ export const startWordStudy = onCall(options, async request => {
       if (subjects.length >= 30) throw new HttpsError('failed-precondition','과목이 30개입니다. 영단어 과목을 추가할 공간을 마련해 주세요.');
       subject = {id:`s_${randomUUID()}`,name:'영단어'};
     }
-    const session = {uid,subjectId:subject.id,source:'superword',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraRef?.id||null,presenceUntilMs:now.toMillis()+30000};
-    if(cameraRef)interruptCamera(tx,cameraRef,camera,sessionRef.id,now,false);
+    const session = {uid,subjectId:subject.id,source:'superword',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:null,presenceUntilMs:now.toMillis()+30000};
     tx.create(sessionRef,session);
     tx.create(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:now.toMillis()+30000});
-    tx.update(profileRef,{activeSessionId:cameraRef?.id||sessionRef.id,wordStudySessionId:sessionRef.id,wordCameraSessionId:cameraRef?.id||null,wordPresenceUntilMs:null,wordAppUntilMs:session.presenceUntilMs,wordTracking:false,subjects:subjects.some(row=>row.id===subject.id)?subjects:[...subjects,subject],updatedAt:now});
+    tx.update(profileRef,{activeSessionId:sessionRef.id,wordHandoffUntilMs:null,wordStudySessionId:sessionRef.id,wordCameraSessionId:null,wordPresenceUntilMs:null,wordAppUntilMs:session.presenceUntilMs,wordTracking:false,subjects:subjects.some(row=>row.id===subject.id)?subjects:[...subjects,subject],updatedAt:now});
     return reply(sessionRef.id,session,now);
   });
 });
@@ -75,6 +73,8 @@ export const syncWordStudy = onCall(options, async request => {
     if (session.source !== 'superword' || !session.activityMode || session.controllerId !== controllerId) throw new HttpsError('permission-denied','학습을 시작한 단어앱에서만 제어할 수 있습니다.');
     const now = Timestamp.now();
     if (sequence <= session.sequence) return {...reply(ref.id,session,now),ignored:true};
+    const profile=(await tx.get(db.doc(`users/${uid}`))).data();
+    if(tracking&&present&&profile?.activeSessionId!==sessionId)throw new HttpsError('failed-precondition','얼굴인식 종료 확인을 먼저 완료해 주세요.');
     const cameraRef=session.cameraSessionId?db.doc(`users/${uid}/sessions/${session.cameraSessionId}`):null;
     const camera=cameraRef?(await tx.get(cameraRef)).data():null;
     const counting=tracking&&present;

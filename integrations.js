@@ -1,5 +1,5 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { getStudyData } from './data.js?v=20261022-23';
+import { getStudyData } from './data.js?v=20261023-1';
 import { firebaseConfig } from './firebase-config.js';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
 import { readCache } from './client-cache.js?v=20261022-11';

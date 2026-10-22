@@ -3,7 +3,7 @@ import { firebaseConfig } from './firebase-config.js';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache } from './client-cache.js?v=20261022-11';
 import { showToast } from './notifications.js?v=20261022-18';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause, setCameraCompanion } from './camera.js?v=20261022-16';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-16';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }
@@ -43,6 +43,7 @@ let cameraSyncFailures = 0, cameraRetryAt = 0, cameraLastAttemptTracking = null;
 let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
+let cameraSyncEpoch=0,cameraHandoffDisplay=null;
 let sessionClock = null;
 let wordClock=null;
 let cameraDisplay = null;
@@ -65,14 +66,30 @@ function updateCameraDisplay() {
 // Session timestamps come from the server; the device clock may be seconds ahead.
 function stopReplacedCamera(previousId,nextId) {
   if(previousId && previousId!==nextId && state.active?.cameraMode && state.active.controllerId===cameraController && cameraState().enabled) {
+    updateCameraDisplay();
+    const display=cameraHandoffDisplay={seconds:(cameraDisplay?.totalMs||0)/1000};
+    resetCameraSync();
     observeSession(null);
     stopCamera();
-    void closeCameraFocus();
+    void Promise.resolve(closeCameraFocus()).finally(()=>{
+      if(cameraHandoffDisplay===display){cameraHandoffDisplay=null;paintTimer();}
+    });
   }
+}
+function resetCameraSync() {
+  cameraSyncEpoch++;cameraSyncBusy=false;cameraSyncId=null;cameraSyncSequence=0;
+  cameraLastSync=0;cameraLastTracking=null;cameraSyncFailed=false;cameraSyncFailures=0;
+  cameraRetryAt=0;cameraLastAttemptTracking=null;cameraPauseAt=null;cameraResumeSequence=null;
+}
+function observeActiveSnapshot(session,sessionId,watchGeneration=generation) {
+  if(watchGeneration!==generation||activeId!==sessionId||state.profile?.activeSessionId!==sessionId)return;
+  observeSession(session?{...session,id:sessionId}:null);
+  paintTimer();
+  void syncCamera();
 }
 function observeSession(session) {
   // Callable acknowledgements can arrive before an older listener snapshot.
-  if (session?.cameraMode && state.active?.cameraMode && session.controllerId === state.active.controllerId && session.sequence <= state.active.sequence) return;
+  if (session?.cameraMode && state.active?.cameraMode && (session.id==null||state.active.id==null||session.id===state.active.id) && session.status!=='finished' && session.controllerId === state.active.controllerId && session.sequence <= state.active.sequence) return;
   updateCameraDisplay();
   const serverMs = (session?.updatedAt || session?.createdAt || session?.startedAt)?.toMillis?.();
   sessionClock = Number.isFinite(serverMs) ? {serverMs, localMs:performance.now()} : null;
@@ -89,7 +106,7 @@ function sessionNow() {
 function observeCameraReply(reply, sessionId) {
   if (!reply?.session || state.profile?.activeSessionId !== sessionId) return;
   const { serverNowMs, startedAtMs, ...session } = reply.session;
-  observeSession({ ...state.active, ...session,
+  observeSession({ ...state.active, ...session,id:sessionId,
     ...(startedAtMs != null ? { startedAt: { toMillis: () => startedAtMs } } : {}),
     updatedAt: { toMillis: () => serverNowMs } });
 }
@@ -271,7 +288,7 @@ function paint() {
 function wordAppInUse() {
   return Boolean(state.active?.cameraMode && state.profile?.wordCameraSessionId===state.profile?.activeSessionId && state.profile?.wordPresenceUntilMs>sessionNow());
 }
-function cameraPageHidden(){return document.hidden && !(state.profile?.wordAppUntilMs>sessionNow());}
+function cameraPageHidden(){return document.hidden;}
 function cameraTimerMessage(camera) {
   if (finishingSession) return '서버에 저장 중…';
   if (wordAppInUse()) return 'SP word 사용 중 · 얼굴인식 학습시간 일시정지';
@@ -299,7 +316,7 @@ function paintTimer() {
   const isCamera = session?.cameraMode || session?.activityMode;
   const now = isCamera ? sessionNow() : Date.now();
   const expired = isCamera && (session.activeSinceMs == null || now >= session.leaseUntilMs);
-  const locallyPaused = isCamera && (wordAppInUse() || session.controllerId === cameraController && (!camera.tracking || camera.manuallyPaused || cameraPageHidden() || cameraSyncFailed || cameraResumeSequence != null));
+  const locallyPaused = session?.cameraMode && (wordAppInUse() || session.controllerId === cameraController && (!camera.tracking || camera.manuallyPaused || cameraPageHidden() || cameraSyncFailed || cameraResumeSequence != null));
   const running = isCamera && !expired && !locallyPaused;
   const pausedAt = cameraPauseAt == null ? now : now - Math.max(0, performance.now() - cameraPauseAt);
   const windowEnd = Math.min(now, session?.leaseUntilMs || 0, locallyPaused ? pausedAt : Infinity);
@@ -329,9 +346,13 @@ function paintTimer() {
   textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraTimerMessage(camera) : '학습 중 · 종료 시 자동 저장' : camera.enabled || camera.status === 'error' ? cameraTimerMessage(camera) : '학습 시작 대기');
   if (session?.activityMode) textAll('[data-timer-state]', running ? '단어앱에서 영단어 학습 중' : '단어앱 영단어 학습 일시정지');
   if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : cameraTimerMessage(camera));
-  if (camera.manuallyPaused) textAll('[data-timer-state]', cameraTimerMessage(camera));
+  if (camera.manuallyPaused&&!session?.activityMode) textAll('[data-timer-state]', cameraTimerMessage(camera));
   if (finishingSession) textAll('[data-timer-state]', '서버에 저장 중…');
-  const pending = cameraTimerPending(camera) && !running;
+  if(cameraHandoffDisplay){
+    textAll('.camera-focus [data-active-timer]',clock(cameraHandoffDisplay.seconds));
+    textAll('.camera-focus [data-timer-state]','얼굴인식 종료 완료 · 단어앱으로 전환');
+  }
+  const pending = !cameraHandoffDisplay&&!session?.activityMode&&cameraTimerPending(camera) && !running;
   for (const panel of document.querySelectorAll('.timer-panel')) {
     panel.classList.toggle('camera-pending', pending);
     panel.classList.toggle('camera-paused', !pending && Boolean(previewSession ? !camera.tracking : isCamera && !running));
@@ -350,20 +371,24 @@ async function syncCamera(force = false, wordChanged = false) {
   // Status/pose changes with the same presence must not trigger extra writes.
   if (!wordChanged && tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 20000) return;
   cameraSyncBusy = true;
+  const requestEpoch=cameraSyncEpoch;
   cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
   const sequence = cameraSyncSequence = Math.max(cameraSyncSequence, session.sequence || 0) + 1;
   try {
     const result = await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
+    if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
     cameraLastTracking = tracking;
     cameraSyncFailed = false;
     cameraSyncFailures=0;cameraRetryAt=0;
   } catch {
+    if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     cameraSyncFailed = true; cameraPauseAt ??= performance.now();
     cameraRetryAt=Date.now()+Math.min(60000,5000*2**Math.min(cameraSyncFailures++,4));
   }
   finally {
+    if(requestEpoch!==cameraSyncEpoch)return;
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
     const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
     if (tracking !== currentTracking || !cameraSyncFailed && cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence) void syncCamera(true);
@@ -467,13 +492,11 @@ async function connectUser() {
     const previousRevision = state.profile?.studyRevision || 0;
     const previousSchoolId = state.profile?.schoolId;
     const previousWordPresence = state.profile?.wordPresenceUntilMs;
-    const previousWordApp=state.profile?.wordAppUntilMs;
     const previousWordClock=state.profile?.wordSnapshot?.serverNowMs;
     const profile = snapshot.data() || null;
     if (profile && (profile.studyRevision || 0) < previousRevision) return;
     state.profile = profile;
     if(previousWordClock!==profile?.wordSnapshot?.serverNowMs)wordClock=profile?.wordSnapshot?{serverMs:profile.wordSnapshot.serverNowMs,localMs:performance.now()}:null;
-    if((previousWordApp||profile?.wordAppUntilMs) && typeof setCameraCompanion==='function')setCameraCompanion(Math.max(0,(profile?.wordAppUntilMs||0)-sessionNow()));
     if(previousWordPresence!==profile?.wordPresenceUntilMs)queueMicrotask(()=>{if(token===generation)void syncCamera(false,true);});
     if (state.profile) resolveProfile();
     else if (!creatingProfile) {
@@ -484,16 +507,14 @@ async function connectUser() {
     const newActive = state.profile?.activeSessionId || null;
     stopReplacedCamera(previousSessionId,newActive);
     if (newActive !== activeId) {
+      resetCameraSync();
       activeUnsubscribe?.();
       activeId = newActive;
       if (newActive !== previousSessionId) observeSession(null);
       // This tab receives authoritative camera state in callable replies; only
       // another tab's active session needs a realtime session listener.
       if (newActive && state.active?.controllerId !== cameraController) activeUnsubscribe = sdk.onSnapshot(sdk.doc(db, 'users', uid, 'sessions', newActive), record => {
-        if (token !== generation) return;
-        observeSession(record.data() || null);
-        paintTimer();
-        void syncCamera();
+        observeActiveSnapshot(record.data()||null,newActive,token);
       }, error => { if (token === generation) notice(errorText(error), true); });
     }
     if (previousRevision !== (state.profile?.studyRevision || 0)) for (const key of visibleDataKeys()) state.pending.add(key);
