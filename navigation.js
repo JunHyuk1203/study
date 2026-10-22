@@ -78,7 +78,9 @@
         if (!closingAccount) accountReturnUrl = displayedUrl;
         nextMain.querySelector('[data-account-close]')?.setAttribute('href', accountReturnUrl.href);
       }
-      // Move the persistent selection background alongside the page slide.
+      // Account has no selected tab; reveal its destination in place on return.
+      if (closingAccount) currentNav.classList.add('selection-reveal');
+      else currentNav.classList.remove('selection-reveal');
       const selectedHref = nextNav.querySelector('[aria-current="page"]')?.getAttribute('href');
       for (const link of currentNav.querySelectorAll('a')) {
         if (link.getAttribute('href') === selectedHref) link.setAttribute('aria-current', 'page');
