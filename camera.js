@@ -14,6 +14,12 @@ let ready = false, inFlight = false, lastResult = 0, presenceSince = null, absen
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
+let companionUntil=0;
+function cameraVisible(){return !document.hidden || performance.now()<companionUntil;}
+export function setCameraCompanion(durationMs){
+  companionUntil=performance.now()+Math.max(0,Math.min(30000,durationMs));
+  if(enabled && !cameraVisible())setStatus('paused','화면을 벗어났습니다 · 일시정지');
+}
 export const cameraController = crypto.randomUUID();
 export function cameraState() { return { enabled, tracking, status, message, manuallyPaused }; }
 export function toggleCameraPause() {
@@ -147,7 +153,7 @@ function recognitionError(detail = '') {
 function acceptResult(data) {
   inFlight = false;
   const now = performance.now(); lastResult = now;
-  if (manuallyPaused || document.hidden || stream?.getVideoTracks()[0]?.muted) return;
+  if (manuallyPaused || !cameraVisible() || stream?.getVideoTracks()[0]?.muted) return;
   // Worker sends only the three points needed by the avatar, never the full face mesh.
   const points = data.landmarks;
   avatarPose = points ? facePose({ 1: points[0], 33: points[1], 263: points[2] }) : null;
@@ -189,7 +195,7 @@ async function recoverRecognition(token, detail) {
 }
 async function frame(token) {
   if (!enabled || token !== revision) return;
-  if (ready && !inFlight && !document.hidden && video.readyState >= 2) {
+  if (ready && !inFlight && cameraVisible() && video.readyState >= 2) {
     inFlight = true;
     try {
       if (fallbackDetector) {
@@ -252,6 +258,7 @@ export async function startCamera() {
 }
 document.addEventListener('visibilitychange', () => {
   if (!enabled) return;
+  if(document.hidden && cameraVisible())return;
   presenceSince = absentSince = null;
   setStatus(document.hidden ? 'paused' : 'scanning', document.hidden ? '화면을 벗어났습니다 · 일시정지' : '얼굴을 다시 확인하는 중…');
 });

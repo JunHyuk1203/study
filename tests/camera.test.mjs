@@ -21,6 +21,16 @@ test('manual pause during engine setup survives detection and visibility changes
   now+=2000;camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,true);
 });
 
+test('a live SP word companion permits real background face detection and expiry restores the visibility pause',async()=>{
+  let now=1000;const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  vm.runInContext(`${source}\nenabled=true;globalThis.camera={setCameraCompanion,cameraState,acceptResult,cameraVisible};`,context);
+  const camera=context.camera;camera.setCameraCompanion(30000);document.hidden=true;handlers.visibilitychange();
+  camera.acceptResult({present:true});now+=2000;camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,true);
+  now+=30000;assert.equal(camera.cameraVisible(),false);camera.setCameraCompanion(0);assert.equal(camera.cameraState().tracking,false);
+});
+
 test('avatar follows mirrored head position and tilt within safe display bounds', () => {
   assert.deepEqual(facePose({ 1: { x: .5, y: .5 }, 33: { x: .3, y: .4 }, 263: { x: .7, y: .4 } }), { x: 0, y: 0, roll: -0 });
   const pose = facePose({ 1: { x: 0, y: 1 }, 33: { x: .3, y: .2 }, 263: { x: .6, y: .6 } });

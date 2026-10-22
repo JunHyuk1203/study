@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 const toastSource=(await readFile(new URL('../notifications.js',import.meta.url),'utf8')).replace(/^export /gm,'');
-const source=cacheSource+'\n'+toastSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
+const source=(await readFile(new URL('../word-time.js',import.meta.url),'utf8')).replace(/^export /gm,'')+'\n'+cacheSource+'\n'+toastSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
   .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
 
 test('production import graph creates only one instance of each shared state module',async()=>{
@@ -49,6 +49,43 @@ test('weekly goal progress sums Sunday through Saturday daily records including 
   assert.equal(context.result.totalSeconds,900);assert.equal(context.result.subjectSeconds.s_physics,600);assert.equal(context.result.subjectSeconds.other,300);
 });
 
+test('subject chart switches daily, weekly and monthly totals with matching hour/minute details',()=>{
+  const node=()=>({children:[],textContent:'',attributes:{},style:{setProperty(){}},append(...items){this.children.push(...items);},replaceChildren(){this.children=[];this.textContent='';},setAttribute(name,value){this.attributes[name]=value;}});
+  const chart=node(),details=node(),period={value:'week'},label=node();chart.dataset={chart:'subjects'};
+  const context=vm.createContext({getAuthUser:()=>({uid:'owner'}),cameraState:()=>({}),
+    document:{createElement:node,addEventListener(){},querySelector:selector=>selector==='[data-subject-period]'?period:selector==='[data-subject-times]'?details:null,querySelectorAll:selector=>selector==='[data-subject-period-label]'?[label]:[]},
+    window:{addEventListener(){},setInterval(){}},chart,
+  });
+  vm.runInContext(`${source}\nauthResolved=true;state.pending.clear();state.profile={subjects:[{id:'custom',name:'물리'}]};state.today={subjectSeconds:{custom:3660}};state.week={subjectSeconds:{custom:7320,math:60,removed:120}};state.month={subjectSeconds:{custom:10980,other:30}};`,context);
+  for(const [key,title,duration] of [['today','오늘','1시간 01분'],['week','이번 주','2시간 02분'],['month','이번 달','3시간 03분']]) {
+    period.value=key;vm.runInContext('paintChart(chart);',context);
+    assert.equal(label.textContent,title);assert.equal(chart.attributes['aria-label'],`${title} 과목별 학습 시간`);
+    const totals=Object.fromEntries(details.children.map(row=>row.children.map(cell=>cell.textContent)));
+    assert.equal(totals['물리'],duration);assert.equal(details.children.length,chart.children.length);
+    if(key==='week'){assert.equal(totals['수학'],'0시간 01분');assert.equal(totals['삭제된 과목'],'0시간 02분');}
+    if(key==='today')assert.equal(totals['기타'],'0시간 00분');
+    if(key==='month')assert.equal(totals['기타'],'0시간 00분 (1분 미만)');
+  }
+  vm.runInContext("state.pending.add('month');paintChart(chart);",context);
+  assert.equal(chart.textContent,'로딩 중…');assert.equal(details.children.length,0);
+  vm.runInContext("state.pending.clear();state.failed.add('month');paintChart(chart);",context);
+  assert.equal(chart.textContent,'기록을 불러오지 못했습니다.');assert.equal(details.children.length,0);
+});
+
+test('subject period change repaints and requests the selected aggregate',()=>{
+  const handlers={},period={value:'month'};
+  const context=vm.createContext({getAuthUser:()=>null,cameraState:()=>({}),
+    document:{addEventListener:(name,handler)=>{(handlers[name]??=[]).push(handler);},querySelector:selector=>selector==='[data-subject-period]'?period:selector==='[data-chart="subjects"]'?{}:null,querySelectorAll:()=>[]},
+    window:{addEventListener(){},setInterval(){}},
+  });
+  vm.runInContext(`${source}\nglobalThis.paints=0;globalThis.loads=0;paint=()=>{paints++;};loadVisibleData=async()=>{loads++;};globalThis.keys=()=>Array.from(visibleDataKeys());`,context);
+  assert.deepEqual(Array.from(context.keys()),['month']);
+  for(const handler of handlers.change)handler({target:{matches:selector=>selector==='[data-subject-period]'}});
+  assert.equal(context.paints,1);assert.equal(context.loads,1);
+  period.value='today';assert.deepEqual(Array.from(context.keys()),['today']);
+  period.value='invalid';assert.deepEqual(Array.from(context.keys()),['week']);
+});
+
 test('camera startup errors keep the focus exit enabled and close without saving a nonexistent session',async()=>{
   const clicks=[],camera={enabled:false,tracking:false,status:'error'};
   const stop={disabled:true,dataset:{studyAction:'stop'}};
@@ -76,7 +113,7 @@ function timerUi(skew) {
     document:{hidden:false,querySelectorAll:selector=>selector==='[data-active-timer]'?[display]:[],addEventListener(){}},
     window:{addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
   });
-  vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,paintTimer,syncCamera};`,context);
+  vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,paintTimer,syncCamera,message:cameraTimerMessage,setProfile:value=>{state.profile=value;}};`,context);
   const configure = (send, sessionId = 'session') => {
     context.send = send;
     context.sessionId = sessionId;
@@ -139,6 +176,17 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
   t.camera.tracking=false;t.handlers['study:camera-changed']();
   t.ui.observeSession(t.snapshot(5,false,3));t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
   t.tick(6000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
+});
+
+test('SP word counting freezes the camera display and menu/idle state releases it',()=>{
+  const t=timerUi(0);t.ui.observeSession(t.snapshot(0));t.tick(2000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:02');
+  t.ui.setProfile({activeSessionId:'camera',wordCameraSessionId:'camera',wordPresenceUntilMs:200000});
+  t.ui.paintTimer();assert.match(t.ui.message(t.camera),/SP word 사용 중/);
+  t.tick(5000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:02');
+  t.ui.observeSession(t.snapshot(2,false,2));
+  t.ui.setProfile({activeSessionId:'camera',wordCameraSessionId:'camera',wordPresenceUntilMs:null});
+  t.ui.observeSession(t.snapshot(2,true,3));t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
 });
 
 test('camera display stops extrapolating when its server lease expires',()=>{

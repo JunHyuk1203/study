@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, validDisplayName, weekKey } from '../functions/domain.js';
+import {wordLiveSeconds} from '../word-time.js';
+import {remainingWordSegments} from '../functions/word-stats.js';
 
 test('KST midnight splits daily, weekly and monthly credits correctly', () => {
   const segments = splitStudyInterval(Date.parse('2026-10-31T14:30:00Z'), Date.parse('2026-10-31T15:30:00Z'));
@@ -54,4 +56,22 @@ test('camera heartbeat splits midnight and stops at the session duration limit',
   const paused = checkpointCamera(running, start + 20000, false);
   assert.deepEqual(paused.segments.map(s => [s.date, s.seconds]), [['2026-10-31', 10], ['2026-11-01', 10]]);
   assert.equal(checkpointCamera(running, start + MAX_SESSION_MS, true).activeSinceMs, null);
+});
+
+test('word live time adds only unsettled seconds and caps at the acknowledged lease',()=>{
+  const now=Date.parse('2026-10-22T03:00:00Z'),word={sessionId:'word',segments:[{date:'2026-10-22',seconds:10}],activeSinceMs:now,leaseUntilMs:now+30000};
+  assert.equal(wordLiveSeconds({wordCheckpoint:{sessionId:'word',seconds:10}},word,'day','2026-10-22',now+5000),5);
+  assert.equal(wordLiveSeconds({wordCheckpoint:{sessionId:'word',seconds:10}},word,'day','2026-10-22',now+90000),30);
+  assert.equal(wordLiveSeconds({wordCheckpoint:{sessionId:'old',seconds:99}},word,'day','2026-10-22',now+5000),15);
+  assert.equal(wordLiveSeconds({},word,'day','2026-10-23',now+5000),0);
+  assert.equal(wordLiveSeconds({wordCheckpoint:{sessionId:'newer',seconds:30,serverNowMs:now+5000}},{...word,serverNowMs:now},'day','2026-10-22',now+5000),0);
+});
+
+test('word checkpoints split midnight and settlement retries never re-credit saved seconds',()=>{
+  const start=Date.parse('2026-10-31T14:59:50Z'),segments=splitStudyInterval(start,start+20000);
+  assert.deepEqual(remainingWordSegments(segments,segments),[]);
+  assert.equal(remainingWordSegments(segments,[{...segments[0],seconds:5}]).reduce((sum,row)=>sum+row.seconds,0),15);
+  const word={sessionId:'midnight',segments:[],activeSinceMs:start,leaseUntilMs:start+30000};
+  assert.equal(wordLiveSeconds({},word,'day','2026-10-31',start+20000),10);
+  assert.equal(wordLiveSeconds({},word,'day','2026-11-01',start+20000),10);
 });

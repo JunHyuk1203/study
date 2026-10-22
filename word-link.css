@@ -1,0 +1,5 @@
+.sp-word-link{display:flex;align-items:center;gap:14px;color:inherit;text-decoration:none;min-width:0}
+.sp-word-logo{display:block;width:44px;height:44px;flex-shrink:0;object-fit:cover;border-radius:12px}
+.sp-word-link h2{margin:0;font-size:15px;font-weight:700;letter-spacing:.2px}
+.sp-word-link p{margin:5px 0 0;line-height:1.5}
+.sp-word-arrow{margin-left:auto;padding-left:8px;color:var(--muted);font-size:20px}

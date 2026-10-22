@@ -1,11 +1,14 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { creditFocusTime } from './focus-time.js';
 import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
+import {settleWordStats} from './word-stats.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
+export { startWordStudy, syncWordStudy } from './word-study.js';
 
 const app = getApps()[0] ?? initializeApp();
 const db = getFirestore(app, 'study-data');
@@ -90,16 +93,17 @@ export const syncStudyCamera = onCall(options, async request => {
     if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
     if (sequence <= session.sequence) return { ignored: true };
-    const update = checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking);
+    const wordPaused=Boolean(session.wordSessionId && session.wordLeaseUntilMs>Date.now());
+    const update = {...checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking&&!wordPaused),wordPaused,...(!wordPaused?{wordSessionId:null,wordLeaseUntilMs:null}:{wordSessionId:session.wordSessionId,wordLeaseUntilMs:session.wordLeaseUntilMs})};
     const updatedAt = Timestamp.now();
     transaction.update(ref, { ...update, sequence, updatedAt });
     return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, sequence, serverNowMs: updatedAt.toMillis() } };
   });
 });
 
-export const finishStudySession = onCall(options, async (request) => {
-  const uid = userId(request, true);
-  const sessionId = request.data?.sessionId;
+export const finishStudySession = onCall(options, request => finishSession(userId(request, true), request.data?.sessionId));
+
+async function finishSession(uid, sessionId, expiredBeforeMs = null) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId)) throw new HttpsError('invalid-argument', '학습 기록 ID가 올바르지 않습니다.');
   const profileRef = db.doc(`users/${uid}`);
   const sessionRef = profileRef.collection('sessions').doc(sessionId);
@@ -108,13 +112,20 @@ export const finishStudySession = onCall(options, async (request) => {
     const [profileDoc, sessionDoc, summaryDoc] = await transaction.getAll(profileRef, sessionRef, summaryRef);
     if (!profileDoc.exists || !sessionDoc.exists) throw new HttpsError('not-found', '학습 기록이 없습니다.');
     const session = sessionDoc.data();
+    // Recheck inside the transaction: a heartbeat may have renewed this lease
+    // after the cleanup query selected it.
+    if (expiredBeforeMs != null && (!session.activityMode || (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+30000) > expiredBeforeMs)) return {notExpired:true};
     if (session.status === 'finished') return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
     const profile = profileDoc.data();
-    if (profile.activeSessionId !== sessionId) throw new HttpsError('failed-precondition', '진행 중인 학습 기록이 일치하지 않습니다.');
+    const wordSession=session.source==='superword';
+    if (profile.activeSessionId !== sessionId && !(wordSession && profile.wordStudySessionId===sessionId)) throw new HttpsError('failed-precondition', '진행 중인 학습 기록이 일치하지 않습니다.');
+    const cameraRef=wordSession&&session.cameraSessionId?profileRef.collection('sessions').doc(session.cameraSessionId):null;
+    const camera=cameraRef?(await transaction.get(cameraRef)).data():null;
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     const startedMs = session.startedAt.toMillis();
     const endedMs = Math.min(now.toMillis(), startedMs + MAX_SESSION_MS);
-    const checkpoint = session.cameraMode ? checkpointCamera({ ...session, startedAtMs: startedMs }, now.toMillis(), false) : null;
+    const checkpoint = session.cameraMode || session.activityMode ? checkpointCamera({ ...session, startedAtMs: startedMs }, now.toMillis(), false) : null;
+    if(camera?.status==='active' && camera.wordSessionId===sessionId)transaction.update(cameraRef,{...checkpointCamera({...camera,startedAtMs:camera.startedAt.toMillis()},now.toMillis(),false),wordSessionId:null,wordLeaseUntilMs:null,wordPaused:false,sequence:(camera.sequence||0)+1,updatedAt:now});
     const segments = checkpoint ? checkpoint.segments : splitStudyInterval(startedMs, endedMs);
     const creditedSeconds = segments.reduce((sum, segment) => sum + segment.seconds, 0);
     const buckets = new Map();
@@ -126,7 +137,8 @@ export const finishStudySession = onCall(options, async (request) => {
       }
       weeks.set(segment.week, (weeks.get(segment.week) ?? 0) + segment.seconds);
     }
-    for (const [path, seconds] of buckets) {
+    if(wordSession)settleWordStats(transaction,db,uid,sessionId,session.subjectId,segments,session.settledSegments||[],now);
+    for (const [path, seconds] of wordSession?[]:buckets) {
       transaction.set(db.doc(path), { uid, totalSeconds: FieldValue.increment(seconds), subjectSeconds: { [session.subjectId]: FieldValue.increment(seconds) }, updatedAt: now }, { merge: true });
     }
     if (creditedSeconds > 0) {
@@ -139,8 +151,20 @@ export const finishStudySession = onCall(options, async (request) => {
         if (profile.schoolId) transaction.set(db.doc(`schoolLeaderboards/${profile.schoolId}/weeks/${week}/entries/${uid}`), ranking, { merge: true });
       }
     }
-    transaction.update(sessionRef, { ...(checkpoint || {}), status: 'finished', endedAt: Timestamp.fromMillis(endedMs), creditedSeconds, capped: now.toMillis() > endedMs, updatedAt: now });
-    transaction.update(profileRef, { activeSessionId: null, studyRevision: FieldValue.increment(1), updatedAt: now });
+    transaction.update(sessionRef, { ...(checkpoint || {}), ...(wordSession?{settledSegments:segments}:{}),status: 'finished', endedAt: Timestamp.fromMillis(endedMs), creditedSeconds, capped: now.toMillis() > endedMs, updatedAt: now });
+    if (session.source === 'superword') transaction.delete(db.doc(`wordStudyLeases/${sessionId}`));
+    transaction.update(profileRef, {activeSessionId:wordSession?(profile.activeSessionId===sessionId?null:profile.activeSessionId):(profile.wordStudySessionId||null),...(wordSession?{wordStudySessionId:null,wordCameraSessionId:null,wordPresenceUntilMs:null,wordAppUntilMs:null,wordTracking:false,wordSnapshot:null}:session.cameraMode?{wordCameraSessionId:null}:{}), studyRevision: FieldValue.increment(1), updatedAt: now });
     return { creditedSeconds, alreadyFinished: false, studyRevision:(profile.studyRevision || 0)+1 };
   });
+}
+
+// A browser can be killed before pagehide or its keepalive request runs.
+// Expired leases credit at most the final 30-second server-observed window.
+export const closeExpiredWordStudies = onSchedule({...options,schedule:'every 5 minutes',timeZone:'Asia/Seoul'}, async () => {
+  const cutoff = Date.now();
+  const leases = await db.collection('wordStudyLeases').where('expiresAtMs','<=',cutoff).limit(100).get();
+  for (const lease of leases.docs) {
+    const {uid,sessionId} = lease.data();
+    await finishSession(uid,sessionId,cutoff);
+  }
 });

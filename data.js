@@ -1,8 +1,9 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
+import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache } from './client-cache.js?v=20261022-11';
 import { showToast } from './notifications.js?v=20261022-18';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-15';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause, setCameraCompanion } from './camera.js?v=20261022-16';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }
@@ -43,6 +44,7 @@ let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
 let sessionClock = null;
+let wordClock=null;
 let cameraDisplay = null;
 // Keep a monotonic display across delayed checkpoints and recognition changes.
 function updateCameraDisplay() {
@@ -57,7 +59,7 @@ function updateCameraDisplay() {
   const now = sessionNow();
   cameraDisplay ??= {totalMs:(session.accumulatedSeconds || 0)*1000 + (session.activeSinceMs != null ? Math.max(0, Math.min(now, session.leaseUntilMs) - session.activeSinceMs) : 0), localMs};
   const camera = cameraState();
-  cameraDisplay.running = session.activeSinceMs != null && camera.tracking && !camera.manuallyPaused && !document.hidden && !cameraSyncFailed && cameraResumeSequence == null;
+  cameraDisplay.running = session.activeSinceMs != null && camera.tracking && !camera.manuallyPaused && !cameraPageHidden() && !cameraSyncFailed && cameraResumeSequence == null && !wordAppInUse();
   cameraDisplay.untilMs = localMs + Math.max(0, (session.leaseUntilMs || 0) - now);
 }
 // Session timestamps come from the server; the device clock may be seconds ahead.
@@ -94,7 +96,13 @@ export function getStudyData() {
     week.totalSeconds += row.totalSeconds || 0;
     for (const [id,seconds] of Object.entries(row.subjectSeconds || {})) week.subjectSeconds[id] = (week.subjectSeconds[id] || 0) + seconds;
   }
-  return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser(), stats:{day:state.today,week,month:state.month}, loading:new Set(state.pending), failed:new Set(state.failed)};
+  const word=state.profile?.wordSnapshot;
+  if(word){
+    const saved=state.days.find(row=>row.date===today)||{},now=wordClock?wordClock.serverMs+Math.max(0,performance.now()-wordClock.localMs):word.serverNowMs;
+    const pending=wordLiveSeconds(saved,word,'day',today,now);
+    week.totalSeconds+=pending;week.subjectSeconds[word.subjectId]=(week.subjectSeconds[word.subjectId]||0)+pending;
+  }
+  return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser(), stats:{day:liveStats('today'),week,month:liveStats('month')}, loading:new Set(state.pending), failed:new Set(state.failed)};
 }
 function updatePreviewTimer() {
   if (!previewSession) return;
@@ -156,14 +164,41 @@ function paintRanking(container, rows, school = false) {
   });
 }
 
+function subjectPeriod() {
+  const selected = document.querySelector('[data-subject-period]')?.value;
+  return ['today', 'week', 'month'].includes(selected) ? selected : 'week';
+}
+
+document.addEventListener('change', event => {
+  if (!event.target.matches?.('[data-subject-period]')) return;
+  paint();
+  void loadVisibleData();
+});
+
+function liveStats(key) {
+  const stats=state[key],word=state.profile?.wordSnapshot;
+  if(!word || !['today','week','month'].includes(key))return stats;
+  const today=dateKey(),period=key==='today'?'day':key,periodKey=key==='week'?monday(today):key==='month'?today.slice(0,7):today;
+  const now=wordClock?wordClock.serverMs+Math.max(0,performance.now()-wordClock.localMs):word.serverNowMs;
+  const pending=wordLiveSeconds(stats,word,period,periodKey,now);
+  return {...stats,totalSeconds:(stats.totalSeconds||0)+pending,subjectSeconds:{...stats.subjectSeconds,[word.subjectId]:(stats.subjectSeconds?.[word.subjectId]||0)+pending}};
+}
 function paintChart(container) {
   const isSubjects = container.dataset.chart === 'subjects';
-  const key = isSubjects ? 'week' : 'days';
+  const key = isSubjects ? subjectPeriod() : 'days';
+  const details = isSubjects ? document.querySelector('[data-subject-times]') : null;
+  if (isSubjects) {
+    const periodLabel = {today:'오늘', week:'이번 주', month:'이번 달'}[key];
+    textAll('[data-subject-period-label]', periodLabel);
+    container.setAttribute('aria-label', `${periodLabel} 과목별 학습 시간`);
+    details?.replaceChildren();
+  }
   if (!authResolved || getAuthUser() && state.pending.has(key)) { container.textContent = '로딩 중…'; return; }
   if (!getAuthUser()) { container.textContent = '로그인하면 공부 기록을 볼 수 있습니다.'; return; }
   if (state.failed.has(key)) { container.textContent = '기록을 불러오지 못했습니다.'; return; }
-  const labels = {...Object.fromEntries(Object.entries(historicalSubjects).filter(([id]) => state.week.subjectSeconds?.[id] > 0)),...studySubjects()};
-  const rows = isSubjects ? Object.entries(labels).map(([id, label]) => ({ label, seconds: state.week.subjectSeconds?.[id] || 0 })) : Array.from({ length: 7 }, (_, index) => {
+  const subjectSeconds = isSubjects ? liveStats(key).subjectSeconds || {} : {};
+  const labels = {...Object.fromEntries(Object.keys(subjectSeconds).map(id => [id, historicalSubjects[id] || '삭제된 과목'])),...studySubjects()};
+  const rows = isSubjects ? Object.entries(labels).map(([id, label]) => ({ label, seconds: subjectSeconds[id] || 0 })) : Array.from({ length: 7 }, (_, index) => {
     const key = dateKey(Date.now() - (6 - index) * 86400000);
     const record = state.days.find(row => row.date === key);
     return { label: ['일', '월', '화', '수', '목', '금', '토'][new Date(`${key}T00:00:00Z`).getUTCDay()], seconds: record?.totalSeconds || 0 };
@@ -181,13 +216,23 @@ function paintChart(container) {
     label.textContent = row.label;
     column.append(bar, label);
     container.append(column);
+    if (details) {
+      const item = document.createElement('div');
+      const name = document.createElement('dt');
+      name.textContent = row.label;
+      const duration = document.createElement('dd');
+      duration.textContent = `${Math.floor(row.seconds / 3600)}시간 ${String(Math.floor(row.seconds % 3600 / 60)).padStart(2, '0')}분`;
+      if (row.seconds > 0 && row.seconds < 60) duration.textContent += ' (1분 미만)';
+      item.append(name, duration);
+      details.append(item);
+    }
   });
 }
 
 function paint() {
   const user = getAuthUser();
   const value = (key, result) => !authResolved || user && state.pending.has(key) ? '로딩 중…' : !user ? '로그인 필요' : state.failed.has(key) ? '불러오기 실패' : result;
-  for (const key of ['today', 'week', 'month', 'summary']) textAll(`[data-time="${key}"]`, value(key, time(state[key].totalSeconds)));
+  for (const key of ['today', 'week', 'month', 'summary']) textAll(`[data-time="${key}"]`, value(key, time(liveStats(key).totalSeconds)));
   textAll('[data-streak]', value('summary', `${state.summary.currentStreak || 0}일`));
   textAll('[data-focus-balance]', value('focusTime', clock(state.focusTime?.balanceSeconds ?? 0)));
   const rank = state.ranking.findIndex(row => row.uid === user?.uid);
@@ -216,12 +261,17 @@ function paint() {
   window.dispatchEvent(new Event('study:data-changed'));
 }
 
+function wordAppInUse() {
+  return Boolean(state.active?.cameraMode && state.profile?.wordCameraSessionId===state.profile?.activeSessionId && state.profile?.wordPresenceUntilMs>sessionNow());
+}
+function cameraPageHidden(){return document.hidden && !(state.profile?.wordAppUntilMs>sessionNow());}
 function cameraTimerMessage(camera) {
   if (finishingSession) return '서버에 저장 중…';
+  if (wordAppInUse()) return 'SP word 사용 중 · 얼굴인식 학습시간 일시정지';
   if (camera.manuallyPaused) return '사용자가 수동으로 일시정지했습니다 · 재개 버튼을 눌러 주세요';
   if (cameraSyncFailed) return '서버 연결을 확인하는 중 · 학습 시간 적립 일시정지';
   if (camera.status === 'error') return camera.message || '카메라 인식 오류 · 종료 후 다시 시작해 주세요';
-  if (document.hidden) return '화면을 벗어나 일시정지했습니다 · 돌아오면 얼굴을 다시 확인합니다';
+  if (cameraPageHidden()) return '화면을 벗어나 일시정지했습니다 · 돌아오면 얼굴을 다시 확인합니다';
   if (camera.status === 'opening') return '최초 얼굴 인식을 준비하는 중 · 카메라 연결 확인';
   if (camera.status === 'scanning' && !camera.tracking) return camera.message || '최초 얼굴 인식을 준비하는 중 · 카메라를 바라봐 주세요';
   if (camera.status === 'paused') return camera.message || '얼굴 인식에 실패했습니다 · 얼굴이 인식되면 자동 재개';
@@ -230,7 +280,7 @@ function cameraTimerMessage(camera) {
 }
 
 function cameraTimerPending(camera) {
-  return finishingSession || !camera.manuallyPaused && !cameraSyncFailed && camera.status !== 'error' && !document.hidden &&
+  return finishingSession || !wordAppInUse() && !camera.manuallyPaused && !cameraSyncFailed && camera.status !== 'error' && !cameraPageHidden() &&
     (['opening', 'scanning'].includes(camera.status) || camera.enabled && camera.status === 'tracking');
 }
 
@@ -239,10 +289,10 @@ function paintTimer() {
   const started = state.active?.startedAt?.toMillis?.();
   const session = state.active;
   const camera = cameraState();
-  const isCamera = session?.cameraMode;
+  const isCamera = session?.cameraMode || session?.activityMode;
   const now = isCamera ? sessionNow() : Date.now();
   const expired = isCamera && (session.activeSinceMs == null || now >= session.leaseUntilMs);
-  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || camera.manuallyPaused || document.hidden || cameraSyncFailed || cameraResumeSequence != null);
+  const locallyPaused = isCamera && (wordAppInUse() || session.controllerId === cameraController && (!camera.tracking || camera.manuallyPaused || cameraPageHidden() || cameraSyncFailed || cameraResumeSequence != null));
   const running = isCamera && !expired && !locallyPaused;
   const pausedAt = cameraPauseAt == null ? now : now - Math.max(0, performance.now() - cameraPauseAt);
   const windowEnd = Math.min(now, session?.leaseUntilMs || 0, locallyPaused ? pausedAt : Infinity);
@@ -270,6 +320,7 @@ function paintTimer() {
     if (state.active?.subjectId) selector.value = state.active.subjectId;
   }
   textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraTimerMessage(camera) : '학습 중 · 종료 시 자동 저장' : camera.enabled || camera.status === 'error' ? cameraTimerMessage(camera) : '학습 시작 대기');
+  if (session?.activityMode) textAll('[data-timer-state]', running ? '단어앱에서 영단어 학습 중' : '단어앱 영단어 학습 일시정지');
   if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : cameraTimerMessage(camera));
   if (camera.manuallyPaused) textAll('[data-timer-state]', cameraTimerMessage(camera));
   if (finishingSession) textAll('[data-timer-state]', '서버에 저장 중…');
@@ -280,17 +331,17 @@ function paintTimer() {
   }
 }
 
-async function syncCamera(force = false) {
+async function syncCamera(force = false, wordChanged = false) {
   const session = state.active;
   if (!session?.cameraMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
   if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
-  const tracking = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
+  const tracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
   if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
-  if (!tracking && cameraLastTracking === false && !cameraSyncFailed) return;
+  if (!tracking && cameraLastTracking === false && !cameraSyncFailed && !wordChanged) return;
   // Status/pose changes with the same presence must not trigger extra writes.
-  if (tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 20000) return;
+  if (!wordChanged && tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 20000) return;
   cameraSyncBusy = true;
   cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
@@ -307,7 +358,7 @@ async function syncCamera(force = false) {
   }
   finally {
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
-    const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
+    const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
     if (tracking !== currentTracking || !cameraSyncFailed && cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence) void syncCamera(true);
   }
 }
@@ -331,7 +382,7 @@ function visibleDataKeys() {
   if (document.querySelector('[data-week-goal], [data-week-progress], [data-week-remaining], [data-week-comparison]')) keys.add('week');
   if (document.querySelector('[data-week-comparison]')) keys.add('lastWeek');
   if (document.querySelector('[data-chart="days"]')) keys.add('days');
-  if (document.querySelector('[data-chart="subjects"]')) keys.add('week');
+  if (document.querySelector('[data-chart="subjects"]')) keys.add(subjectPeriod());
   if (document.querySelector('[data-goal-summary], [data-goal-list]')) for (const key of ['today','days','month']) keys.add(key);
   if (document.querySelector('[data-ranking="global"], [data-my-rank]')) keys.add('ranking');
   if (document.querySelector('[data-my-rank]')) keys.add('ownRanking');
@@ -408,9 +459,15 @@ async function connectUser() {
     const previousSessionId = state.profile?.activeSessionId;
     const previousRevision = state.profile?.studyRevision || 0;
     const previousSchoolId = state.profile?.schoolId;
+    const previousWordPresence = state.profile?.wordPresenceUntilMs;
+    const previousWordApp=state.profile?.wordAppUntilMs;
+    const previousWordClock=state.profile?.wordSnapshot?.serverNowMs;
     const profile = snapshot.data() || null;
     if (profile && (profile.studyRevision || 0) < previousRevision) return;
     state.profile = profile;
+    if(previousWordClock!==profile?.wordSnapshot?.serverNowMs)wordClock=profile?.wordSnapshot?{serverMs:profile.wordSnapshot.serverNowMs,localMs:performance.now()}:null;
+    if((previousWordApp||profile?.wordAppUntilMs) && typeof setCameraCompanion==='function')setCameraCompanion(Math.max(0,(profile?.wordAppUntilMs||0)-sessionNow()));
+    if(previousWordPresence!==profile?.wordPresenceUntilMs)queueMicrotask(()=>{if(token===generation)void syncCamera(false,true);});
     if (state.profile) resolveProfile();
     else if (!creatingProfile) {
       creatingProfile=true;
@@ -588,7 +645,7 @@ document.addEventListener('visibilitychange', () => {if (!document.hidden) void 
 window.addEventListener('study:camera-changed', () => {
   updatePreviewTimer();
   if (state.active?.cameraMode && state.active.controllerId === cameraController) {
-    if (!cameraState().tracking || cameraState().manuallyPaused || document.hidden) {cameraPauseAt ??= performance.now();cameraResumeSequence=null;}
+    if (!cameraState().tracking || cameraState().manuallyPaused || cameraPageHidden()) {cameraPauseAt ??= performance.now();cameraResumeSequence=null;}
     else if (cameraPauseAt != null && cameraResumeSequence == null) cameraResumeSequence=Math.max(cameraSyncSequence,state.active.sequence || 0)+1;
   }
   paintTimer();void syncCamera(true);
@@ -597,6 +654,7 @@ window.setInterval(() => {
   if (connectedDay && connectedDay !== dateKey()) void connectUser();
   paintTimer();
   void syncCamera();
+  if(state.profile?.wordSnapshot?.activeSinceMs!=null&&!document.hidden)paint();
 }, 1000);
 
 try {

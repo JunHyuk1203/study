@@ -1,5 +1,5 @@
 import './auth.js?v=20261022-1';
-import './data.js?v=20261022-20';
-import './camera.js?v=20261022-15';
-import './integrations.js?v=20261022-20';
-import './planning.js?v=20261022-20';
+import './data.js?v=20261022-22';
+import './camera.js?v=20261022-16';
+import './integrations.js?v=20261022-22';
+import './planning.js?v=20261022-22';

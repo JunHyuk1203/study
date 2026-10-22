@@ -1,6 +1,6 @@
 {
   "auth": {
-    "authorizedDomains": ["localhost", "127.0.0.1", "junhyuk1203.github.io", "study-junhyuk1203-20261021.firebaseapp.com", "study-junhyuk1203-20261021.web.app"],
+    "authorizedDomains": ["localhost", "127.0.0.1", "junhyuk1203.github.io", "study.junhyuk.site", "study-junhyuk1203-20261021.firebaseapp.com", "study-junhyuk1203-20261021.web.app"],
     "providers": {
       "emailPassword": true,
       "googleSignIn": {
