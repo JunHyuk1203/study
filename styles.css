@@ -240,9 +240,9 @@
   .header{height:calc(72 * var(--gui));padding:0 calc(36 * var(--gui))}
   .brand{font-size:calc(24 * var(--gui))}
   .profile-dot{width:calc(34 * var(--gui));height:calc(34 * var(--gui))}
-  .app:has(.bottom-nav)>.header{display:contents}
-  .app:has(.bottom-nav)>.header .brand{position:fixed;top:calc(32 * var(--gui));left:calc(max(0px,(100vw - 1440px)/2) + 24 * var(--gui));z-index:10}
-  .app:has(.bottom-nav)>.header .profile-dot{position:fixed;bottom:calc(24 * var(--gui));left:calc(max(0px,(100vw - 1440px)/2) + 16 * var(--gui));z-index:10;width:calc(152 * var(--gui));height:calc(48 * var(--gui));display:flex;align-items:center;justify-content:flex-start;gap:calc(14 * var(--gui));padding:0 calc(16 * var(--gui));border-radius:calc(14 * var(--gui));font-size:calc(14 * var(--gui))}
+  .app:has(.bottom-nav)>.header{position:fixed;top:0;left:max(0px,calc((100vw - 1440px)/2));z-index:101;width:calc(184 * var(--gui));height:100dvh;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;padding:calc(32 * var(--gui)) calc(16 * var(--gui)) calc(24 * var(--gui));border:0;background:transparent;transform:none;transition:none;pointer-events:none}
+  .app:has(.bottom-nav)>.header .brand{align-self:flex-start;margin-left:calc(8 * var(--gui));pointer-events:auto}
+  .app:has(.bottom-nav)>.header .profile-dot{width:100%;height:calc(48 * var(--gui));flex-shrink:0;display:flex;align-items:center;justify-content:flex-start;gap:calc(14 * var(--gui));padding:0 calc(16 * var(--gui));border-radius:calc(14 * var(--gui));font-size:calc(14 * var(--gui));pointer-events:auto}
   .app:has(.bottom-nav)>.header .profile-dot::after{content:"내 계정";font-weight:600}
   .app:has(.bottom-nav)>.header .profile-dot:hover{background:#dce5d3}
   .app:has(.bottom-nav)>.ai-page,.app:has(.bottom-nav)>.account-page{min-height:100dvh}

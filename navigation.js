@@ -86,14 +86,14 @@
       }
 
       document.documentElement.classList.add('tab-navigation-active');
-      const contentTop = Math.max(0, currentHeader.getBoundingClientRect().bottom);
+      const sideNavigation = window.matchMedia('(min-width: 768px)').matches;
+      const contentTop = sideNavigation ? 0 : Math.max(0, currentHeader.getBoundingClientRect().bottom);
 
       stage = document.createElement('div');
       transition.stage = stage;
       stage.className = 'tab-slide-stage';
       if (openingSheet || closingSheet) stage.classList.add('sheet-slide-stage');
       stage.style.top = `${contentTop}px`;
-      const sideNavigation = window.matchMedia('(min-width: 768px)').matches;
       stage.style.bottom = sideNavigation ? '0px' : `${window.innerHeight - currentNav.getBoundingClientRect().top}px`;
       if (sideNavigation) stage.style.left = `${currentNav.getBoundingClientRect().right}px`;
       stage.setAttribute('aria-hidden', 'true');

@@ -6,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../navigation.js',import.meta.url),'utf8');
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
-function navigationUi() {
+function navigationUi({desktop=false}={}) {
   const clicks={},events={},requests=[],animations=[],stages=[],history=[],fallbacks=[];
   let currentPage='index.html';
   const activeClasses=new Set();
@@ -16,7 +16,7 @@ function navigationUi() {
   }));
   function node() {
     return {style:{},classList:{add(){},remove(){}},remove(){this.removed=true;},append(){},setAttribute(){},querySelector:()=>null,
-      getBoundingClientRect:()=>({top:700,bottom:52}),
+      getBoundingClientRect:()=>({top:700,bottom:desktop?800:52,right:desktop?184:480}),
       animate(frames) {
         let resolve,reject;
         const animation={frames,cancelled:false,finished:new Promise((yes,no)=>{resolve=yes;reject=no;}),
@@ -38,7 +38,7 @@ function navigationUi() {
   const context=vm.createContext({URL,AbortController,Event,
     document:{querySelector:()=>currentApp,documentElement:{classList},body:{append:stage=>stages.push(stage)},
       createElement:()=>node(),addEventListener:(name,handler)=>{clicks[name]=handler;}},
-    window:{location,innerHeight:800,matchMedia:()=>({matches:false}),scrollTo(){},dispatchEvent(){},
+    window:{location,innerHeight:800,matchMedia:query=>({matches:desktop&&query==='(min-width: 768px)'}),scrollTo(){},dispatchEvent(){},
       history:{pushState:(_state,_title,href)=>{history.push(href);location.href=href;}},
       addEventListener:(name,handler)=>{events[name]=handler;}},
     fetch:(href,options)=>new Promise(resolve=>requests.push({href,signal:options.signal,
@@ -52,6 +52,16 @@ function navigationUi() {
     },
   };
 }
+
+test('desktop transitions start at the viewport top beside the fixed sidebar',async()=>{
+  const ui=navigationUi({desktop:true});
+  ui.click('account.html');ui.requests[0].resolve();await settle();
+  assert.equal(ui.stages[0].style.top,'0px');
+  assert.equal(ui.stages[0].style.left,'184px');
+  assert.equal(ui.stages[0].style.bottom,'0px');
+  ui.animations.forEach(animation=>animation.finish());await settle();
+  assert.equal(ui.page(),'account.html');assert.deepEqual(ui.fallbacks,[]);
+});
 
 test('a new tab aborts pending loading and ignores a late obsolete response',async()=>{
   const ui=navigationUi();
