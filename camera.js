@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261021-26';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261022-9';
 // Raw camera frames stay off-screen; only a boolean state reaches the timer.
 const video = document.createElement('video');
 video.autoplay = true;
@@ -15,7 +15,7 @@ let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
 export const cameraController = crypto.randomUUID();
-export function cameraState() { return { enabled, tracking, status, manuallyPaused }; }
+export function cameraState() { return { enabled, tracking, status, message, manuallyPaused }; }
 export function toggleCameraPause() {
   if (!enabled || !ready) return;
   manuallyPaused = !manuallyPaused;
@@ -158,7 +158,7 @@ function acceptResult(data) {
     else setStatus('tracking', '얼굴 인식됨 · 자리 비움 감지 중', true);
   } else {
     presenceSince = null; absentSince ??= now;
-    if (now - absentSince >= 5000) setStatus('paused', '얼굴을 찾지 못했습니다 · 일시정지');
+    if (now - absentSince >= 5000) setStatus('paused', '얼굴 인식에 실패했습니다 · 얼굴이 인식되면 자동 재개');
     else setStatus('scanning', '얼굴을 찾는 중…', tracking);
   }
 }

@@ -33,8 +33,13 @@ function timerUi(skew) {
     document:{hidden:false,querySelectorAll:selector=>selector==='[data-active-timer]'?[display]:[],addEventListener(){}},
     window:{addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
   });
-  vm.runInContext(`${source}\nglobalThis.ui={observeSession,paintTimer};`,context);
-  return {display,camera,handlers,ui:context.ui,tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
+  vm.runInContext(`${source}\nglobalThis.ui={observeSession,paintTimer,syncCamera};`,context);
+  const configure = (send, sessionId = 'session') => {
+    context.send = send;
+    context.sessionId = sessionId;
+    vm.runInContext('call=()=>send;state.profile={activeSessionId:sessionId};', context);
+  };
+  return {display,camera,handlers,ui:context.ui,configure,tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
     cameraMode:true,controllerId:'controller',sequence,accumulatedSeconds:seconds,
     updatedAt:{toMillis:()=>now},activeSinceMs:active?now:null,leaseUntilMs:active?now+30000:null,
   })};
@@ -79,4 +84,49 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
 test('camera display stops extrapolating when its server lease expires',()=>{
   const t=timerUi(6000);t.ui.observeSession(t.snapshot(0));
   t.tick(40000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:30');
+});
+
+test('first detection starts the timer even when the paused sync snapshot is delayed',async()=>{
+  const t=timerUi(0),requests=[];
+  let acknowledge;
+  t.configure(request=>{requests.push(request);return new Promise(resolve=>{acknowledge=resolve;});});
+  t.camera.tracking=false;t.handlers['study:camera-changed']();
+  t.ui.observeSession(t.snapshot(0,false,0));
+  const pending=t.ui.syncCamera();
+  assert.equal(requests[0].sequence,1);
+  t.handlers['study:camera-changed']();
+  t.camera.tracking=true;t.handlers['study:camera-changed']();
+  acknowledge();await pending;
+  assert.equal(requests.length,2);
+  assert.equal(requests[1].tracking,true);
+  assert.equal(requests[1].sequence,2);
+  // Status-only changes during recognition must not move the awaited acknowledgement.
+  t.handlers['study:camera-changed']();
+  acknowledge();await Promise.resolve();
+  t.ui.observeSession(t.snapshot(0,true,2));
+  t.tick(3000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:03');
+});
+
+test('camera pause messages distinguish manual pause, setup, detection failure and connection errors',()=>{
+  const context=vm.createContext({
+    cameraController:'controller',cameraState:()=>({}),getAuthUser:()=>null,
+    document:{hidden:false,addEventListener(){}},window:{addEventListener(){},setInterval(){}},
+  });
+  vm.runInContext(`${source}\nglobalThis.message=cameraTimerMessage;`,context);
+  const message=context.message;
+  assert.match(message({manuallyPaused:true}),/사용자가 수동/);
+  assert.match(message({enabled:true,status:'opening'}),/최초 얼굴 인식을 준비/);
+  assert.match(message({enabled:true,status:'scanning',tracking:false}),/최초 얼굴 인식을 준비/);
+  assert.match(message({enabled:true,status:'paused'}),/얼굴 인식에 실패/);
+  assert.match(message({enabled:true,status:'error'}),/카메라 인식 오류/);
+  assert.match(message({enabled:false,status:'off'}),/카메라가 종료/);
+  assert.match(message({enabled:true,status:'tracking',tracking:true}),/동기화/);
+  assert.match(message({enabled:true,status:'paused',message:'카메라 영상 중단 · 일시정지'}),/카메라 영상 중단/);
+  context.document.hidden=true;
+  assert.match(message({enabled:true,status:'paused'}),/화면을 벗어나/);
+  context.document.hidden=false;
+  vm.runInContext('cameraSyncFailed=true;',context);
+  assert.match(message({enabled:true,status:'tracking'}),/서버 연결/);
+  assert.match(message({manuallyPaused:true}),/사용자가 수동/);
 });

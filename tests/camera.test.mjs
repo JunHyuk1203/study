@@ -75,6 +75,32 @@ test('SVG path interpolation writes actual geometry rather than CSS-only paths',
   assert.equal(mergePath([[0, 0], [10, 10]], [[20, 30], [40, 50]], 1), 'M20.000 30.000L40.000 50.000');
 });
 
+for (const gap of [200, 2999, 3000]) test(`face returning within ${gap}ms keeps the avatar without replaying recognition`, context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };
+  paintAvatar(mount, pose, true, 'tracking', 0);
+  context.mock.timers.tick(MERGE_DURATION_MS);
+  context.mock.timers.tick(700);
+  paintAvatar(mount, null, true, 'scanning', 5000);
+  paintAvatar(mount, null, true, 'scanning', 5000 + gap);
+  assert.equal(mount.dataset.avatarPhase, 'avatar');
+  paintAvatar(mount, pose, true, 'tracking', 5000 + gap);
+  assert.equal(mount.dataset.avatarPhase, 'avatar');
+});
+
+test('face missing longer than three seconds shows recognition again', context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };
+  paintAvatar(mount, pose, true, 'tracking', 0);
+  context.mock.timers.tick(MERGE_DURATION_MS);
+  context.mock.timers.tick(700);
+  paintAvatar(mount, null, true, 'scanning', 5000);
+  paintAvatar(mount, null, true, 'scanning', 8001);
+  assert.equal(mount.dataset.avatarPhase, 'searching');
+  paintAvatar(mount, pose, true, 'tracking', 8200);
+  assert.equal(mount.dataset.avatarPhase, 'success');
+});
+
 test('a single missed frame during the grace period does not cancel the check', context => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
   const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };

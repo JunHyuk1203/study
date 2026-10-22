@@ -1,6 +1,6 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261021-26';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-9';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;
@@ -37,6 +37,7 @@ let busy = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
 let cameraPauseAt = null;
 let cameraResumeSequence = null;
+let cameraSyncSequence = 0;
 let sessionClock = null;
 // Session timestamps come from the server; the device clock may be seconds ahead.
 function observeSession(session) {
@@ -172,6 +173,18 @@ function paint() {
   window.dispatchEvent(new Event('study:data-changed'));
 }
 
+function cameraTimerMessage(camera) {
+  if (camera.manuallyPaused) return '사용자가 수동으로 일시정지했습니다 · 재개 버튼을 눌러 주세요';
+  if (cameraSyncFailed) return '서버 연결을 확인하는 중 · 학습 시간 적립 일시정지';
+  if (camera.status === 'error') return camera.message || '카메라 인식 오류 · 종료 후 다시 시작해 주세요';
+  if (document.hidden) return '화면을 벗어나 일시정지했습니다 · 돌아오면 얼굴을 다시 확인합니다';
+  if (camera.status === 'opening') return '최초 얼굴 인식을 준비하는 중 · 카메라 연결 확인';
+  if (camera.status === 'scanning' && !camera.tracking) return camera.message || '최초 얼굴 인식을 준비하는 중 · 카메라를 바라봐 주세요';
+  if (camera.status === 'paused') return camera.message || '얼굴 인식에 실패했습니다 · 얼굴이 인식되면 자동 재개';
+  if (!camera.enabled) return '카메라가 종료되어 일시정지했습니다 · 얼굴 인식을 다시 시작해 주세요';
+  return '얼굴 인식 완료 · 학습 시작을 서버와 동기화하는 중';
+}
+
 function paintTimer() {
   const started = state.active?.startedAt?.toMillis?.();
   const session = state.active;
@@ -199,9 +212,9 @@ function paintTimer() {
     selector.disabled = busy || Boolean(state.profile?.activeSessionId || previewSession || camera.enabled);
     if (state.active?.subjectId) selector.value = state.active.subjectId;
   }
-  textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraSyncFailed ? '연결 확인 중 · 일시정지' : '스터디캠 일시정지 · 얼굴 인식 시 재개' : '학습 중 · 종료 시 자동 저장' : '학습 시작 대기');
-  if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : '얼굴 인식 대기 · 일시정지');
-  if (camera.manuallyPaused) textAll('[data-timer-state]', '수동 일시정지 · 재개 버튼을 눌러 주세요');
+  textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraTimerMessage(camera) : '학습 중 · 종료 시 자동 저장' : camera.enabled || camera.status === 'error' ? cameraTimerMessage(camera) : '학습 시작 대기');
+  if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : cameraTimerMessage(camera));
+  if (camera.manuallyPaused) textAll('[data-timer-state]', cameraTimerMessage(camera));
   for (const panel of document.querySelectorAll('.timer-panel')) panel.classList.toggle('camera-paused', Boolean(previewSession ? !camera.tracking : isCamera && !running));
 }
 
@@ -209,12 +222,14 @@ async function syncCamera(force = false) {
   const session = state.active;
   if (!session?.cameraMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
   const sessionId = state.profile?.activeSessionId;
-  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false; }
+  if (!sessionId) return;
+  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false; }
   const tracking = cameraState().tracking && !document.hidden;
   if (!tracking && cameraLastTracking === false && !cameraSyncFailed) return;
   if (!force && tracking === cameraLastTracking && Date.now() - cameraLastSync < 10000) return;
   cameraSyncBusy = true;
-  const sequence = (session.sequence || 0) + 1;
+  // Detection can change before Firestore delivers the previous sync.
+  const sequence = cameraSyncSequence = Math.max(cameraSyncSequence, session.sequence || 0) + 1;
   try {
     await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
     cameraLastTracking = tracking;
@@ -268,6 +283,7 @@ async function connectUser() {
         if (token !== generation) return;
         observeSession(record.data() || null);
         paintTimer();
+        void syncCamera();
       }, error => { if (token === generation) notice(errorText(error), true); });
     }
     const newSchool = state.profile?.schoolId || null;
@@ -421,8 +437,10 @@ window.addEventListener('study:navigated', paint);
 window.addEventListener('study:page-prepared', paint);
 window.addEventListener('study:camera-changed', () => {
   updatePreviewTimer();
-  if (!cameraState().tracking) {cameraPauseAt ??= Date.now();cameraResumeSequence=null;}
-  else if (cameraPauseAt != null) cameraResumeSequence=(state.active?.sequence || 0)+1;
+  if (state.active?.cameraMode && state.active.controllerId === cameraController) {
+    if (!cameraState().tracking) {cameraPauseAt ??= Date.now();cameraResumeSequence=null;}
+    else if (cameraPauseAt != null && cameraResumeSequence == null) cameraResumeSequence=Math.max(cameraSyncSequence,state.active.sequence || 0)+1;
+  }
   paintTimer();void syncCamera(true);
 });
 window.setInterval(() => {
