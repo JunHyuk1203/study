@@ -140,7 +140,7 @@ export function facePose(landmarks) {
   };
 }
 
-export function paintAvatar(mount, pose, active, status = 'tracking') {
+export function paintAvatar(mount, pose, active, status = 'tracking', now = performance.now()) {
   if (!mount.querySelector('.cam-avatar')) {
     // Static artwork only. Camera pixels and facial landmarks never enter the DOM.
     mount.innerHTML = `<svg class="cam-avatar" viewBox="0 0 320 320" role="img" aria-label="스터디캠 졸라맨 아바타">
@@ -168,9 +168,14 @@ export function paintAvatar(mount, pose, active, status = 'tracking') {
     </svg>`;
   }
   let presentation = presentations.get(mount);
-  const finishing = active && status === 'scanning' && ['success', 'check'].includes(mount.dataset.avatarPhase) && presentation?.desired === 'recognized';
-  const desired = finishing || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
-  if (!presentation || presentation.desired !== desired) {
+  const returnedAfterLongLoss = status === 'tracking' && presentation?.missingSince != null && now - presentation.missingSince > 3000;
+  if (presentation) {
+    if (active && status === 'scanning') presentation.missingSince ??= now;
+    else presentation.missingSince = null;
+  }
+  const briefLoss = active && status === 'scanning' && presentation?.desired === 'recognized' && now - presentation.missingSince <= 3000;
+  const desired = briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  if (!presentation || presentation.desired !== desired || returnedAfterLongLoss) {
     const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
     presentation?.cancelMerge?.();
