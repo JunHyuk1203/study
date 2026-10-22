@@ -7,6 +7,7 @@ import { generateForUser, usageFor } from './ai-service.js';
 import { schoolMonth, loadSchoolData, loadUpcomingExams } from './school-service.js';
 import { schoolAgent } from './school-agent.js';
 import { cachedBriefing } from './briefing-cache.js';
+import { createDailyNeis } from './neis-cache.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const neisKey = defineSecret('NEIS_API_KEY');
@@ -32,22 +33,15 @@ function input(action) {
 }
 // Never pass provider errors or request URLs to logs or client responses: NEIS
 // authenticates in the URL, whereas Gemini uses a private request header.
-const neisCache = new Map();
-async function neis(endpoint, params) {
-  const cacheId = JSON.stringify([endpoint, params]);
-  const cached = neisCache.get(cacheId);
-  if (cached && cached.expires > Date.now()) return cached.rows;
+const neis = createDailyNeis({db,fetchRows:async (endpoint, params) => {
   try {
     const url = new URL(`https://open.neis.go.kr/hub/${endpoint}`);
     for (const [key,value] of Object.entries({KEY:neisKey.value().trim(), Type:'json', pIndex:1, pSize:1000, ...params})) url.searchParams.set(key, value);
     const response = await fetch(url, {signal:AbortSignal.timeout(18000)});
     if (!response.ok) throw new Error('upstream');
-    const rows = neisRows(await response.json(), endpoint);
-    if (neisCache.size > 120) neisCache.clear();
-    neisCache.set(cacheId, {rows, expires:Date.now()+600000});
-    return rows;
+    return neisRows(await response.json(), endpoint);
   } catch { throw new HttpsError('unavailable', '학교 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'); }
-}
+}});
 export const searchSchools = onCall({...options, secrets:[neisKey]}, async request => {
   const user = uid(request);
   const query = request.data?.query;

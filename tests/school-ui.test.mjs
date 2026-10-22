@@ -24,6 +24,20 @@ function schoolUi() {
 }
 const overview=month=>({calendarRange:{start:`${month}-01`},date:'2026-10-21',meals:[],timetable:[],events:[],errors:{}});
 
+test('calendar selection filters the schedule list, reset restores it, and cached Saturday closures stay hidden',async()=>{
+  const {context,ui,requests,handlers}=schoolUi();
+  const node=tag=>({tag,children:[],append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},hasAttribute:name=>name==='data-school-events'});
+  const list=node('div');context.document.createElement=node;
+  context.document.querySelectorAll=selector=>['[data-school-meals], [data-school-timetable], [data-school-events]','[data-school-events]'].includes(selector)?[list]:[];
+  ui.setMonth('2026-10');await ui.sync();
+  requests[0].resolve({...overview('2026-10'),events:[{date:'2026-10-22',name:'중간고사'},{date:'2026-10-23',name:'체험학습'},{date:'2026-10-24',name:'토요휴업일'}]});await settle();
+  assert.equal(list.children[0].children.length,2);
+  handlers.click({target:{closest:selector=>selector==='[data-school-calendar-day]'?{disabled:false,dataset:{schoolCalendarDay:'2026-10-22'}}:null}});
+  assert.equal(list.children[0].children.length,1);
+  handlers.click({target:{closest:selector=>selector==='[data-school-calendar-all]'?{}:null}});
+  assert.equal(list.children[0].children.length,2);assert.equal(requests.length,1);
+});
+
 test('briefing reuses its slot cache on reopening and only manual refresh forces live generation',async()=>{
   const {context,ui,requests,handlers}=schoolUi();
   context.profileState.user.emailVerified=true;
@@ -42,7 +56,7 @@ test('briefing reuses its slot cache on reopening and only manual refresh forces
 
 test('account school and classroom follow profile loading, saved changes and missing registration',async()=>{
   const dataSource=cacheSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
-    .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split('\ntry {\n  authServices')[0];
+    .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
   const school={textContent:''},classroom={textContent:''};
   const context=vm.createContext({
     getAuthUser:()=>({uid:'account-user'}),cameraState:()=>({}),

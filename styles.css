@@ -111,6 +111,22 @@
 .school-calendar-controls input{min-width:0;flex:1;padding:7px;border:1px solid var(--border);border-radius:8px;background:var(--paper);color:var(--text);font:inherit}
 .school-calendar-controls .secondary-button{width:auto;margin:0;padding:7px 10px;font-size:11px}
 .school-calendar-controls button:disabled,.school-calendar-controls input:disabled{opacity:.45}
+.school-calendar{margin-bottom:18px}
+.school-calendar-weekdays,.school-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.school-calendar-weekdays{margin-bottom:6px;text-align:center;font-size:10px;color:var(--muted)}
+.school-calendar-day{position:relative;min-width:0;min-height:62px;padding:5px 3px;border:1px solid var(--border);border-radius:8px;background:var(--paper);color:var(--text);text-align:left;cursor:pointer;font:inherit}
+.school-calendar-number{display:block;width:22px;line-height:22px;text-align:center;border-radius:50%;font-size:11px}
+.school-calendar-event{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;font-size:9px;line-height:12px;color:var(--green)}
+.school-calendar-more{display:block;font-size:9px;line-height:12px;color:var(--muted)}
+.school-calendar-weekdays>:nth-child(7n+1),.school-calendar-day:nth-child(7n+1) .school-calendar-number{color:#b46759}
+.school-calendar-weekdays>:nth-child(7n),.school-calendar-day:nth-child(7n) .school-calendar-number{color:#648aab}
+.school-calendar-day[aria-current="date"] .school-calendar-number{background:var(--green);color:white}
+.school-calendar-day[aria-pressed="true"]{border-color:var(--green);background:#e9efde}
+.school-calendar-day:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.school-calendar-day:disabled{cursor:default;opacity:.5}
+.school-calendar-reset{width:auto;margin:9px 0 0;padding:5px 0;border:0;background:none;font-size:10px;color:var(--green)}
+.school-calendar-reset:disabled{color:var(--muted);cursor:default}
+@media(max-width:400px){.school-calendar-grid,.school-calendar-weekdays{gap:3px}.school-calendar-day{min-height:54px;padding:4px 2px}.school-calendar-event{font-size:8px}}
 .school-events li{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid var(--border)}
 .school-events li:last-child{border-bottom:0}
 .school-events time{flex:0 0 40px;color:var(--green);font-size:12px;font-variant-numeric:tabular-nums}

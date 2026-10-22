@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 const source=cacheSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
-  .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split('\ntry {\n  authServices')[0];
+  .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
 
 test('camera startup errors keep the focus exit enabled and close without saving a nonexistent session',async()=>{
   const clicks=[],camera={enabled:false,tracking:false,status:'error'};

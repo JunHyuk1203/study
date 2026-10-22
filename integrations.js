@@ -4,6 +4,7 @@ import { firebaseConfig } from './firebase-config.js';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
 import { readCache } from './client-cache.js?v=20261022-11';
 import { briefingPeriod } from './functions/briefing-period.js?v=20261022-11';
+import { renderCalendar } from './school-calendar.js?v=20261022-12';
 
 let callable;
 async function client(name) {
@@ -25,8 +26,9 @@ async function cachedCall(name, data = {}, ttl = 30*60000, force = false) {
   const saved=force?undefined:readCache.get(key);
   if(saved!==undefined)return saved;
   const result=await call(name,force&&name==='getStudyBriefing'?{...data,force:true}:data);
+  if(['getSchoolOverview','getUpcomingExams'].includes(name))ttl=Date.parse(`${period.date}T00:00:00+09:00`)+86400000-Date.now();
   // Partial upstream failures must remain retryable instead of being cached.
-  if(!Object.keys(result.errors||{}).length) readCache.set(key,result,result.expiresAtMs?Math.max(0,result.expiresAtMs-Date.now()):ttl);
+  if(!Object.values(result.errors||{}).some(Boolean)) readCache.set(key,result,result.expiresAtMs?Math.max(0,result.expiresAtMs-Date.now()):ttl);
   return result;
 }
 function errorMessage(error) {
@@ -42,6 +44,7 @@ let schoolSelection = null, searching = false;
 const currentSchoolMonth = () => new Date(Date.now()+9*3600000).toISOString().slice(0,7);
 let calendarMonth = currentSchoolMonth();
 let calendarKey, calendarState = {status:'idle'};
+let selectedSchoolDate=null;
 const schoolRendered = new WeakMap();
 let aiUsage, usageLoading=false, usageError='';
 let briefingKey;
@@ -83,6 +86,11 @@ function renderSchool() {
     control.disabled = Boolean(hint) || calendarState.status==='loading';
     if (control.matches('[data-school-month]')) control.value=calendarMonth;
   }
+  if(selectedSchoolDate&&!selectedSchoolDate.startsWith(calendarMonth))selectedSchoolDate=null;
+  for(const calendar of document.querySelectorAll('[data-school-calendar]'))renderCalendar(calendar,{
+    month:calendarMonth,events:calendarState.status==='ready'&&!calendarState.data.errors?.events?calendarState.data.events||[]:[],
+    selected:selectedSchoolDate,today:new Date(Date.now()+9*3600000).toISOString().slice(0,10),status:calendarState.status,hint,
+  });
   for (const container of document.querySelectorAll('[data-school-meals], [data-school-timetable], [data-school-events]')) {
     const sectionState=container.hasAttribute('data-school-events')?calendarState:schoolState;
     const previous=schoolRendered.get(container);
@@ -96,9 +104,10 @@ function renderSchool() {
     if (container.hasAttribute('data-school-events')) {
       if (data.errors?.events) {container.textContent='학사일정을 불러오지 못했습니다. 새로고침해 주세요.';continue;}
       if (!Array.isArray(data.events)) {container.textContent='학사일정 서비스를 준비 중입니다.';continue;}
-      if (!data.events.length) {container.textContent='선택한 달에 등록된 학사일정이 없습니다.';continue;}
+      const events=data.events.filter(event=>!/^토요\s*휴업일$/.test(event.name)&&(!selectedSchoolDate||event.date===selectedSchoolDate));
+      if (!events.length) {container.textContent=selectedSchoolDate?'선택한 날짜에 등록된 학사일정이 없습니다.':'선택한 달에 등록된 학사일정이 없습니다.';continue;}
       const list=document.createElement('ul');list.className='school-events';
-      for (const event of data.events) {
+      for (const event of events) {
         const item=document.createElement('li');
         const date=document.createElement('time');date.dateTime=event.date;date.textContent=`${Number(event.date.slice(5,7))}/${Number(event.date.slice(8,10))}`;
         const content=document.createElement('div'),title=document.createElement('strong');title.textContent=event.name;content.append(title);
@@ -266,6 +275,9 @@ document.addEventListener('change',event=>{
   }
 });
 document.addEventListener('click',event=>{
+  const calendarDay=event.target.closest('[data-school-calendar-day]');
+  if(calendarDay&&!calendarDay.disabled){selectedSchoolDate=calendarDay.dataset.schoolCalendarDay;for(const node of document.querySelectorAll('[data-school-events]'))schoolRendered.delete(node);renderSchool();}
+  if(event.target.closest('[data-school-calendar-all]')){selectedSchoolDate=null;for(const node of document.querySelectorAll('[data-school-events]'))schoolRendered.delete(node);renderSchool();}
   const monthStep=event.target.closest('[data-school-month-step]');
   if(monthStep&&!monthStep.disabled){
     const date=new Date(`${calendarMonth}-01T00:00:00Z`);date.setUTCMonth(date.getUTCMonth()+Number(monthStep.dataset.schoolMonthStep));

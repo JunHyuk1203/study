@@ -15,6 +15,7 @@ import { schoolDates } from '../functions/integrations-domain.js';
 import { chatWithStudy, getAiUsage, getSchoolOverview, searchSchools, saveSchool } from '../functions/integrations.js';
 import { schoolAgent } from '../functions/school-agent.js';
 import { cachedBriefing } from '../functions/briefing-cache.js';
+import { createDailyNeis } from '../functions/neis-cache.js';
 
 const projectId = 'demo-study';
 function mockProvider(context, generate) {
@@ -326,6 +327,20 @@ test('Firestore briefing cache serves a slot once and rejects simultaneous dupli
   await assert.rejects(cachedBriefing({db,user,force:true,generate}),error=>error.code==='aborted');
   resolve({text:'새 브리핑'});await pending;
   assert.equal((await cachedBriefing({db,user,generate})).text,'새 브리핑');
+});
+
+test('NEIS daily cache survives function instance changes and remains server-only',async()=>{
+  const db=getFirestore(undefined,'study-data');let calls=0;
+  const fetchRows=async()=>{calls++;return [{AA_YMD:'20261022',EVENT_NM:'중간고사'}];};
+  const params={SD_SCHUL_CODE:'qa-cache-school',AA_FROM_YMD:'20261001',AA_TO_YMD:'20261031'};
+  const first=createDailyNeis({db,fetchRows}),second=createDailyNeis({db,fetchRows});
+  assert.equal((await first('SchoolSchedule',params)).length,1);
+  assert.equal((await second('SchoolSchedule',{...params,AA_FROM_YMD:'20261022',AA_TO_YMD:'20261022'})).length,1);
+  assert.equal(calls,1);
+  const rows=await db.collection('neisDailyCache').get();assert.equal(rows.size,1);
+  const client=environment.authenticatedContext('alice').firestore();
+  await assertFails(getDoc(doc(client,'neisDailyCache',rows.docs[0].id)));
+  await assertFails(setDoc(doc(client,'neisDailyCache',rows.docs[0].id),{rows:[]}));
 });
 
 test('email registration/login/logout and Google credentials use Auth without creating DB profiles', async () => {

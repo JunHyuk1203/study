@@ -47,7 +47,7 @@ export function schoolEvents(rows) {
   for (const row of rows) {
     const rawDate = String(row.AA_YMD || '');
     const name = plainText(row.EVENT_NM);
-    if (!/^\d{8}$/.test(rawDate) || !name) continue;
+    if (!/^\d{8}$/.test(rawDate) || !name || /^토요\s*휴업일$/.test(name)) continue;
     const date = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
     const description = plainText(row.EVENT_CNTNT);
     const key = JSON.stringify([date, name, description]);

@@ -1,12 +1,13 @@
 // Explicit production smoke test. Uses and removes only its own temporary account.
 import {createRequire} from 'node:module';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {initializeApp,deleteApp} from 'firebase/app';
 import {getAuth,createUserWithEmailAndPassword,signOut,signInWithEmailAndPassword} from 'firebase/auth';
 import {getFunctions,httpsCallable} from 'firebase/functions';
 import {firebaseConfig} from '../firebase-config.js';
 import {schoolDates} from '../functions/integrations-domain.js';
+import {neisRequestParts} from '../functions/neis-cache.js';
 
 const require=createRequire(import.meta.url),backend=createRequire(new URL('../functions/package.json',import.meta.url));
 const cli=require('firebase-tools/lib/auth'),{requireAuth}=require('firebase-tools/lib/requireAuth');
@@ -25,6 +26,7 @@ const root=`/v1/projects/${firebaseConfig.projectId}/databases/study-data/docume
 const app=initializeApp(firebaseConfig,'school-agent-qa-client'),auth=getAuth(app),functions=getFunctions(app,'asia-northeast3');
 const invoke=(name,data={})=>httpsCallable(functions,name,{timeout:245000})(data).then(result=>result.data);
 const masanExam=process.argv.includes('--masan-exam');
+const cacheOnly=process.argv.includes('--cache-only');
 const email=`qa-school-${randomBytes(10).toString('hex')}@example.test`,password=randomBytes(24).toString('base64url');
 let user,schoolId;
 async function reservations() {
@@ -44,17 +46,29 @@ try {
   await adminAuth(admin).updateUser(user,{emailVerified:true});
   await signOut(auth);await signInWithEmailAndPassword(auth,email,password);
   await invoke('ensureProfile',{displayName:'학교AI연동검증'});
-  if(!masanExam){
+  if(!masanExam&&!cacheOnly){
   const generic=await chat('2+3은 얼마야? 숫자만 답해 줘.');
   assert.match(generic.text,/5/);assert.equal(generic.generations,1);
   console.log('PASS general question: one generation, no school lookup.');
   }
-  const schoolName=masanExam?'마산중앙고등학교':'서울고등학교';
+  const schoolName=masanExam||cacheOnly?'마산중앙고등학교':'서울고등학교';
   const schools=(await invoke('searchSchools',{query:schoolName})).schools;
   const school=schools.find(row=>row.name===schoolName);assert.ok(school);
   schoolId=`${school.officeCode}_${school.schoolCode}`;
   await invoke('saveSchool',{officeCode:school.officeCode,schoolCode:school.schoolCode,grade:'1',className:'1'});
-  if(process.argv.includes('--exam')||masanExam) {
+  if(cacheOnly){
+    const month=schoolDates().date.slice(0,7);
+    const data=await invoke('getSchoolOverview',{month,eventsOnly:true});
+    assert.equal(data.errors.events,false);assert.ok(data.events.every(event=>!/^토요\s*휴업일$/.test(event.name)));
+    const params=neisRequestParts('SchoolSchedule',{ATPT_OFCDC_SC_CODE:school.officeCode,SD_SCHUL_CODE:school.schoolCode,AA_FROM_YMD:`${month.replace('-','')}01`,AA_TO_YMD:`${month.replace('-','')}28`})[0].params;
+    const id=createHash('sha256').update(JSON.stringify(['SchoolSchedule',Object.entries(params).sort(([a],[b])=>a.localeCompare(b))])).digest('hex');
+    const before=(await db.get(`${root}/neisDailyCache/${id}`)).body;
+    assert.equal(before.fields.status.stringValue,'ready');assert.equal(before.fields.date.stringValue,schoolDates().date);
+    const repeated=await invoke('getSchoolOverview',{month,eventsOnly:true});
+    const after=(await db.get(`${root}/neisDailyCache/${id}`)).body;
+    assert.deepEqual(repeated.events,data.events);assert.equal(after.fields.updatedAtMs.integerValue,before.fields.updatedAtMs.integerValue);
+    console.log(`PASS live daily NEIS cache: ${school.name}, ${month}, ${data.events.length} events; repeated request reuses the same saved response, Saturday closures excluded, no AI generation.`);
+  } else if(process.argv.includes('--exam')||masanExam) {
     const schedule=await invoke('getUpcomingExams');
     assert.equal(schedule.school.name,school.name);assert.equal(schedule.errors.events,false);
     assert.ok(schedule.exams.every(exam=>['모의고사','중간고사','기말고사'].includes(exam.type)&&exam.date>=schedule.start&&exam.date<=schedule.end));
