@@ -22,6 +22,7 @@ function navigationUi({desktop=false}={}) {
   const clicks={},events={},requests=[],animations=[],stages=[],history=[],fallbacks=[];
   let currentPage='index.html';
   const activeClasses=new Set();
+  const navClasses=new Set();
   const classList={add:value=>activeClasses.add(value),remove:value=>activeClasses.delete(value)};
   const links=['index.html','study.html','school.html','play.html'].map(href=>({
     getAttribute:name=>name==='href'?href:null,setAttribute(){},removeAttribute(){},
@@ -39,7 +40,7 @@ function navigationUi({desktop=false}={}) {
   function app(page,live=false) {
     const main={page,scrollTop:0,querySelector:()=>null,getBoundingClientRect:()=>({top:52}),
       replaceWith:next=>{currentPage=next.page;liveMain=next;}};
-    const nav={...node(),querySelectorAll:()=>links,querySelector:()=>({getAttribute:()=>page})};
+    const nav={...node(),classList:{add:value=>navClasses.add(value),remove:value=>navClasses.delete(value)},querySelectorAll:()=>links,querySelector:()=>page==='account.html'?null:({getAttribute:()=>page})};
     const header=node();
     return {querySelector:selector=>selector==='main'?(live?liveMain:main):selector==='.bottom-nav'?nav:selector==='.header'?header:null,
       cloneNode:()=>app(page)};
@@ -58,7 +59,7 @@ function navigationUi({desktop=false}={}) {
     DOMParser:class {parseFromString(page){const next=app(page);return {title:page,querySelector:()=>next};}},
   });
   vm.runInContext(source,context);
-  return {requests,animations,stages,history,fallbacks,activeClasses,location,events,page:()=>currentPage,main:()=>liveMain,
+  return {requests,animations,stages,history,fallbacks,activeClasses,navClasses,location,events,page:()=>currentPage,main:()=>liveMain,
     click(page) {
       clicks.click({button:0,preventDefault(){},target:{closest:()=>({href:`http://localhost/${page}`,hasAttribute:()=>false})}});
     },
@@ -123,6 +124,23 @@ test('the current tab can cancel loading and browser back can interrupt a slide'
   ui.events.popstate();ui.requests[2].resolve();await settle();
   ui.animations.slice(-2).forEach(animation=>animation.finish());await settle();
   assert.equal(ui.page(),'index.html');assert.deepEqual(ui.history,[]);assert.deepEqual(ui.fallbacks,[]);
+});
+
+test('returning from account reveals the selected tab in place on mobile and desktop',async()=>{
+  for(const desktop of [false,true]) {
+    const ui=navigationUi({desktop});
+    ui.click('account.html');ui.requests[0].resolve();await settle();
+    assert.equal(ui.navClasses.has('selection-reveal'),false);
+    ui.animations.slice(-2).forEach(animation=>animation.finish());await settle();
+    ui.click('school.html');ui.requests[1].resolve();await settle();
+    assert.equal(ui.navClasses.has('selection-reveal'),true);
+    ui.animations.slice(-2).forEach(animation=>animation.finish());await settle();
+    assert.equal(ui.page(),'school.html');
+    ui.click('study.html');ui.requests[2].resolve();await settle();
+    assert.equal(ui.navClasses.has('selection-reveal'),false);
+    ui.animations.slice(-2).forEach(animation=>animation.finish());await settle();
+    assert.deepEqual(ui.fallbacks,[]);
+  }
 });
 
 test('the account opens vertically and returns downward while AI remains a separate route',async()=>{
