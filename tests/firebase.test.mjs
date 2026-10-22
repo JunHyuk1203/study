@@ -376,7 +376,7 @@ test('word cleanup closes expired leases and leaves renewed sessions active',asy
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,null);
 });
 
-test('word handoff finishes camera before creating word session and blocks a concurrent camera restart',async()=>{
+test('word handoff pauses the same camera and resumes after idle, re-entry and word finish without double credit',async()=>{
   const db=getFirestore(undefined,'study-data'),auth={uid:'word-camera-stop-ack',token:{email_verified:true}};
   const controllerId='12345678-1234-1234-1234-123456789abc',start=()=>startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
   await ensureProfile.run({auth,data:{displayName:'종료확인'}});
@@ -386,20 +386,29 @@ test('word handoff finishes camera before creating word session and blocks a con
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().wordStudySessionId,undefined);
   const acks=await Promise.all([prepareWordStudy.run({auth,data:{}}),prepareWordStudy.run({auth,data:{}})]);
   assert.ok(acks.every(row=>row.cameraStopped));
-  const stopped=(await ref.get()).data();assert.equal(stopped.status,'finished');assert.ok(stopped.creditedSeconds>=5);
-  assert.equal((await db.doc(`users/${auth.uid}/stats/summary`).get()).data().sessionCount,1);
-  await assert.rejects(start,e=>e.code==='failed-precondition');
+  const paused=(await ref.get()).data();assert.equal(paused.status,'active');assert.equal(paused.activeSinceMs,null);assert.ok(paused.accumulatedSeconds>=5);
+  await assert.rejects(start,e=>e.code==='already-exists');
   const word=await startWordStudy.run({auth,data:{controllerId}});
-  assert.equal(word.session.cameraSessionId,null);
-  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,word.sessionId);
-  await assert.rejects(()=>syncStudyCamera.run({auth,data:{sessionId:camera.sessionId,controllerId,sequence:100,tracking:true}}),e=>e.code==='failed-precondition');
+  assert.equal(word.session.cameraSessionId,camera.sessionId);
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,camera.sessionId);
+  const sync=async()=>syncStudyCamera.run({auth,data:{sessionId:camera.sessionId,controllerId,sequence:(await ref.get()).data().sequence+1,tracking:true}});
+  assert.equal((await sync()).session.activeSinceMs,null);
   assert.ok((await syncWordStudy.run({auth,data:{sessionId:word.sessionId,controllerId,sequence:1,tracking:true,present:true}})).session.activeSinceMs!=null);
+  assert.equal((await sync()).session.activeSinceMs,null);
+  await syncWordStudy.run({auth,data:{sessionId:word.sessionId,controllerId,sequence:2,tracking:false,present:true}});
+  assert.ok((await sync()).session.activeSinceMs!=null);
+  assert.equal((await ref.get()).data().accumulatedSeconds,paused.accumulatedSeconds);
+  await syncWordStudy.run({auth,data:{sessionId:word.sessionId,controllerId,sequence:3,tracking:true,present:true}});
+  assert.equal((await sync()).session.activeSinceMs,null);
   await finishStudySession.run({auth,data:{sessionId:word.sessionId}});
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,camera.sessionId);
+  assert.ok((await sync()).session.activeSinceMs!=null);
+  await finishStudySession.run({auth,data:{sessionId:camera.sessionId}});
   assert.ok((await start()).sessionId);
   await assert.rejects(()=>prepareWordStudy.run({data:{}}),e=>e.code==='unauthenticated');
 });
 
-test('legacy overlapping sessions cannot credit word time until the active camera is finished',async()=>{
+test('legacy linked sessions pause camera credit atomically before starting word credit',async()=>{
   const db=getFirestore(undefined,'study-data'),auth={uid:'word-camera-legacy',token:{email_verified:true}};
   const controllerId='12345678-1234-1234-1234-123456789abc';
   await ensureProfile.run({auth,data:{displayName:'기존기록전환'}});
@@ -408,13 +417,38 @@ test('legacy overlapping sessions cannot credit word time until the active camer
   await wordRef.set({uid:auth.uid,subjectId:'other',source:'superword',activityMode:true,status:'active',controllerId,sequence:0,startedAt:now,createdAt:now,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraSessionId:camera.sessionId});
   await db.doc(`users/${auth.uid}`).update({wordStudySessionId:wordRef.id,wordCameraSessionId:camera.sessionId});
   const input={sessionId:wordRef.id,controllerId,sequence:1,tracking:true,present:true};
-  await assert.rejects(()=>syncWordStudy.run({auth,data:input}),e=>e.code==='failed-precondition');
-  assert.equal((await wordRef.get()).data().activeSinceMs,null);
+  assert.ok((await syncWordStudy.run({auth,data:input})).session.activeSinceMs!=null);
+  assert.equal((await db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`).get()).data().activeSinceMs,null);
   await prepareWordStudy.run({auth,data:{}});
-  assert.equal((await db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`).get()).data().status,'finished');
+  const paused=(await db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`).get()).data();
+  assert.equal(paused.status,'active');assert.equal(paused.activeSinceMs,null);
   assert.ok((await syncWordStudy.run({auth,data:input})).session.activeSinceMs!=null);
   await finishStudySession.run({auth,data:{sessionId:wordRef.id}});
-  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,null);
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,camera.sessionId);
+});
+
+test('a killed word app releases camera credit after its ten-second lease, before scheduled cleanup',async()=>{
+  const db=getFirestore(undefined,'study-data'),auth={uid:'word-camera-expiry',token:{email_verified:true}};
+  const controllerId='12345678-1234-1234-1234-123456789abc';
+  await ensureProfile.run({auth,data:{displayName:'자동재개'}});
+  const camera=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  await prepareWordStudy.run({auth,data:{}});
+  const word=await startWordStudy.run({auth,data:{controllerId}});
+  assert.equal(word.session.presenceUntilMs-word.session.serverNowMs,10000);
+  const synced=await syncWordStudy.run({auth,data:{sessionId:word.sessionId,controllerId,sequence:1,tracking:true,present:true}});
+  assert.equal(synced.session.leaseUntilMs-synced.session.activeSinceMs,10000);
+  const ref=db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`);
+  const paused=(await ref.get()).data();
+  assert.equal(paused.wordLeaseUntilMs-paused.updatedAt.toMillis(),10000);
+  await ref.update({wordLeaseUntilMs:Date.now()-1});
+  const resumed=await syncStudyCamera.run({auth,data:{sessionId:camera.sessionId,controllerId,sequence:100,tracking:true}});
+  assert.ok(resumed.session.activeSinceMs!=null);assert.equal(resumed.session.wordPaused,false);
+  assert.equal(resumed.session.accumulatedSeconds,0);
+  await db.doc(`users/${auth.uid}/sessions/${word.sessionId}`).update({presenceUntilMs:Date.now()-1});
+  await db.doc(`wordStudyLeases/${word.sessionId}`).update({expiresAtMs:Date.now()-1});
+  await closeExpiredWordStudies.run({});
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,camera.sessionId);
+  assert.equal((await ref.get()).data().status,'active');
 });
 
 test('abandoned handoff reservations expire instead of permanently blocking study',async()=>{

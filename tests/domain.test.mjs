@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, validDisplayName, weekKey } from '../functions/domain.js';
+import { advanceStreak, checkpointCamera, MAX_SESSION_MS, WORD_LEASE_MS, splitStudyInterval, validDisplayName, weekKey } from '../functions/domain.js';
 import {wordLiveSeconds} from '../word-time.js';
 import {remainingWordSegments} from '../functions/word-stats.js';
 
@@ -48,6 +48,15 @@ test('camera pauses exclude gaps and lease expiry cannot backfill offline time',
   assert.equal(session.accumulatedSeconds, 40);
   assert.equal(session.activeSinceMs, null);
   assert.equal(checkpointCamera(session, start + 180000, false).accumulatedSeconds, 40);
+});
+
+test('word credit ends after ten seconds without a heartbeat and never backfills the gap',()=>{
+  const start=Date.parse('2026-10-23T00:00:00Z');
+  let session={startedAtMs:start,...checkpointCamera({startedAtMs:start},start,true,WORD_LEASE_MS)};
+  assert.equal(session.leaseUntilMs,start+10000);
+  session={...session,...checkpointCamera(session,start+60000,true,WORD_LEASE_MS)};
+  assert.equal(session.accumulatedSeconds,10);
+  assert.equal(session.activeSinceMs,start+60000);
 });
 
 test('camera heartbeat splits midnight and stops at the session duration limit', () => {

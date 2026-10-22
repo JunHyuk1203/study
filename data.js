@@ -44,6 +44,7 @@ let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
 let cameraSyncEpoch=0,cameraHandoffDisplay=null;
+let cameraLastWordPaused=null;
 let sessionClock = null;
 let wordClock=null;
 let cameraDisplay = null;
@@ -77,6 +78,7 @@ function resetCameraSync() {
   cameraSyncEpoch++;cameraSyncBusy=false;cameraSyncId=null;cameraSyncSequence=0;
   cameraLastSync=0;cameraLastTracking=null;cameraSyncFailed=false;cameraSyncFailures=0;
   cameraRetryAt=0;cameraLastAttemptTracking=null;cameraPauseAt=null;cameraResumeSequence=null;
+  cameraLastWordPaused=null;
 }
 function observeActiveSnapshot(session,sessionId,watchGeneration=generation) {
   if(watchGeneration!==generation||activeId!==sessionId||state.profile?.activeSessionId!==sessionId)return;
@@ -363,6 +365,8 @@ async function syncCamera(force = false, wordChanged = false) {
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
   if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
+  const wordPaused=wordAppInUse();
+  wordChanged ||= wordPaused!==cameraLastWordPaused;
   const tracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
   if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
   if (!tracking && cameraLastTracking === false && !cameraSyncFailed && !wordChanged) return;
@@ -377,7 +381,9 @@ async function syncCamera(force = false, wordChanged = false) {
     const result = await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
+    if(result?.data?.ignored)cameraResumeSequence=Math.max(cameraResumeSequence||0,(state.active?.sequence||sequence)+1);
     cameraLastTracking = tracking;
+    cameraLastWordPaused = wordPaused;
     cameraSyncFailed = false;
     cameraSyncFailures=0;cameraRetryAt=0;
   } catch {
@@ -389,7 +395,7 @@ async function syncCamera(force = false, wordChanged = false) {
     if(requestEpoch!==cameraSyncEpoch)return;
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
     const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
-    if (tracking !== currentTracking || !cameraSyncFailed && cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence) void syncCamera(true);
+    if (tracking !== currentTracking || !cameraSyncFailed && (wordPaused!==wordAppInUse() || cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence)) void syncCamera(true);
   }
 }
 

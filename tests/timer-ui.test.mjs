@@ -209,6 +209,48 @@ test('SP word counting freezes the camera display and menu/idle state releases i
   t.ui.observeSession(t.snapshot(2,true,3));t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
 });
 
+test('ten seconds without a word response requests camera resumption at the expiry boundary',async()=>{
+  const t=timerUi(0),requests=[];
+  t.configure(async input=>{requests.push(input);return {data:{session:{...t.snapshot(2,requests.length>1,input.sequence),serverNowMs:requests.length===1?100000:110000}}};},'camera');
+  t.ui.observeSession(t.snapshot(2,false));
+  t.ui.setProfile({activeSessionId:'camera',wordCameraSessionId:'camera',wordPresenceUntilMs:110000});
+  await t.ui.syncCamera();assert.equal(requests.length,1);
+  t.tick(9999);await t.ui.syncCamera();assert.equal(requests.length,1);
+  t.tick(1);
+  await t.ui.syncCamera();assert.equal(requests.length,2);
+  t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
+  assert.equal(t.camera.enabled,true);assert.equal(t.stops().stopped,0);
+});
+
+test('word exit during an in-flight camera pause queues a fresh resume acknowledgement',async()=>{
+  const t=timerUi(0),requests=[];let reply;
+  t.configure(input=>{requests.push(input);return new Promise(resolve=>{reply=resolve;});},'camera');
+  t.ui.observeSession(t.snapshot(2,false));
+  t.ui.setProfile({activeSessionId:'camera',wordCameraSessionId:'camera',wordPresenceUntilMs:130000});
+  const pending=t.ui.syncCamera();assert.equal(requests.length,1);
+  t.ui.setProfile({activeSessionId:'camera',wordPresenceUntilMs:null});
+  await t.ui.syncCamera(false,true);assert.equal(requests.length,1);
+  reply({data:{session:{...t.snapshot(2,false,requests[0].sequence),serverNowMs:100000}}});
+  await pending;assert.equal(requests.length,2);
+  reply({data:{session:{...t.snapshot(2,true,requests[1].sequence),serverNowMs:100000}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
+  assert.equal(t.stops().stopped,0);
+});
+
+test('a camera sequence advanced by word heartbeats retries from the server sequence',async()=>{
+  const t=timerUi(0),requests=[];
+  t.configure(async input=>{
+    requests.push(input);
+    const ignored=requests.length===1;
+    return {data:{ignored,session:{...t.snapshot(2,!ignored,ignored?20:input.sequence),serverNowMs:100000}}};
+  },'camera');
+  t.ui.observeSession(t.snapshot(2,false));
+  await t.ui.syncCamera();await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(requests.map(row=>row.sequence),[2,21]);
+  t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
+});
+
 test('camera display stops extrapolating when its server lease expires',()=>{
   const t=timerUi(6000);t.ui.observeSession(t.snapshot(0));
   t.tick(40000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:30');

@@ -3,7 +3,7 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { creditFocusTime } from './focus-time.js';
-import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, validDisplayName, weekKey } from './domain.js';
+import { advanceStreak, checkpointCamera, MAX_SESSION_MS, WORD_LEASE_MS, splitStudyInterval, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
 import {settleWordStats} from './word-stats.js';
@@ -94,7 +94,7 @@ export const syncStudyCamera = onCall(options, async request => {
     // the profile again on every heartbeat adds no protection to that invariant.
     if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
-    if (sequence <= session.sequence) return { ignored: true };
+    if (sequence <= session.sequence) return { ignored: true, session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()} };
     const wordPaused=Boolean(session.wordSessionId && session.wordLeaseUntilMs>Date.now());
     const update = {...checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking&&!wordPaused),wordPaused,...(!wordPaused?{wordSessionId:null,wordLeaseUntilMs:null}:{wordSessionId:session.wordSessionId,wordLeaseUntilMs:session.wordLeaseUntilMs})};
     const updatedAt = Timestamp.now();
@@ -105,24 +105,29 @@ export const syncStudyCamera = onCall(options, async request => {
 
 export const finishStudySession = onCall(options, request => finishSession(userId(request, true), request.data?.sessionId));
 
-// The reply acknowledges that camera credit has finished before word tracking.
+// Pause camera credit before word tracking, keeping its controller alive to resume.
 export const prepareWordStudy = onCall(options, async request => {
   const uid=userId(request,true),profileRef=db.doc(`users/${uid}`);
-  const cameraId=await db.runTransaction(async tx=>{
+  return db.runTransaction(async tx=>{
     const profile=(await tx.get(profileRef)).data();
     if(!profile)throw new HttpsError('failed-precondition','스터디 계정을 먼저 설정해 주세요.');
     const sessionId=profile.activeSessionId;
     const session=sessionId?(await tx.get(profileRef.collection('sessions').doc(sessionId))).data():null;
     if(session?.status==='active'&&!session.cameraMode){
-      if(session.source==='superword')return null;
+      if(session.source==='superword')return {cameraStopped:true};
       throw new HttpsError('already-exists','진행 중인 학습을 먼저 종료해 주세요.');
     }
-    // Reserve the handoff before ending the camera, closing the restart race.
-    tx.update(profileRef,{wordHandoffUntilMs:Date.now()+30000});
-    return session?.status==='active'&&session.cameraMode?sessionId:null;
+    const now=Timestamp.now(),until=now.toMillis()+WORD_LEASE_MS;
+    const cameraId=session?.status==='active'&&session.cameraMode?sessionId:null;
+    if(cameraId)tx.update(profileRef.collection('sessions').doc(cameraId),{
+      ...checkpointCamera({...session,startedAtMs:session.startedAt.toMillis()},now.toMillis(),false),
+      wordSessionId:profile.wordStudySessionId||'handoff',wordLeaseUntilMs:until,wordPaused:true,
+      sequence:(session.sequence||0)+1,updatedAt:now,
+    });
+    tx.update(profileRef,{wordHandoffUntilMs:until,...(cameraId?{wordCameraSessionId:cameraId,wordPresenceUntilMs:until}:{})});
+    // Keep the existing response field for older word clients: credit is stopped.
+    return {cameraStopped:true,...(cameraId?{pausedSessionId:cameraId}:{})};
   });
-  if(cameraId)await finishSession(uid,cameraId);
-  return {cameraStopped:true,...(cameraId?{stoppedSessionId:cameraId}:{})};
 });
 
 async function finishSession(uid, sessionId, expiredBeforeMs = null) {
@@ -136,7 +141,7 @@ async function finishSession(uid, sessionId, expiredBeforeMs = null) {
     const session = sessionDoc.data();
     // Recheck inside the transaction: a heartbeat may have renewed this lease
     // after the cleanup query selected it.
-    if (expiredBeforeMs != null && (!session.activityMode || (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+30000) > expiredBeforeMs)) return {notExpired:true};
+    if (expiredBeforeMs != null && (!session.activityMode || (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+WORD_LEASE_MS) > expiredBeforeMs)) return {notExpired:true};
     if (session.status === 'finished') return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
     const profile = profileDoc.data();
     const wordSession=session.source==='superword';
@@ -181,7 +186,7 @@ async function finishSession(uid, sessionId, expiredBeforeMs = null) {
 }
 
 // A browser can be killed before pagehide or its keepalive request runs.
-// Expired leases credit at most the final 30-second server-observed window.
+// Expired word leases credit at most the final 10-second server-observed window.
 export const closeExpiredWordStudies = onSchedule({...options,schedule:'every 5 minutes',timeZone:'Asia/Seoul'}, async () => {
   const cutoff = Date.now();
   const leases = await db.collection('wordStudyLeases').where('expiresAtMs','<=',cutoff).limit(100).get();
