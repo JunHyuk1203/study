@@ -1,7 +1,7 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
 import { readCache } from './client-cache.js?v=20261022-11';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-9';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-14';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
 const KST = 9 * 3600000;
@@ -41,10 +41,28 @@ let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
 let sessionClock = null;
+let cameraDisplay = null;
+// Keep a monotonic display across delayed checkpoints and recognition changes.
+function updateCameraDisplay() {
+  if (!cameraDisplay && (!state.active?.cameraMode || state.active.controllerId !== cameraController)) return;
+  const localMs = performance.now();
+  if (cameraDisplay) {
+    if (cameraDisplay.running) cameraDisplay.totalMs += Math.max(0, Math.min(localMs, cameraDisplay.untilMs) - cameraDisplay.localMs);
+    cameraDisplay.localMs = localMs;
+  }
+  const session = state.active;
+  if (!session?.cameraMode || session.controllerId !== cameraController) {cameraDisplay=null;return;}
+  const now = sessionNow();
+  cameraDisplay ??= {totalMs:(session.accumulatedSeconds || 0)*1000 + (session.activeSinceMs != null ? Math.max(0, Math.min(now, session.leaseUntilMs) - session.activeSinceMs) : 0), localMs};
+  const camera = cameraState();
+  cameraDisplay.running = session.activeSinceMs != null && camera.tracking && !camera.manuallyPaused && !document.hidden && !cameraSyncFailed && cameraResumeSequence == null;
+  cameraDisplay.untilMs = localMs + Math.max(0, (session.leaseUntilMs || 0) - now);
+}
 // Session timestamps come from the server; the device clock may be seconds ahead.
 function observeSession(session) {
   // Callable acknowledgements can arrive before an older listener snapshot.
-  if (session?.cameraMode && state.active?.cameraMode && session.controllerId === state.active.controllerId && session.sequence < state.active.sequence) return;
+  if (session?.cameraMode && state.active?.cameraMode && session.controllerId === state.active.controllerId && session.sequence <= state.active.sequence) return;
+  updateCameraDisplay();
   const serverMs = (session?.updatedAt || session?.createdAt || session?.startedAt)?.toMillis?.();
   sessionClock = Number.isFinite(serverMs) ? {serverMs, localMs:performance.now()} : null;
   if (!session) {cameraPauseAt=null;cameraResumeSequence=null;}
@@ -52,6 +70,7 @@ function observeSession(session) {
     cameraResumeSequence=null;cameraPauseAt=null;
   }
   state.active = session;
+  updateCameraDisplay();
 }
 function sessionNow() {
   return sessionClock ? sessionClock.serverMs + Math.max(0, performance.now() - sessionClock.localMs) : Date.now();
@@ -68,10 +87,10 @@ let authResolved = false;
 export function getStudyData() { return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser()}; }
 function updatePreviewTimer() {
   if (!previewSession) return;
-  const active = cameraState().tracking && !document.hidden;
-  if (active && previewSession.activeSince == null) previewSession.activeSince = Date.now();
+  const active = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
+  if (active && previewSession.activeSince == null) previewSession.activeSince = performance.now();
   if (!active && previewSession.activeSince != null) {
-    previewSession.totalMs += Math.max(0, Date.now() - previewSession.activeSince);
+    previewSession.totalMs += Math.max(0, performance.now() - previewSession.activeSince);
     previewSession.activeSince = null;
   }
 }
@@ -203,17 +222,18 @@ function cameraTimerPending(camera) {
 }
 
 function paintTimer() {
+  updateCameraDisplay();
   const started = state.active?.startedAt?.toMillis?.();
   const session = state.active;
   const camera = cameraState();
   const isCamera = session?.cameraMode;
   const now = isCamera ? sessionNow() : Date.now();
   const expired = isCamera && (session.activeSinceMs == null || now >= session.leaseUntilMs);
-  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || cameraSyncFailed || cameraResumeSequence != null);
+  const locallyPaused = isCamera && session.controllerId === cameraController && (!camera.tracking || camera.manuallyPaused || document.hidden || cameraSyncFailed || cameraResumeSequence != null);
   const running = isCamera && !expired && !locallyPaused;
-  const pausedAt = cameraPauseAt == null ? now : now - Math.max(0, Date.now() - cameraPauseAt);
+  const pausedAt = cameraPauseAt == null ? now : now - Math.max(0, performance.now() - cameraPauseAt);
   const windowEnd = Math.min(now, session?.leaseUntilMs || 0, locallyPaused ? pausedAt : Infinity);
-  const elapsed = previewSession ? (previewSession.totalMs + (previewSession.activeSince != null ? Date.now() - previewSession.activeSince : 0)) / 1000 : isCamera ? (session.accumulatedSeconds || 0) + (session.activeSinceMs != null ? Math.max(0, (windowEnd - session.activeSinceMs) / 1000) : 0) : started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
+  const elapsed = previewSession ? (previewSession.totalMs + (previewSession.activeSince != null ? performance.now() - previewSession.activeSince : 0)) / 1000 : cameraDisplay ? cameraDisplay.totalMs / 1000 : isCamera ? (session.accumulatedSeconds || 0) + (session.activeSinceMs != null ? Math.max(0, (windowEnd - session.activeSinceMs) / 1000) : 0) : started ? Math.min(43200, Math.max(0, (Date.now() - started) / 1000)) : 0;
   textAll('[data-active-timer]', clock(elapsed));
   for (const button of document.querySelectorAll('[data-camera-pause]')) {
     button.disabled = busy || !camera.enabled || ['opening', 'error', 'off'].includes(camera.status);
@@ -246,11 +266,11 @@ async function syncCamera(force = false) {
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
   if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
-  const tracking = cameraState().tracking && !document.hidden;
+  const tracking = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
   if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
   if (!tracking && cameraLastTracking === false && !cameraSyncFailed) return;
   // Status/pose changes with the same presence must not trigger extra writes.
-  if (tracking === cameraLastTracking && !cameraSyncFailed && Date.now() - cameraLastSync < 20000) return;
+  if (tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 20000) return;
   cameraSyncBusy = true;
   cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
@@ -262,12 +282,13 @@ async function syncCamera(force = false) {
     cameraSyncFailed = false;
     cameraSyncFailures=0;cameraRetryAt=0;
   } catch {
-    cameraSyncFailed = true; cameraPauseAt ??= Date.now();
+    cameraSyncFailed = true; cameraPauseAt ??= performance.now();
     cameraRetryAt=Date.now()+Math.min(60000,5000*2**Math.min(cameraSyncFailures++,4));
   }
   finally {
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
-    if (tracking !== (cameraState().tracking && !document.hidden)) void syncCamera(true);
+    const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
+    if (tracking !== currentTracking || !cameraSyncFailed && cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence) void syncCamera(true);
   }
 }
 
@@ -544,7 +565,7 @@ document.addEventListener('visibilitychange', () => {if (!document.hidden) void 
 window.addEventListener('study:camera-changed', () => {
   updatePreviewTimer();
   if (state.active?.cameraMode && state.active.controllerId === cameraController) {
-    if (!cameraState().tracking) {cameraPauseAt ??= Date.now();cameraResumeSequence=null;}
+    if (!cameraState().tracking || cameraState().manuallyPaused || document.hidden) {cameraPauseAt ??= performance.now();cameraResumeSequence=null;}
     else if (cameraPauseAt != null && cameraResumeSequence == null) cameraResumeSequence=Math.max(cameraSyncSequence,state.active.sequence || 0)+1;
   }
   paintTimer();void syncCamera(true);

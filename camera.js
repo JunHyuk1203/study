@@ -17,7 +17,7 @@ let manuallyPaused = false;
 export const cameraController = crypto.randomUUID();
 export function cameraState() { return { enabled, tracking, status, message, manuallyPaused }; }
 export function toggleCameraPause() {
-  if (!enabled || !ready) return;
+  if (!enabled) return;
   manuallyPaused = !manuallyPaused;
   presenceSince = absentSince = null;
   setStatus('scanning', '얼굴을 다시 확인하는 중…');

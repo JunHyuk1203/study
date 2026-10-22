@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFile } from 'node:fs/promises';
 import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURATION_MS, paintAvatar } from '../camera-avatar.js';
+
+test('manual pause during engine setup survives detection and visibility changes until explicit resume',async()=>{
+  let now=0;
+  const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  vm.runInContext(`${source}\nenabled=true;globalThis.camera={toggleCameraPause,cameraState,acceptResult,setStatus};`,context);
+  const camera=context.camera;
+  camera.toggleCameraPause();assert.equal(camera.cameraState().manuallyPaused,true);
+  for(now=0;now<=10000;now+=1000)camera.acceptResult({present:true});
+  document.hidden=true;handlers.visibilitychange();document.hidden=false;handlers.visibilitychange();
+  camera.setStatus('tracking','detected',true);
+  assert.equal(camera.cameraState().tracking,false);assert.equal(camera.cameraState().status,'paused');
+  camera.toggleCameraPause();assert.equal(camera.cameraState().manuallyPaused,false);
+  camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,false);
+  now+=2000;camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,true);
+});
 
 test('avatar follows mirrored head position and tilt within safe display bounds', () => {
   assert.deepEqual(facePose({ 1: { x: .5, y: .5 }, 33: { x: .3, y: .4 }, 263: { x: .7, y: .4 } }), { x: 0, y: 0, roll: -0 });

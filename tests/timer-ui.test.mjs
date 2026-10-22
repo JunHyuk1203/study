@@ -40,7 +40,7 @@ function timerUi(skew) {
     context.sessionId = sessionId;
     vm.runInContext('call=()=>send;state.profile={activeSessionId:sessionId};', context);
   };
-  return {display,camera,handlers,ui:context.ui,configure,tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
+  return {display,camera,handlers,ui:context.ui,configure,shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
     cameraMode:true,controllerId:'controller',sequence,accumulatedSeconds:seconds,
     updatedAt:{toMillis:()=>now},activeSinceMs:active?now:null,leaseUntilMs:active?now+30000:null,
   })};
@@ -102,6 +102,52 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
 test('camera display stops extrapolating when its server lease expires',()=>{
   const t=timerUi(6000);t.ui.observeSession(t.snapshot(0));
   t.tick(40000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:30');
+});
+
+test('delayed checkpoints never add paused gaps or rewind the displayed time',()=>{
+  const t=timerUi(0);
+  t.ui.observeSession(t.snapshot(0));
+  t.tick(3500);t.camera.tracking=false;t.handlers['study:camera-changed']();
+  assert.equal(t.display.textContent,'00:00:03');
+  t.tick(8000);t.ui.observeSession(t.snapshot(11,false,2));t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:03');
+  t.camera.tracking=true;t.handlers['study:camera-changed']();
+  t.tick(2000);t.ui.observeSession(t.snapshot(11,true,3));
+  t.tick(2000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
+  t.ui.observeSession(t.snapshot(4,true,4));t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:05');
+});
+
+test('wall clock changes and duplicate snapshots cannot shift an active display',()=>{
+  const t=timerUi(0),snapshot=t.snapshot(0);
+  t.ui.observeSession(snapshot);t.tick(3000);t.ui.paintTimer();
+  t.ui.observeSession(snapshot);t.shiftClock(60000);t.tick(2000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:05');
+  t.camera.tracking=false;t.handlers['study:camera-changed']();
+  t.shiftClock(-120000);t.tick(8000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:05');
+});
+
+test('manual pause blocks timer and sync even if tracking is still true',async()=>{
+  const t=timerUi(0),requests=[];
+  t.configure(async request=>{requests.push(request);return {data:{session:{sequence:request.sequence,serverNowMs:100000,activeSinceMs:null,leaseUntilMs:null}}};});
+  t.ui.observeSession(t.snapshot(0));t.tick(3000);
+  t.camera.manuallyPaused=true;t.handlers['study:camera-changed']();
+  await Promise.resolve();t.tick(8000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:03');
+  assert.equal(requests[0].tracking,false);
+});
+
+test('recognition bouncing during a heartbeat schedules a fresh resume acknowledgement',async()=>{
+  const t=timerUi(0),requests=[];let acknowledge;
+  t.configure(request=>{requests.push(request);return new Promise(resolve=>{acknowledge=()=>resolve({data:{session:{sequence:request.sequence,serverNowMs:100000,activeSinceMs:100000,leaseUntilMs:130000,accumulatedSeconds:0}}});});});
+  t.ui.observeSession(t.snapshot(0));const pending=t.ui.syncCamera();
+  t.camera.tracking=false;t.handlers['study:camera-changed']();
+  t.camera.tracking=true;t.handlers['study:camera-changed']();
+  acknowledge();await pending;
+  assert.equal(requests.length,2);assert.equal(requests[1].tracking,true);
+  acknowledge();await new Promise(resolve=>setImmediate(resolve));t.tick(2000);t.ui.paintTimer();
+  assert.equal(t.display.textContent,'00:00:02');
 });
 
 test('camera starts from the server reply without waiting for a session listener',async()=>{
@@ -220,6 +266,7 @@ test('first detection starts the timer even when the paused sync snapshot is del
 test('camera setup and synchronization use a normal pending state while real failures remain paused',()=>{
   const classes=new Set(),camera={enabled:true,tracking:false,status:'scanning'},message={textContent:''};
   const context=vm.createContext({
+    performance,
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>null,
     document:{hidden:false,querySelectorAll:selector=>selector==='.timer-panel'?[{classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}}]:selector==='[data-timer-state]'?[message]:[],addEventListener(){}},
     window:{addEventListener(){},setInterval(){}},
@@ -244,6 +291,7 @@ test('normal camera termination shows saving without paused error styling until 
   let resolveSave,closed=0;
   const save=new Promise(resolve=>{resolveSave=resolve;});
   const context=vm.createContext({
+    performance,
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>({uid:'owner',emailVerified:true}),
     stopCamera:text=>{camera.enabled=false;camera.tracking=false;camera.status='off';camera.message=text;},
     closeCameraFocus:async()=>{closed++;},send:()=>save,Event:class {},
