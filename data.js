@@ -1,5 +1,6 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
+import { readCache } from './client-cache.js?v=20261022-11';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-9';
 
 const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
@@ -30,17 +31,19 @@ let connectedDay = null;
 let profileReady = Promise.resolve();
 let subscriptions = [];
 let activeUnsubscribe;
-let schoolUnsubscribe;
 let activeId;
-let schoolId;
+const dataRequests = new Map();
 let busy = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
+let cameraSyncFailures = 0, cameraRetryAt = 0, cameraLastAttemptTracking = null;
 let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
 let sessionClock = null;
 // Session timestamps come from the server; the device clock may be seconds ahead.
 function observeSession(session) {
+  // Callable acknowledgements can arrive before an older listener snapshot.
+  if (session?.cameraMode && state.active?.cameraMode && session.controllerId === state.active.controllerId && session.sequence < state.active.sequence) return;
   const serverMs = (session?.updatedAt || session?.createdAt || session?.startedAt)?.toMillis?.();
   sessionClock = Number.isFinite(serverMs) ? {serverMs, localMs:performance.now()} : null;
   if (!session) {cameraPauseAt=null;cameraResumeSequence=null;}
@@ -51,6 +54,13 @@ function observeSession(session) {
 }
 function sessionNow() {
   return sessionClock ? sessionClock.serverMs + Math.max(0, performance.now() - sessionClock.localMs) : Date.now();
+}
+function observeCameraReply(reply, sessionId) {
+  if (!reply?.session || state.profile?.activeSessionId !== sessionId) return;
+  const { serverNowMs, startedAtMs, ...session } = reply.session;
+  observeSession({ ...state.active, ...session,
+    ...(startedAtMs != null ? { startedAt: { toMillis: () => startedAtMs } } : {}),
+    updatedAt: { toMillis: () => serverNowMs } });
 }
 let previewSession = null;
 let authResolved = false;
@@ -223,33 +233,99 @@ async function syncCamera(force = false) {
   if (!session?.cameraMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
-  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false; }
+  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
   const tracking = cameraState().tracking && !document.hidden;
+  if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
   if (!tracking && cameraLastTracking === false && !cameraSyncFailed) return;
-  if (!force && tracking === cameraLastTracking && Date.now() - cameraLastSync < 10000) return;
+  // Status/pose changes with the same presence must not trigger extra writes.
+  if (tracking === cameraLastTracking && !cameraSyncFailed && Date.now() - cameraLastSync < 20000) return;
   cameraSyncBusy = true;
+  cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
   const sequence = cameraSyncSequence = Math.max(cameraSyncSequence, session.sequence || 0) + 1;
   try {
-    await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
+    const result = await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
+    observeCameraReply(result?.data, sessionId);
     cameraLastTracking = tracking;
     cameraSyncFailed = false;
-  } catch { cameraSyncFailed = true; cameraPauseAt ??= Date.now(); }
+    cameraSyncFailures=0;cameraRetryAt=0;
+  } catch {
+    cameraSyncFailed = true; cameraPauseAt ??= Date.now();
+    cameraRetryAt=Date.now()+Math.min(60000,5000*2**Math.min(cameraSyncFailures++,4));
+  }
   finally {
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
     if (tracking !== (cameraState().tracking && !document.hidden)) void syncCamera(true);
   }
 }
 
-function watch(reference, callback, token, key) {
+function watch(reference, callback, token, key, onError = () => {}) {
   const unsubscribe = sdk.onSnapshot(reference, snapshot => {
     if (token !== generation) return;
     callback(snapshot);
     state.pending.delete(key);
     state.failed.delete(key);
     paint();
-  }, error => { if (token === generation) { state.pending.delete(key); state.failed.add(key); notice(errorText(error), true); } });
+  }, error => { if (token === generation) { onError(error); state.pending.delete(key); state.failed.add(key); notice(errorText(error), true); } });
   subscriptions.push(unsubscribe);
+}
+
+function visibleDataKeys() {
+  const keys = new Set();
+  for (const element of document.querySelectorAll('[data-time]')) keys.add(element.dataset.time);
+  if (document.querySelector('[data-streak]')) keys.add('summary');
+  if (document.querySelector('[data-focus-balance]')) keys.add('focusTime');
+  if (document.querySelector('[data-week-goal], [data-week-progress], [data-week-remaining], [data-week-comparison]')) keys.add('week');
+  if (document.querySelector('[data-week-comparison]')) keys.add('lastWeek');
+  if (document.querySelector('[data-chart="days"]')) keys.add('days');
+  if (document.querySelector('[data-chart="subjects"]')) keys.add('week');
+  if (document.querySelector('[data-ranking="global"], [data-my-rank]')) keys.add('ranking');
+  if (document.querySelector('[data-my-rank]')) keys.add('ownRanking');
+  if (document.querySelector('[data-ranking="school"]') && state.profile?.schoolId) keys.add('schoolRanking');
+  return keys;
+}
+
+async function loadVisibleData() {
+  if (!sdk || !connectedUid || state.pending.has('profile') || document.hidden) return;
+  const token = generation, uid = connectedUid, today = dateKey(), week = monday(today);
+  const revision = state.profile?.studyRevision || 0, currentSchoolId=state.profile?.schoolId || '';
+  const paths = {today:['dailyStats',today],week:['weeklyStats',week],month:['monthlyStats',today.slice(0,7)],summary:['stats','summary'],focusTime:['stats','focusTime'],lastWeek:['weeklyStats',monday(dateKey(Date.now()-7*86400000))]};
+  const keys=visibleDataKeys();
+  const apply=(key,result)=>{
+    state[key]=result;state.pending.delete(key);state.failed.delete(key);
+    if(key==='days'&&keys.has('today')){
+      state.today=result.find(row=>row.date===today)||{};state.pending.delete('today');state.failed.delete('today');
+    }
+  };
+  await Promise.all([...keys].filter(key=>key!=='today'||!keys.has('days')).map(async key => {
+    const cacheKey = `${uid}:stats:${today}:${revision}:${currentSchoolId}:${key}`;
+    const cached = readCache.get(cacheKey);
+    if (cached !== undefined) {apply(key,cached);return;}
+    if (dataRequests.has(cacheKey)) return;
+    const request = (async () => {
+      try {
+        let result;
+        if (paths[key]) result = (await sdk.getDoc(sdk.doc(db,'users',uid,...paths[key]))).data() || {};
+        else if (key === 'ownRanking') result = (await sdk.getDoc(sdk.doc(db,'leaderboards',week,'entries',uid))).data() || null;
+        else if (key === 'days') {
+          const rows = await sdk.getDocs(sdk.query(sdk.collection(db,'users',uid,'dailyStats'),sdk.orderBy(sdk.documentId()),sdk.startAt(dateKey(Date.now()-6*86400000)),sdk.endAt(today),sdk.limit(7)));
+          result = rows.docs.map(row => ({...row.data(),date:row.id}));
+        } else {
+          const path = key === 'schoolRanking' ? ['schoolLeaderboards',state.profile.schoolId,'weeks',week,'entries'] : ['leaderboards',week,'entries'];
+          const rows = await sdk.getDocs(sdk.query(sdk.collection(db,...path),sdk.orderBy('totalSeconds','desc'),sdk.orderBy('uid'),sdk.limit(50)));
+          result = rows.docs.map(row => row.data());
+        }
+        if (token !== generation || revision !== (state.profile?.studyRevision || 0) || currentSchoolId !== (state.profile?.schoolId || '')) return;
+        readCache.set(cacheKey,result,key.includes('Ranking') || key === 'ranking' ? 5*60000 : 15*60000);
+        apply(key,result);
+      } catch (error) {
+        if (token === generation) {state.pending.delete(key);state.failed.add(key);notice(errorText(error),true);}
+      } finally {dataRequests.delete(cacheKey);}
+    })();
+    dataRequests.set(cacheKey,request);
+    await request;
+  }));
+  if (token === generation) paint();
 }
 
 async function connectUser() {
@@ -260,8 +336,8 @@ async function connectUser() {
   const token = ++generation;
   for (const stop of subscriptions) stop();
   subscriptions = [];
-  activeUnsubscribe?.(); schoolUnsubscribe?.();
-  activeId = schoolId = undefined;
+  activeUnsubscribe?.();
+  activeId = undefined;
   state = emptyState();
   authResolved = true;
   if (!user) state.pending.clear();
@@ -270,43 +346,45 @@ async function connectUser() {
   paint();
   if (!user) return;
   const uid = user.uid;
-  const week = monday(today);
-  const previousWeek = monday(dateKey(Date.now() - 7 * 86400000));
+  let resolveProfile, rejectProfile, creatingProfile = false;
+  profileReady = new Promise((resolve,reject) => {resolveProfile=resolve;rejectProfile=reject;});
+  // Attach the rejection handler before an asynchronous listener can fail.
+  void profileReady.catch(() => {});
   watch(sdk.doc(db, 'users', uid), snapshot => {
-    state.profile = snapshot.data() || null;
+    const previousSessionId = state.profile?.activeSessionId;
+    const previousRevision = state.profile?.studyRevision || 0;
+    const previousSchoolId = state.profile?.schoolId;
+    const profile = snapshot.data() || null;
+    if (profile && (profile.studyRevision || 0) < previousRevision) return;
+    state.profile = profile;
+    if (state.profile) resolveProfile();
+    else if (!creatingProfile) {
+      creatingProfile=true;
+      const displayName=(user.displayName || '회원').replace(/[\p{Cc}\p{Cf}]/gu,'').trim().slice(0,20);
+      void call('ensureProfile')({displayName:displayName.length>=2?displayName:'회원'}).then(resolveProfile,rejectProfile);
+    }
     const newActive = state.profile?.activeSessionId || null;
     if (newActive !== activeId) {
       activeUnsubscribe?.();
       activeId = newActive;
-      observeSession(null);
-      if (newActive) activeUnsubscribe = sdk.onSnapshot(sdk.doc(db, 'users', uid, 'sessions', newActive), record => {
+      if (newActive !== previousSessionId) observeSession(null);
+      // This tab receives authoritative camera state in callable replies; only
+      // another tab's active session needs a realtime session listener.
+      if (newActive && state.active?.controllerId !== cameraController) activeUnsubscribe = sdk.onSnapshot(sdk.doc(db, 'users', uid, 'sessions', newActive), record => {
         if (token !== generation) return;
         observeSession(record.data() || null);
         paintTimer();
         void syncCamera();
       }, error => { if (token === generation) notice(errorText(error), true); });
     }
-    const newSchool = state.profile?.schoolId || null;
-    if (newSchool !== schoolId) {
-      schoolUnsubscribe?.();
-      schoolId = newSchool;
-      state.schoolRanking = [];
-      if (newSchool) state.pending.add('schoolRanking');
-      if (newSchool) schoolUnsubscribe = sdk.onSnapshot(sdk.query(sdk.collection(db, 'schoolLeaderboards', newSchool, 'weeks', week, 'entries'), sdk.orderBy('totalSeconds', 'desc'), sdk.orderBy('uid'), sdk.limit(50)), rows => {
-        if (token !== generation) return;
-        state.pending.delete('schoolRanking'); state.failed.delete('schoolRanking');
-        state.schoolRanking = rows.docs.map(row => row.data()); paint();
-      }, error => { if (token === generation) { state.pending.delete('schoolRanking'); state.failed.add('schoolRanking'); notice(errorText(error), true); } });
+    if (previousRevision !== (state.profile?.studyRevision || 0)) for (const key of visibleDataKeys()) state.pending.add(key);
+    if (previousSchoolId !== state.profile?.schoolId) {
+      state.schoolRanking=[];state.failed.delete('schoolRanking');
+      if(state.profile?.schoolId)state.pending.add('schoolRanking');else state.pending.delete('schoolRanking');
     }
-  }, token, 'profile');
-  for (const [key, path] of [['today', ['dailyStats', today]], ['week', ['weeklyStats', week]], ['month', ['monthlyStats', today.slice(0, 7)]], ['summary', ['stats', 'summary']], ['focusTime', ['stats', 'focusTime']], ['lastWeek', ['weeklyStats', previousWeek]]]) {
-    watch(sdk.doc(db, 'users', uid, ...path), snapshot => { state[key] = snapshot.data() || {}; }, token, key);
-  }
-  watch(sdk.query(sdk.collection(db, 'users', uid, 'dailyStats'), sdk.orderBy(sdk.documentId()), sdk.startAt(dateKey(Date.now() - 6 * 86400000)), sdk.endAt(today), sdk.limit(7)), rows => { state.days = rows.docs.map(row => ({ ...row.data(), date: row.id })); }, token, 'days');
-  watch(sdk.query(sdk.collection(db, 'leaderboards', week, 'entries'), sdk.orderBy('totalSeconds', 'desc'), sdk.orderBy('uid'), sdk.limit(50)), rows => { state.ranking = rows.docs.map(row => row.data()); }, token, 'ranking');
-  watch(sdk.doc(db, 'leaderboards', week, 'entries', uid), snapshot => { state.ownRanking = snapshot.data() || null; }, token, 'ownRanking');
-  const displayName = (user.displayName || '회원').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 20);
-  profileReady = call('ensureProfile')({ displayName: displayName.length >= 2 ? displayName : '회원' });
+    // The watch wrapper marks profile ready after this callback.
+    queueMicrotask(() => { if (token === generation) void loadVisibleData(); });
+  }, token, 'profile', rejectProfile);
   try { await profileReady; } catch (error) { if (token === generation) notice(errorText(error), true); }
 }
 
@@ -348,15 +426,28 @@ document.addEventListener('click', async event => {
     if (starting) {
       const subjectId = document.querySelector('[data-study-subject]')?.value || 'other';
       const cameraMode = cameraState().enabled;
-      await call('startStudySession')({ subjectId, cameraMode, ...(cameraMode ? { controllerId: cameraController } : {}) });
+      const result = await call('startStudySession')({ subjectId, cameraMode, ...(cameraMode ? { controllerId: cameraController } : {}) });
+      if (result.data?.session) {
+        state.profile = { ...state.profile, activeSessionId: result.data.sessionId };
+        observeCameraReply(result.data, result.data.sessionId);
+        if (cameraMode) {activeUnsubscribe?.();activeUnsubscribe=undefined;}
+      }
       notice(cameraMode ? '스터디캠 학습을 시작했습니다. 얼굴이 인식될 때만 시간이 적립됩니다.' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
     } else {
       stopCamera();
       const result = await call('finishStudySession')({ sessionId: state.profile?.activeSessionId });
+      if (result.data.studyRevision != null) {
+        state.profile={...state.profile,activeSessionId:null,studyRevision:result.data.studyRevision};
+        observeSession(null);
+        void loadVisibleData();
+      }
       notice(`${Math.floor(result.data.creditedSeconds / 60)}분 ${result.data.creditedSeconds % 60}초를 저장했습니다.`);
       await closeCameraFocus();
     }
-  } catch (error) { notice(errorText(error), true); }
+  } catch (error) {
+    if (cameraStart) stopCamera(errorText(error), true);
+    notice(errorText(error), true);
+  }
   finally { busy = false; paintTimer(); void syncCamera(); }
 });
 
@@ -433,8 +524,9 @@ document.addEventListener('submit', async event => {
 });
 
 window.addEventListener('study:auth-changed', () => { void connectUser(); });
-window.addEventListener('study:navigated', paint);
+window.addEventListener('study:navigated', () => {paint();void loadVisibleData();});
 window.addEventListener('study:page-prepared', paint);
+document.addEventListener('visibilitychange', () => {if (!document.hidden) void loadVisibleData();});
 window.addEventListener('study:camera-changed', () => {
   updatePreviewTimer();
   if (state.active?.cameraMode && state.active.controllerId === cameraController) {

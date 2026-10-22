@@ -1,7 +1,7 @@
 // Explicit production smoke test: creates one temporary QA account and removes its own data.
 // No real user's credentials or data are read. CLI access tokens stay in memory.
 import { createRequire } from 'node:module';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { initializeApp as initializeClient, deleteApp as deleteClient } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth as clientAuth, signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -9,6 +9,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { doc, getDoc, getFirestore as clientFirestore } from 'firebase/firestore';
 import { firebaseConfig } from '../firebase-config.js';
 import { splitStudyInterval, weekKey } from '../functions/domain.js';
+import { briefingPeriod } from '../functions/briefing-period.js';
 
 const require = createRequire(import.meta.url);
 const functionRequire = createRequire(new URL('../functions/package.json', import.meta.url));
@@ -68,8 +69,26 @@ try {
     const rank = await getDoc(doc(db, 'leaderboards', segment.week, 'entries', uid));
     assert.equal(rank.data().totalSeconds, segment.seconds);
   }
+  const controllerId=randomUUID();
+  const cameraStart=await invoke('startStudySession',{subjectId:'math',cameraMode:true,controllerId});
+  sessionId=cameraStart.data.sessionId;
+  assert.equal(cameraStart.data.session?.controllerId,controllerId,'Deployed start must return server session state');
+  const synced=await invoke('syncStudyCamera',{sessionId,controllerId,tracking:true,sequence:1});
+  assert.ok(Number.isFinite(synced.data.session?.activeSinceMs),'Deployed sync must return the authoritative timer window');
+  await new Promise(resolve=>setTimeout(resolve,2200));
+  await invoke('syncStudyCamera',{sessionId,controllerId,tracking:false,sequence:2});
+  const cameraFinish=await invoke('finishStudySession',{sessionId});
+  assert.equal(cameraFinish.data.studyRevision,2,'Each completed session invalidates cached statistics once');
+  assert.ok(cameraFinish.data.creditedSeconds>=2&&cameraFinish.data.creditedSeconds<30);
+  const period=briefingPeriod(),cachedText='배포 캐시 검증용 임시 브리핑';
+  await adminDb.patch(`${documentRoot}/users/${uid}/integrations/briefing`,{fields:{
+    date:{stringValue:period.date},periodId:{stringValue:period.id},text:{stringValue:cachedText},
+    model:{stringValue:'gemini-3.8-flash'},updatedAt:{timestampValue:new Date().toISOString()},
+  }});
+  const briefing=await invoke('getStudyBriefing');
+  assert.equal(briefing.data.text,cachedText);assert.equal(briefing.data.cached,true);assert.equal(briefing.data.periodId,period.id);
   successful = true;
-  console.log('PASS: live email signup/login, account creation/update, study start/finish, private stats, Focus Time credit without duplicate credit, ranking and idempotent finish.');
+  console.log('PASS: live email signup/login, account update, study start/finish, private stats, Focus Time, ranking, idempotent finish, camera server replies, cache revision and stored briefing reuse without AI generation.');
 } finally {
   await signOut(auth).catch(() => {});
   if (uid) {

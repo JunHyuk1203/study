@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { chatHistory, completedAnswer } from '../chat-state.js';
+import { briefingPeriod } from '../functions/briefing-period.js';
 
-const source=(await readFile(new URL('../integrations.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
+const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
+const source=cacheSource+'\n'+(await readFile(new URL('../integrations.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 function schoolUi() {
   const handlers={},requests=[];
   const context=vm.createContext({
+    briefingPeriod,
     document:{querySelectorAll:()=>[],querySelector:selector=>selector==='[data-school-meals]'?{}:null,addEventListener:(name,handler)=>{handlers[name]=handler;}},
     window:{addEventListener(){}},
     getStudyData:()=>context.profileState,
@@ -21,8 +24,24 @@ function schoolUi() {
 }
 const overview=month=>({calendarRange:{start:`${month}-01`},date:'2026-10-21',meals:[],timetable:[],events:[],errors:{}});
 
+test('briefing reuses its slot cache on reopening and only manual refresh forces live generation',async()=>{
+  const {context,ui,requests,handlers}=schoolUi();
+  context.profileState.user.emailVerified=true;
+  context.document.querySelector=selector=>selector==='[data-ai-briefing]'?{}:null;
+  await ui.sync();assert.equal(requests.length,1);assert.equal(requests[0].name,'getStudyBriefing');
+  requests[0].resolve({text:'저장된 아침 브리핑',expiresAtMs:Date.now()+3600000});await settle();
+  vm.runInContext("briefing={status:'idle'};",context);
+  await ui.sync();await settle();assert.equal(requests.length,1);
+  handlers.click({target:{closest:selector=>selector==='[data-briefing-retry]'?{}:null}});
+  assert.equal(requests.length,2);assert.equal(requests[1].data.force,true);
+  requests[1].resolve({text:'최신 학습 기록 브리핑',expiresAtMs:Date.now()+3600000});await settle();
+  const current=briefingPeriod();context.briefingPeriod=()=>({...current,id:'next-slot'});
+  await ui.sync();assert.equal(requests.length,3);assert.equal(requests[2].data.force,undefined);
+  requests[2].resolve({text:'다음 시간대 브리핑',expiresAtMs:Date.now()+3600000});await settle();
+});
+
 test('account school and classroom follow profile loading, saved changes and missing registration',async()=>{
-  const dataSource=(await readFile(new URL('../data.js',import.meta.url),'utf8'))
+  const dataSource=cacheSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
     .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split('\ntry {\n  authServices')[0];
   const school={textContent:''},classroom={textContent:''};
   const context=vm.createContext({

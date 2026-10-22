@@ -14,6 +14,7 @@ import { allowance, MONTHLY_LIMIT, tokenCost } from '../functions/ai-budget.js';
 import { schoolDates } from '../functions/integrations-domain.js';
 import { chatWithStudy, getAiUsage, getSchoolOverview, searchSchools, saveSchool } from '../functions/integrations.js';
 import { schoolAgent } from '../functions/school-agent.js';
+import { cachedBriefing } from '../functions/briefing-cache.js';
 
 const projectId = 'demo-study';
 function mockProvider(context, generate) {
@@ -281,12 +282,21 @@ test('camera sessions enforce controller ownership, sequence and active-window c
   const controllerId = '12345678-1234-1234-1234-123456789abc';
   const db = getFirestore(undefined, 'study-data');
   await ensureProfile.run({ auth, data: { displayName: '캠회원' } });
-  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId } });
+  const { sessionId, session: started } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId } });
+  assert.equal(started.controllerId, controllerId);
+  assert.equal(started.sequence, 0);
+  assert.equal(started.activeSinceMs, null);
+  assert.ok(Number.isFinite(started.startedAtMs));
   const request = { auth, data: { sessionId, controllerId, tracking: true, sequence: 1 } };
   await assert.rejects(() => syncStudyCamera.run({ ...request, auth: { uid: 'other', token: { email_verified: true } } }), error => error.code === 'failed-precondition');
   await assert.rejects(() => syncStudyCamera.run({ ...request, data: { ...request.data, controllerId: 'another' } }), error => error.code === 'permission-denied');
-  await syncStudyCamera.run(request);
+  const { session: synced } = await syncStudyCamera.run(request);
   const ref = db.doc(`users/${auth.uid}/sessions/${sessionId}`);
+  const saved = (await ref.get()).data();
+  assert.equal(synced.sequence, saved.sequence);
+  assert.equal(synced.activeSinceMs, saved.activeSinceMs);
+  assert.equal(synced.leaseUntilMs, saved.leaseUntilMs);
+  assert.equal(synced.serverNowMs, saved.updatedAt.toMillis());
   const now = Math.floor(Date.now() / 1000) * 1000;
   await ref.update({ startedAt: Timestamp.fromMillis(now - 120000), activeSinceMs: now - 60000, leaseUntilMs: now - 30000 });
   await syncStudyCamera.run({ auth, data: { sessionId, controllerId, tracking: false, sequence: 2 } });
@@ -298,7 +308,24 @@ test('camera sessions enforce controller ownership, sequence and active-window c
   assert.equal((await db.doc(`users/${auth.uid}/stats/focusTime`).get()).data().balanceSeconds, 30);
   assert.equal((await db.doc(`users/${auth.uid}/stats/summary`).get()).data().totalSeconds, 30);
   assert.equal((await finishStudySession.run({ auth, data: { sessionId } })).creditedSeconds, 30);
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().studyRevision,1);
   await assert.rejects(() => syncStudyCamera.run({ auth, data: { ...request.data, sequence: 3 } }), error => error.code === 'failed-precondition');
+});
+
+test('Firestore briefing cache serves a slot once and rejects simultaneous duplicate generation',async()=>{
+  const db=getFirestore(undefined,'study-data'),user='briefing-cache-owner';
+  let generated=0;
+  const generate=async()=>({text:`브리핑 ${++generated}`});
+  const first=await cachedBriefing({db,user,generate});
+  assert.equal((await cachedBriefing({db,user,generate})).text,first.text);assert.equal(generated,1);
+  assert.equal((await cachedBriefing({db,user,force:true,generate})).text,'브리핑 2');
+  let resolve,entered;
+  const started=new Promise(r=>{entered=r;});
+  const pending=cachedBriefing({db,user,force:true,generate:()=>{entered();return new Promise(r=>{resolve=r;});}});
+  await started;
+  await assert.rejects(cachedBriefing({db,user,force:true,generate}),error=>error.code==='aborted');
+  resolve({text:'새 브리핑'});await pending;
+  assert.equal((await cachedBriefing({db,user,generate})).text,'새 브리핑');
 });
 
 test('email registration/login/logout and Google credentials use Auth without creating DB profiles', async () => {

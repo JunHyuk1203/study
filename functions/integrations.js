@@ -6,6 +6,7 @@ import { schoolCodes, classroom, neisRows, schoolRecord, chatContents, schoolDat
 import { generateForUser, usageFor } from './ai-service.js';
 import { schoolMonth, loadSchoolData, loadUpcomingExams } from './school-service.js';
 import { schoolAgent } from './school-agent.js';
+import { cachedBriefing } from './briefing-cache.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const neisKey = defineSecret('NEIS_API_KEY');
@@ -115,15 +116,12 @@ export const chatWithStudy = onCall({...options, timeoutSeconds:240, secrets:[go
   return {text:result.text,model:result.model,cutoff:result.cutoff,interrupted:result.interrupted||false,usage:result.usage};
 });
 export const getStudyBriefing = onCall({...options, secrets:[googleKey]}, async request => {
-  const user = uid(request, true), {date, days} = schoolDates();
-  const ref = db.doc(`users/${user}/integrations/briefing`);
-  const saved = (await ref.get()).data();
-  if (saved?.date === date && Date.now() - saved.updatedAt.toMillis() < 3600000) return {text:saved.text};
-  await rateLimit(user, 'ai', 10);
-  const today = (await db.doc(`users/${user}/dailyStats/${date}`).get()).data()?.totalSeconds || 0;
-  const week = (await db.doc(`users/${user}/weeklyStats/${days[0]}`).get()).data()?.totalSeconds || 0;
-  const result = await generateForUser({user,model:'gemini-3.8-flash',key:googleKey.value(),requested:1024,contents:[{role:'user',parts:[{text:`오늘 공부 ${Math.floor(today/60)}분, 이번 주 ${Math.floor(week/60)}분. 이 실제 기록만 근거로 오늘 이어서 할 수 있는 구체적인 공부 제안 한 가지를 한국어 두 문장으로 써 줘. 과목과 목표는 등록되지 않았으니 임의로 단정하지 마.`}]}]});
-  const text = result.text;
-  await ref.set({date,text,updatedAt:Timestamp.now()});
-  return {text,model:'gemini-3.8-flash',cutoff:result.cutoff};
+  const user = uid(request, true);
+  return cachedBriefing({db,user,force:request.data?.force === true,generate:async period => {
+    await rateLimit(user, 'ai', 10);
+    const {date,days}=schoolDates();
+    const [daily,weekly]=await db.getAll(db.doc(`users/${user}/dailyStats/${date}`),db.doc(`users/${user}/weeklyStats/${days[0]}`));
+    const today=daily.data()?.totalSeconds||0, week=weekly.data()?.totalSeconds||0;
+    return generateForUser({user,model:'gemini-3.8-flash',key:googleKey.value(),requested:1024,contents:[{role:'user',parts:[{text:`한국 시간 ${period.label}. 오늘 공부 ${Math.floor(today/60)}분, 이번 주 ${Math.floor(week/60)}분. 이 실제 기록만 근거로 오늘 이어서 할 수 있는 구체적인 공부 제안 한 가지를 한국어 두 문장으로 써 줘. 과목과 목표는 등록되지 않았으니 임의로 단정하지 마.`}]}]});
+  }});
 });

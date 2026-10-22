@@ -58,16 +58,19 @@ export const startStudySession = onCall(options, async (request) => {
   if (cameraMode && (typeof controllerId !== 'string' || !/^[a-f0-9-]{36}$/.test(controllerId))) throw new HttpsError('invalid-argument', '카메라 제어 ID가 올바르지 않습니다.');
   const profileRef = db.doc(`users/${uid}`);
   const sessionRef = profileRef.collection('sessions').doc();
+  let session;
   await db.runTransaction(async (transaction) => {
     const profile = await transaction.get(profileRef);
     if (!profile.exists) throw new HttpsError('failed-precondition', '계정 프로필을 먼저 생성해 주세요.');
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
-    transaction.create(sessionRef, { uid, subjectId, status: 'active', startedAt: now, createdAt: now,
-      ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) });
+    session = { uid, subjectId, status: 'active',
+      ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) };
+    transaction.create(sessionRef, { ...session, startedAt: now, createdAt: now });
+    session = { ...session, startedAtMs: now.toMillis(), serverNowMs: now.toMillis() };
     transaction.update(profileRef, { activeSessionId: sessionRef.id, updatedAt: now });
   });
-  return { sessionId: sessionRef.id };
+  return { sessionId: sessionRef.id, session };
 });
 
 export const syncStudyCamera = onCall(options, async request => {
@@ -76,14 +79,17 @@ export const syncStudyCamera = onCall(options, async request => {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean') throw new HttpsError('invalid-argument', '카메라 상태가 올바르지 않습니다.');
   return db.runTransaction(async transaction => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`);
-    const [record, profile] = await transaction.getAll(ref, db.doc(`users/${uid}`));
+    const record = await transaction.get(ref);
     const session = record.data();
-    if (!session || profile.data()?.activeSessionId !== sessionId || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
+    // Session finish and checkpoints serialize on this same document. Reading
+    // the profile again on every heartbeat adds no protection to that invariant.
+    if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
     if (sequence <= session.sequence) return { ignored: true };
     const update = checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking);
-    transaction.update(ref, { ...update, sequence, updatedAt: Timestamp.now() });
-    return { ignored: false, cameraStatus: update.cameraStatus };
+    const updatedAt = Timestamp.now();
+    transaction.update(ref, { ...update, sequence, updatedAt });
+    return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, sequence, serverNowMs: updatedAt.toMillis() } };
   });
 });
 
@@ -98,7 +104,7 @@ export const finishStudySession = onCall(options, async (request) => {
     const [profileDoc, sessionDoc, summaryDoc] = await transaction.getAll(profileRef, sessionRef, summaryRef);
     if (!profileDoc.exists || !sessionDoc.exists) throw new HttpsError('not-found', '학습 기록이 없습니다.');
     const session = sessionDoc.data();
-    if (session.status === 'finished') return { creditedSeconds: session.creditedSeconds, alreadyFinished: true };
+    if (session.status === 'finished') return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
     const profile = profileDoc.data();
     if (profile.activeSessionId !== sessionId) throw new HttpsError('failed-precondition', '진행 중인 학습 기록이 일치하지 않습니다.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
@@ -130,7 +136,7 @@ export const finishStudySession = onCall(options, async (request) => {
       }
     }
     transaction.update(sessionRef, { ...(checkpoint || {}), status: 'finished', endedAt: Timestamp.fromMillis(endedMs), creditedSeconds, capped: now.toMillis() > endedMs, updatedAt: now });
-    transaction.update(profileRef, { activeSessionId: null, updatedAt: now });
-    return { creditedSeconds, alreadyFinished: false };
+    transaction.update(profileRef, { activeSessionId: null, studyRevision: FieldValue.increment(1), updatedAt: now });
+    return { creditedSeconds, alreadyFinished: false, studyRevision:(profile.studyRevision || 0)+1 };
   });
 });
