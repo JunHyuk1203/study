@@ -7,6 +7,21 @@ const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),
 const source=cacheSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
   .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
 
+test('production import graph creates only one instance of each shared state module',async()=>{
+  const versions=new Map(),visited=new Set();
+  async function visit(url) {
+    if(visited.has(url.href))return;
+    visited.add(url.href);
+    const path=new URL(url);path.search='';
+    const identities=versions.get(path.href)||new Set();identities.add(url.href);versions.set(path.href,identities);
+    const code=await readFile(path,'utf8');
+    for(const match of code.matchAll(/^import\s+(?:[^'";]*?\s+from\s+)?['"](\.[^'"]+)['"]/gm))await visit(new URL(match[1],url));
+  }
+  await visit(new URL('../app.js',import.meta.url));
+  for(const [path,identities]of versions)assert.equal(identities.size,1,`Duplicate module handlers: ${path}: ${[...identities].join(', ')}`);
+  for(const name of ['data.js','camera.js','integrations.js'])assert.ok([...versions.keys()].some(path=>path.endsWith('/'+name)));
+});
+
 test('camera startup errors keep the focus exit enabled and close without saving a nonexistent session',async()=>{
   const clicks=[],camera={enabled:false,tracking:false,status:'error'};
   const stop={disabled:true,dataset:{studyAction:'stop'}};

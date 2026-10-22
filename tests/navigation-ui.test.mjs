@@ -6,6 +6,18 @@ import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../navigation.js',import.meta.url),'utf8');
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
+test('every navigation includes AI between study and school and home has no AI promo',async()=>{
+  for(const page of ['index','study','school','play','account','ai']) {
+    const html=await readFile(new URL(`../${page}.html`,import.meta.url),'utf8');
+    const nav=html.match(/<nav class="bottom-nav"[^>]*>(.*?)<\/nav>/s)?.[1];
+    assert.ok(nav,`${page} navigation`);
+    assert.deepEqual([...nav.matchAll(/<a\b[^>]*href="([^"]+)"/g)].map(match=>match[1]),['index.html','study.html','ai.html','school.html','play.html']);
+    assert.match(nav,/<a class="nav-ai" href="ai.html"/);
+    if(page==='ai')assert.match(nav,/<a class="nav-ai" href="ai.html" aria-current="page"/);
+    if(page==='index')assert.doesNotMatch(html.match(/<main\b[^>]*>(.*?)<\/main>/s)?.[1]||'',/href="ai.html"/);
+  }
+});
+
 function navigationUi({desktop=false}={}) {
   const clicks={},events={},requests=[],animations=[],stages=[],history=[],fallbacks=[];
   let currentPage='index.html';
