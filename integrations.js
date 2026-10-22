@@ -166,6 +166,8 @@ function renderChat() {
   }
   const container=document.querySelector('[data-ai-messages]');
   if(!container)return;
+  const scroller=container.closest('.chat-card');
+  const followLatest=scroller&&(scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48||container.childElementCount<messages.length);
   container.replaceChildren();
   if(!messages.length) {
     const empty=document.createElement('p');empty.className='empty-data';
@@ -178,6 +180,7 @@ function renderChat() {
     row.append(avatar,bubble);container.append(row);
   }
   if(chatting) {const loading=document.createElement('p');loading.className='empty-data';loading.textContent='로딩 중…';container.append(loading);}
+  if(followLatest)scroller.scrollTop=scroller.scrollHeight;
   status('[data-ai-status]',chatError,Boolean(chatError));
   text('[data-ai-usage]', !ready?'로딩 중…':!user?'로그인 후 이용할 수 있습니다.':usageError||(!aiUsage?'로딩 중…':`이번 달 ${aiUsage.usedWon.toLocaleString()} / 1,000원 · 오늘 Argon ${aiUsage.argonRemaining}회 남음`));
   for(const select of document.querySelectorAll('[data-ai-model]'))select.disabled=chatting;
