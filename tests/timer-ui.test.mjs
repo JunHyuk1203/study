@@ -217,6 +217,48 @@ test('first detection starts the timer even when the paused sync snapshot is del
   assert.equal(t.display.textContent,'00:00:03');
 });
 
+test('camera setup and synchronization use a normal pending state while real failures remain paused',()=>{
+  const classes=new Set(),camera={enabled:true,tracking:false,status:'scanning'},message={textContent:''};
+  const context=vm.createContext({
+    cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>null,
+    document:{hidden:false,querySelectorAll:selector=>selector==='.timer-panel'?[{classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}}]:selector==='[data-timer-state]'?[message]:[],addEventListener(){}},
+    window:{addEventListener(){},setInterval(){}},
+  });
+  vm.runInContext(`${source}\nstate.profile={activeSessionId:'session'};state.active={cameraMode:true,controllerId:'controller'};paintTimer();`,context);
+  assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);
+  camera.status='tracking';camera.tracking=true;
+  vm.runInContext('cameraResumeSequence=2;paintTimer();',context);
+  assert.match(message.textContent,/서버와 동기화/);
+  assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);
+  camera.status='paused';camera.tracking=false;
+  vm.runInContext('paintTimer();',context);
+  assert.equal(classes.has('camera-pending'),false);assert.equal(classes.has('camera-paused'),true);
+  camera.status='scanning';
+  vm.runInContext('cameraSyncFailed=true;paintTimer();',context);
+  assert.equal(classes.has('camera-pending'),false);assert.equal(classes.has('camera-paused'),true);
+});
+
+test('normal camera termination shows saving without paused error styling until the server replies',async()=>{
+  const clicks=[],classes=new Set(),message={textContent:''},camera={enabled:true,tracking:true,status:'tracking'};
+  const button={disabled:false,dataset:{studyAction:'stop'}};
+  let resolveSave,closed=0;
+  const save=new Promise(resolve=>{resolveSave=resolve;});
+  const context=vm.createContext({
+    cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>({uid:'owner',emailVerified:true}),
+    stopCamera:text=>{camera.enabled=false;camera.tracking=false;camera.status='off';camera.message=text;},
+    closeCameraFocus:async()=>{closed++;},send:()=>save,Event:class {},
+    document:{hidden:false,querySelector:()=>null,querySelectorAll:selector=>selector==='[data-study-action]'?[button]:selector==='[data-timer-state]'?[message]:selector==='.timer-panel'?[{classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}}]:[],addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}},
+    window:{addEventListener(){},setInterval(){},dispatchEvent(){}},
+  });
+  vm.runInContext(`${source}\ncall=()=>send;authServices={auth:{currentUser:{getIdToken:async()=>{}}}};state.profile={activeSessionId:'session'};state.active={cameraMode:true,controllerId:'controller'};`,context);
+  const pending=clicks.map(click=>click({target:{closest:selector=>selector==='[data-study-action]'?button:null}}));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(message.textContent,'서버에 저장 중…');assert.equal(camera.message,'서버에 저장 중…');
+  assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);assert.equal(closed,0);
+  resolveSave({data:{creditedSeconds:30,studyRevision:1}});await Promise.all(pending);
+  assert.equal(closed,1);assert.equal(classes.has('camera-pending'),false);
+});
+
 test('camera pause messages distinguish manual pause, setup, detection failure and connection errors',()=>{
   const context=vm.createContext({
     cameraController:'controller',cameraState:()=>({}),getAuthUser:()=>null,

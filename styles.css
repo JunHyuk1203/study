@@ -86,6 +86,8 @@
 [data-state="paused"],[data-state="error"]{--cam-color:#bc4141}
 .timer-panel.camera-paused{border:1px solid #bc414166;background:#bc41410a}
 .timer-panel.camera-paused .timer,.timer-panel.camera-paused [data-timer-state]{color:#bc4141}
+.timer-panel.camera-pending{border:1px solid var(--border);background:var(--sage)}
+.timer-panel.camera-pending .timer,.timer-panel.camera-pending [data-timer-state]{color:var(--green)}
 @keyframes cam-scan{from{top:15px;opacity:.4}to{top:calc(100% - 15px);opacity:1}}
 .study-cam>.subject-picker{margin:0 0 22px;text-align:left}
 .cam-timer{margin:18px 0 12px;text-align:left;gap:12px}
@@ -233,6 +235,14 @@
 @media(prefers-reduced-motion:reduce){[data-avatar-phase] .recognition-ring-entry,[data-avatar-phase] .recognition-ring-track,[data-avatar-phase] .recognition-corner-entry{animation:none}}
 @media(prefers-reduced-motion:reduce){.cam-viewport,.cam-corner,.cam-face{transition:none}.cam-scan{animation:none}}
 
+/* Keep the app shell still; only page content scrolls on every device. */
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+.app{display:flex;flex-direction:column;height:100dvh;min-height:0;margin:0 auto;border:0;border-radius:0;overflow:hidden}
+.app>.header{position:relative;flex-shrink:0;transform:none;transition:none}
+.app>main{flex:1;width:100%;min-height:0;overflow-y:auto;overscroll-behavior:none}
+.bottom-nav{border-radius:0}
+.tab-slide-page>.app{height:100%;min-height:0}
+
 /* One tablet/desktop layout; 1100px is the reference GUI scale. */
 @media(min-width:768px){
   :root{--gui:clamp(.698px,.090909vw,1.309px)}
@@ -245,7 +255,6 @@
   .app:has(.bottom-nav)>.header .profile-dot{width:100%;height:calc(48 * var(--gui));flex-shrink:0;display:flex;align-items:center;justify-content:flex-start;gap:calc(14 * var(--gui));padding:0 calc(16 * var(--gui));border-radius:calc(14 * var(--gui));font-size:calc(14 * var(--gui));pointer-events:auto}
   .app:has(.bottom-nav)>.header .profile-dot::after{content:"내 계정";font-weight:600}
   .app:has(.bottom-nav)>.header .profile-dot:hover{background:#dce5d3}
-  .app:has(.bottom-nav)>.ai-page,.app:has(.bottom-nav)>.account-page{min-height:100dvh}
   main{padding:calc(32 * var(--gui)) calc(36 * var(--gui)) calc(64 * var(--gui))}
   h1{font-size:calc(28 * var(--gui))}h2{font-size:calc(17 * var(--gui))}h3{font-size:calc(14 * var(--gui))}
   .tiny{font-size:calc(10 * var(--gui))}

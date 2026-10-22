@@ -15,7 +15,7 @@ function navigationUi({desktop=false}={}) {
     getAttribute:name=>name==='href'?href:null,setAttribute(){},removeAttribute(){},
   }));
   function node() {
-    return {style:{},classList:{add(){},remove(){}},remove(){this.removed=true;},append(){},setAttribute(){},querySelector:()=>null,
+    return {style:{},classList:{add(){},remove(){}},remove(){this.removed=true;},append(...children){this.children=(this.children||[]).concat(children);},setAttribute(){},querySelector:()=>null,
       getBoundingClientRect:()=>({top:700,bottom:desktop?800:52,right:desktop?184:480}),
       animate(frames) {
         let resolve,reject;
@@ -25,14 +25,14 @@ function navigationUi({desktop=false}={}) {
       }};
   }
   function app(page,live=false) {
-    const main={page,querySelector:()=>null,getBoundingClientRect:()=>({top:52}),
+    const main={page,scrollTop:0,querySelector:()=>null,getBoundingClientRect:()=>({top:52}),
       replaceWith:next=>{currentPage=next.page;liveMain=next;}};
     const nav={...node(),querySelectorAll:()=>links,querySelector:()=>({getAttribute:()=>page})};
     const header=node();
     return {querySelector:selector=>selector==='main'?(live?liveMain:main):selector==='.bottom-nav'?nav:selector==='.header'?header:null,
       cloneNode:()=>app(page)};
   }
-  let liveMain={page:'index.html',getBoundingClientRect:()=>({top:52}),replaceWith:next=>{currentPage=next.page;liveMain=next;}};
+  let liveMain={page:'index.html',scrollTop:0,getBoundingClientRect:()=>({top:52}),replaceWith:next=>{currentPage=next.page;liveMain=next;}};
   const currentApp=app('index.html',true);
   const location={href:'http://localhost/index.html',assign:href=>fallbacks.push(href),reload:()=>fallbacks.push('reload')};
   const context=vm.createContext({URL,AbortController,Event,
@@ -46,12 +46,21 @@ function navigationUi({desktop=false}={}) {
     DOMParser:class {parseFromString(page){const next=app(page);return {title:page,querySelector:()=>next};}},
   });
   vm.runInContext(source,context);
-  return {requests,animations,stages,history,fallbacks,activeClasses,location,events,page:()=>currentPage,
+  return {requests,animations,stages,history,fallbacks,activeClasses,location,events,page:()=>currentPage,main:()=>liveMain,
     click(page) {
       clicks.click({button:0,preventDefault(){},target:{closest:()=>({href:`http://localhost/${page}`,hasAttribute:()=>false})}});
     },
   };
 }
+
+test('page transitions preserve the outgoing inner scroll and reset the destination',async()=>{
+  const ui=navigationUi();ui.main().scrollTop=320;
+  ui.click('study.html');ui.requests[0].resolve();await settle();
+  const outgoing=ui.stages[0].children[0].children[0].querySelector('main');
+  assert.equal(outgoing.scrollTop,320);
+  ui.animations.forEach(animation=>animation.finish());await settle();
+  assert.equal(ui.main().scrollTop,0);assert.deepEqual(ui.fallbacks,[]);
+});
 
 test('desktop transitions start at the viewport top beside the fixed sidebar',async()=>{
   const ui=navigationUi({desktop:true});

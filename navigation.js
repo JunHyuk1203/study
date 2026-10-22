@@ -111,7 +111,7 @@
       stage.append(outgoing, incoming);
       document.body.append(stage);
       window.dispatchEvent(new Event('study:page-prepared'));
-      outgoing.scrollTop = Math.max(0, contentTop - currentApp.querySelector('main').getBoundingClientRect().top);
+      outgoingApp.querySelector('main').scrollTop = currentApp.querySelector('main').scrollTop;
 
       const direction = to > from ? 1 : -1;
       transition.commit = (recordHistory = true) => {
@@ -119,6 +119,7 @@
         transition.committed = true;
         // Preserve the actual navigation node outside both sliding panels.
         currentApp.querySelector('main').replaceWith(nextMain);
+        nextMain.scrollTop = 0;
         document.title = nextDocument.title;
         if (recordHistory && pushHistory && window.location.href !== url.href) window.history.pushState(null, '', url.href);
         displayedUrl = url;

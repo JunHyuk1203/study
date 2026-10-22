@@ -34,6 +34,7 @@ let activeUnsubscribe;
 let activeId;
 const dataRequests = new Map();
 let busy = false;
+let finishingSession = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
 let cameraSyncFailures = 0, cameraRetryAt = 0, cameraLastAttemptTracking = null;
 let cameraPauseAt = null;
@@ -184,6 +185,7 @@ function paint() {
 }
 
 function cameraTimerMessage(camera) {
+  if (finishingSession) return '서버에 저장 중…';
   if (camera.manuallyPaused) return '사용자가 수동으로 일시정지했습니다 · 재개 버튼을 눌러 주세요';
   if (cameraSyncFailed) return '서버 연결을 확인하는 중 · 학습 시간 적립 일시정지';
   if (camera.status === 'error') return camera.message || '카메라 인식 오류 · 종료 후 다시 시작해 주세요';
@@ -193,6 +195,11 @@ function cameraTimerMessage(camera) {
   if (camera.status === 'paused') return camera.message || '얼굴 인식에 실패했습니다 · 얼굴이 인식되면 자동 재개';
   if (!camera.enabled) return '카메라가 종료되어 일시정지했습니다 · 얼굴 인식을 다시 시작해 주세요';
   return '얼굴 인식 완료 · 학습 시작을 서버와 동기화하는 중';
+}
+
+function cameraTimerPending(camera) {
+  return finishingSession || !camera.manuallyPaused && !cameraSyncFailed && camera.status !== 'error' && !document.hidden &&
+    (['opening', 'scanning'].includes(camera.status) || camera.enabled && camera.status === 'tracking');
 }
 
 function paintTimer() {
@@ -225,7 +232,12 @@ function paintTimer() {
   textAll('[data-timer-state]', state.profile?.activeSessionId ? isCamera ? running ? '스터디캠 학습 중 · 자동 저장' : cameraTimerMessage(camera) : '학습 중 · 종료 시 자동 저장' : camera.enabled || camera.status === 'error' ? cameraTimerMessage(camera) : '학습 시작 대기');
   if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : cameraTimerMessage(camera));
   if (camera.manuallyPaused) textAll('[data-timer-state]', cameraTimerMessage(camera));
-  for (const panel of document.querySelectorAll('.timer-panel')) panel.classList.toggle('camera-paused', Boolean(previewSession ? !camera.tracking : isCamera && !running));
+  if (finishingSession) textAll('[data-timer-state]', '서버에 저장 중…');
+  const pending = cameraTimerPending(camera) && !running;
+  for (const panel of document.querySelectorAll('.timer-panel')) {
+    panel.classList.toggle('camera-pending', pending);
+    panel.classList.toggle('camera-paused', !pending && Boolean(previewSession ? !camera.tracking : isCamera && !running));
+  }
 }
 
 async function syncCamera(force = false) {
@@ -434,7 +446,9 @@ document.addEventListener('click', async event => {
       }
       notice(cameraMode ? '스터디캠 학습을 시작했습니다. 얼굴이 인식될 때만 시간이 적립됩니다.' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
     } else {
-      stopCamera();
+      finishingSession = true;
+      notice('서버에 저장 중…');
+      stopCamera('서버에 저장 중…');
       const result = await call('finishStudySession')({ sessionId: state.profile?.activeSessionId });
       if (result.data.studyRevision != null) {
         state.profile={...state.profile,activeSessionId:null,studyRevision:result.data.studyRevision};
@@ -448,7 +462,7 @@ document.addEventListener('click', async event => {
     if (cameraStart) stopCamera(errorText(error), true);
     notice(errorText(error), true);
   }
-  finally { busy = false; paintTimer(); void syncCamera(); }
+  finally { finishingSession = false; busy = false; paintTimer(); void syncCamera(); }
 });
 
 async function closeAccountSettings() {
