@@ -470,7 +470,7 @@ document.addEventListener('click', async event => {
       if (!getAuthUser()?.emailVerified || !call) {
         previewSession = { totalMs: 0, activeSince: null };
         updatePreviewTimer();
-        notice('체험 모드입니다. 로그인과 이메일 인증 후 시작한 학습부터 계정에 저장됩니다.');
+        notice('체험 모드입니다. 로그인과 이메일 인증 후 시작한 학습부터 계정에 저장됩니다.',false,false);
         return;
       }
     }
@@ -486,7 +486,7 @@ document.addEventListener('click', async event => {
         observeCameraReply(result.data, result.data.sessionId);
         if (cameraMode) {activeUnsubscribe?.();activeUnsubscribe=undefined;}
       }
-      notice(cameraMode ? '스터디캠 학습을 시작했습니다. 얼굴이 인식될 때만 시간이 적립됩니다.' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
+      notice(cameraMode ? '' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
     } else {
       finishingSession = true;
       notice('서버에 저장 중…',false,false);
