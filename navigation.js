@@ -93,7 +93,9 @@
       stage.className = 'tab-slide-stage';
       if (openingSheet || closingSheet) stage.classList.add('sheet-slide-stage');
       stage.style.top = `${contentTop}px`;
-      stage.style.bottom = `${window.innerHeight - currentNav.getBoundingClientRect().top}px`;
+      const sideNavigation = window.matchMedia('(min-width: 768px)').matches;
+      stage.style.bottom = sideNavigation ? '0px' : `${window.innerHeight - currentNav.getBoundingClientRect().top}px`;
+      if (sideNavigation) stage.style.left = `${currentNav.getBoundingClientRect().right}px`;
       stage.setAttribute('aria-hidden', 'true');
       stage.inert = true;
       const outgoing = document.createElement('div');
