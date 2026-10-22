@@ -6,7 +6,7 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount } from '../functions/index.js';
+import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
 import { spendFocusTime } from '../functions/focus-time.js';
 import { generateForUser } from '../functions/ai-service.js';
@@ -180,12 +180,31 @@ test('profile input cannot overwrite UID, school membership, scores, or roles', 
   assert.equal(profile.totalSeconds, undefined);
 });
 
+test('custom subjects and goals are saved per account and only registered subjects can start', async () => {
+  const auth={uid:'plan-owner',token:{email_verified:true}},db=getFirestore(undefined,'study-data');
+  await assert.rejects(()=>updateStudyPlan.run({data:{action:'addSubject',name:'물리'}}),error=>error.code==='unauthenticated');
+  await ensureProfile.run({auth,data:{displayName:'목표회원'}});
+  await assert.rejects(()=>startStudySession.run({auth,data:{subjectId:'math'}}),error=>error.code==='invalid-argument');
+  const subject=(await updateStudyPlan.run({auth,data:{action:'addSubject',name:'물리',uid:'other'}})).subject;
+  const requests=[1,2].map(()=>updateStudyPlan.run({auth,data:{action:'addGoal',period:'week',minutes:300,subjectId:subject.id,totalSeconds:99999}}));
+  const goals=await Promise.all(requests);assert.equal(goals[0].goal.id,goals[1].goal.id);
+  const profile=(await db.doc('users/plan-owner').get()).data();
+  assert.equal(profile.goals.length,1);assert.equal(profile.subjects.length,1);assert.equal(profile.totalSeconds,undefined);
+  const {sessionId}=await startStudySession.run({auth,data:{subjectId:subject.id}});
+  await assert.rejects(()=>updateStudyPlan.run({auth,data:{action:'removeSubject',id:subject.id}}),error=>error.code==='invalid-argument');
+  await finishStudySession.run({auth,data:{sessionId}});
+  await assert.rejects(()=>updateStudyPlan.run({auth,data:{action:'removeSubject',id:subject.id}}),error=>error.code==='invalid-argument');
+  await updateStudyPlan.run({auth,data:{action:'removeGoal',id:goals[0].goal.id}});
+  await updateStudyPlan.run({auth,data:{action:'removeSubject',id:subject.id}});
+  assert.equal((await db.doc('users/plan-owner').get()).data().subjects.length,0);
+});
+
 test('session finish is idempotent and atomically updates statistics and ranking', async () => {
   const auth = { uid: 'study-owner', token: { email_verified: true } };
   const db = getFirestore(undefined, 'study-data');
   await ensureProfile.run({ auth, data: { displayName: '공부회원' } });
-  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'math', durationSeconds: 999999 } });
-  await assert.rejects(() => startStudySession.run({ auth, data: { subjectId: 'math' } }), error => error.code === 'already-exists');
+  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'other', durationSeconds: 999999 } });
+  await assert.rejects(() => startStudySession.run({ auth, data: { subjectId: 'other' } }), error => error.code === 'already-exists');
   await assert.rejects(() => finishStudySession.run({ auth: { uid: 'other', token: { email_verified: true } }, data: { sessionId } }), error => error.code === 'not-found');
   const start = Math.floor(Date.now() / 1000) * 1000 - 120000;
   await db.doc(`users/${auth.uid}/sessions/${sessionId}`).update({ startedAt: Timestamp.fromMillis(start) });
@@ -218,7 +237,7 @@ test('session finish is idempotent and atomically updates statistics and ranking
   for (const [path, seconds] of expected) {
     const row = (await db.doc(path).get()).data();
     assert.equal(row.totalSeconds, seconds, path);
-    if (!path.startsWith('leaderboards/')) assert.equal(row.subjectSeconds.math, seconds, path);
+    if (!path.startsWith('leaderboards/')) assert.equal(row.subjectSeconds.other, seconds, path);
   }
   await updateAccount.run({ auth, data: { displayName: '바뀐닉네임', totalSeconds: 999999 } });
   for (const [path, seconds] of expected) {
@@ -261,7 +280,7 @@ test('Focus Time spending is atomic, retryable and independent of study totals',
 test('zero-credit camera completion creates no currency', async () => {
   const auth = { uid: 'focus-zero', token: { email_verified: true } };
   await ensureProfile.run({ auth, data: { displayName: '일시정지' } });
-  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId: '12345678-1234-1234-1234-123456789abc' } });
+  const { sessionId } = await startStudySession.run({ auth, data: { subjectId: 'other', cameraMode: true, controllerId: '12345678-1234-1234-1234-123456789abc' } });
   const results = await Promise.all([finishStudySession.run({ auth, data: { sessionId } }), finishStudySession.run({ auth, data: { sessionId } })]);
   assert.ok(results.every(result => result.creditedSeconds === 0));
   assert.equal((await getFirestore(undefined, 'study-data').doc(`users/${auth.uid}/stats/focusTime`).get()).exists, false);
@@ -271,8 +290,8 @@ test('concurrent starts permit exactly one active session', async () => {
   const auth = { uid: 'concurrent-owner', token: { email_verified: true } };
   await ensureProfile.run({ auth, data: { displayName: '동시회원' } });
   const results = await Promise.allSettled([
-    startStudySession.run({ auth, data: { subjectId: 'math' } }),
-    startStudySession.run({ auth, data: { subjectId: 'english' } }),
+    startStudySession.run({ auth, data: { subjectId: 'other' } }),
+    startStudySession.run({ auth, data: { subjectId: 'other' } }),
   ]);
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.filter(result => result.status === 'rejected' && result.reason.code === 'already-exists').length, 1);
@@ -283,7 +302,7 @@ test('camera sessions enforce controller ownership, sequence and active-window c
   const controllerId = '12345678-1234-1234-1234-123456789abc';
   const db = getFirestore(undefined, 'study-data');
   await ensureProfile.run({ auth, data: { displayName: '캠회원' } });
-  const { sessionId, session: started } = await startStudySession.run({ auth, data: { subjectId: 'math', cameraMode: true, controllerId } });
+  const { sessionId, session: started } = await startStudySession.run({ auth, data: { subjectId: 'other', cameraMode: true, controllerId } });
   assert.equal(started.controllerId, controllerId);
   assert.equal(started.sequence, 0);
   assert.equal(started.activeSinceMs, null);

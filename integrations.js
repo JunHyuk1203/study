@@ -1,5 +1,5 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { getStudyData } from './data.js?v=20261022-15';
+import { getStudyData } from './data.js?v=20261022-19';
 import { firebaseConfig } from './firebase-config.js';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
 import { readCache } from './client-cache.js?v=20261022-11';
@@ -19,6 +19,7 @@ async function client(name) {
   return callable(name);
 }
 async function call(name, data = {}) { return (await (await client(name))(data)).data; }
+export async function updatePlan(input) { return call('updateStudyPlan',input); }
 async function cachedCall(name, data = {}, ttl = 30*60000, force = false) {
   const {user,profile}=getStudyData();
   const period=briefingPeriod();
@@ -290,8 +291,6 @@ document.addEventListener('click',event=>{
   if(event.target.closest('[data-school-month-today]:not(:disabled)')){calendarMonth=currentSchoolMonth();void sync();}
   if(event.target.closest('[data-school-refresh]')){schoolKey=null;forceSchoolRefresh=true;void sync();}
   if(event.target.closest('[data-briefing-retry]')&&briefing.status!=='loading'){briefing={status:'idle',force:true};void sync();}
-  const suggestion=event.target.closest('[data-ai-suggestion]');
-  if(suggestion){const field=document.querySelector('[data-ai-form] textarea');field.value=suggestion.dataset.aiSuggestion;field.focus();}
 });
 for(const event of ['study:navigated','study:auth-changed','study:data-changed'])window.addEventListener(event,()=>{void sync();});
 // Only refresh at a slot transition while the home screen is visible.

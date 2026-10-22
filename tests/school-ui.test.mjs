@@ -6,7 +6,7 @@ import { chatHistory, completedAnswer } from '../chat-state.js';
 import { briefingPeriod } from '../functions/briefing-period.js';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
-const source=cacheSource+'\n'+(await readFile(new URL('../integrations.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
+const source=cacheSource+'\n'+(await readFile(new URL('../integrations.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 function schoolUi() {
   const handlers={},requests=[];

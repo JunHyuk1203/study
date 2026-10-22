@@ -2,7 +2,9 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { creditFocusTime } from './focus-time.js';
-import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, SUBJECTS, validDisplayName, weekKey } from './domain.js';
+import { advanceStreak, checkpointCamera, MAX_SESSION_MS, splitStudyInterval, validDisplayName, weekKey } from './domain.js';
+import { planSubjects } from './plan-domain.js';
+import { changePlan } from './plan-service.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 
 const app = getApps()[0] ?? initializeApp();
@@ -49,10 +51,11 @@ export const updateAccount = onCall(options, async (request) => {
   return { updated: true };
 });
 
+export const updateStudyPlan = onCall(options, request => changePlan(db,userId(request),request.data?.action,request.data));
+
 export const startStudySession = onCall(options, async (request) => {
   const uid = userId(request, true);
   const subjectId = request.data?.subjectId;
-  if (!SUBJECTS.includes(subjectId)) throw new HttpsError('invalid-argument', '과목을 선택해 주세요.');
   const cameraMode = request.data?.cameraMode === true;
   const controllerId = request.data?.controllerId;
   if (cameraMode && (typeof controllerId !== 'string' || !/^[a-f0-9-]{36}$/.test(controllerId))) throw new HttpsError('invalid-argument', '카메라 제어 ID가 올바르지 않습니다.');
@@ -62,6 +65,7 @@ export const startStudySession = onCall(options, async (request) => {
   await db.runTransaction(async (transaction) => {
     const profile = await transaction.get(profileRef);
     if (!profile.exists) throw new HttpsError('failed-precondition', '계정 프로필을 먼저 생성해 주세요.');
+    if (!planSubjects(profile.data()).some(row => row.id === subjectId)) throw new HttpsError('invalid-argument', '설정에 추가한 과목을 선택해 주세요.');
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     session = { uid, subjectId, status: 'active',

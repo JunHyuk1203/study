@@ -4,7 +4,8 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
-const source=cacheSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
+const toastSource=(await readFile(new URL('../notifications.js',import.meta.url),'utf8')).replace(/^export /gm,'');
+const source=cacheSource+'\n'+toastSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
   .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
 
 test('production import graph creates only one instance of each shared state module',async()=>{
@@ -20,6 +21,32 @@ test('production import graph creates only one instance of each shared state mod
   await visit(new URL('../app.js',import.meta.url));
   for(const [path,identities]of versions)assert.equal(identities.size,1,`Duplicate module handlers: ${path}: ${[...identities].join(', ')}`);
   for(const name of ['data.js','camera.js','integrations.js'])assert.ok([...versions.keys()].some(path=>path.endsWith('/'+name)));
+});
+
+test('page errors stay on their originating page and success messages never occupy inline status',()=>{
+  const status={textContent:'',hidden:true,classList:{toggle(){}}};
+  const context=vm.createContext({
+    cameraState:()=>({enabled:false,status:'off'}),getAuthUser:()=>({uid:'owner'}),
+    document:{querySelector:()=>null,querySelectorAll:selector=>selector==='[data-sync-status]'?[status]:[],addEventListener(){}},
+    window:{location:{pathname:'/study.html'},addEventListener(){},setInterval(){},dispatchEvent(){}},Event:class {},
+  });
+  vm.runInContext(`${source}\nnotice('저장하지 못했습니다.',true);`,context);
+  assert.equal(status.textContent,'저장하지 못했습니다.');assert.equal(status.hidden,false);
+  for(const page of ['school','account']) {
+    context.window.location.pathname=`/${page}.html`;
+    vm.runInContext('paint();',context);
+    assert.equal(status.textContent,'');assert.equal(status.hidden,true);
+  }
+  vm.runInContext("notice('닉네임을 저장했습니다.');",context);
+  assert.equal(status.textContent,'');assert.equal(status.hidden,true);
+});
+
+test('weekly goal progress sums Sunday through Saturday daily records including custom subjects',()=>{
+  const now=Date.parse('2026-10-22T00:00:00Z');
+  class Clock extends Date {static now(){return now;}}
+  const context=vm.createContext({Date:Clock,getAuthUser:()=>null,cameraState:()=>({}),document:{addEventListener(){}},window:{addEventListener(){},setInterval(){}}});
+  vm.runInContext(`${source}\nstate.days=[{date:'2026-10-17',totalSeconds:999,subjectSeconds:{s_physics:999}},{date:'2026-10-18',totalSeconds:600,subjectSeconds:{s_physics:600}},{date:'2026-10-22',totalSeconds:300,subjectSeconds:{other:300}}];globalThis.result=getStudyData().stats.week;`,context);
+  assert.equal(context.result.totalSeconds,900);assert.equal(context.result.subjectSeconds.s_physics,600);assert.equal(context.result.subjectSeconds.other,300);
 });
 
 test('camera startup errors keep the focus exit enabled and close without saving a nonexistent session',async()=>{
@@ -303,13 +330,14 @@ test('camera setup and synchronization use a normal pending state while real fai
 test('normal camera termination shows saving without paused error styling until the server replies',async()=>{
   const clicks=[],classes=new Set(),message={textContent:''},camera={enabled:true,tracking:true,status:'tracking'};
   const button={disabled:false,dataset:{studyAction:'stop'}};
-  let resolveSave,closed=0;
+  let resolveSave,resolveClose,closed=0;
   const save=new Promise(resolve=>{resolveSave=resolve;});
+  const close=new Promise(resolve=>{resolveClose=resolve;});
   const context=vm.createContext({
     performance,
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>({uid:'owner',emailVerified:true}),
-    stopCamera:text=>{camera.enabled=false;camera.tracking=false;camera.status='off';camera.message=text;},
-    closeCameraFocus:async()=>{closed++;},send:()=>save,Event:class {},
+    stopCamera:(text='얼굴 인식으로 학습 시작')=>{camera.enabled=false;camera.tracking=false;camera.status='off';camera.message=text;},
+    closeCameraFocus:async()=>{closed++;await close;},send:()=>save,Event:class {},
     document:{hidden:false,querySelector:()=>null,querySelectorAll:selector=>selector==='[data-study-action]'?[button]:selector==='[data-timer-state]'?[message]:selector==='.timer-panel'?[{classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}}]:[],addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}},
     window:{addEventListener(){},setInterval(){},dispatchEvent(){}},
   });
@@ -318,7 +346,12 @@ test('normal camera termination shows saving without paused error styling until 
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(message.textContent,'서버에 저장 중…');assert.equal(camera.message,'서버에 저장 중…');
   assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);assert.equal(closed,0);
-  resolveSave({data:{creditedSeconds:30,studyRevision:1}});await Promise.all(pending);
+  resolveSave({data:{creditedSeconds:30,studyRevision:1}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(camera.message,'얼굴 인식으로 학습 시작');
+  assert.equal(message.textContent,'학습 시작 대기');
+  assert.equal(vm.runInContext('state.notice',context),'');
+  resolveClose();await Promise.all(pending);
   assert.equal(closed,1);assert.equal(classes.has('camera-pending'),false);
 });
 

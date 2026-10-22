@@ -6,6 +6,7 @@ import { schoolCodes, classroom, neisRows, schoolRecord, chatContents, schoolDat
 import { generateForUser, usageFor } from './ai-service.js';
 import { schoolMonth, loadSchoolData, loadUpcomingExams } from './school-service.js';
 import { schoolAgent } from './school-agent.js';
+import { runPlanTool } from './plan-agent.js';
 import { cachedBriefing } from './briefing-cache.js';
 import { createDailyNeis } from './neis-cache.js';
 
@@ -103,7 +104,7 @@ export const chatWithStudy = onCall({...options, timeoutSeconds:240, secrets:[go
   const user = uid(request, true), contents = input(() => chatContents(request.data));
   await rateLimit(user, 'ai', 10);
   const school = (await db.doc(`users/${user}`).get()).data()?.school;
-  const result = await schoolAgent({school,contents,lookup:neis,generate:parameters=>generateForUser({
+  const result = await schoolAgent({school,contents,lookup:neis,managePlan:(name,args)=>runPlanTool(db,user,name,args),generate:parameters=>generateForUser({
     ...parameters,user,model:request.data?.model,key:googleKey.value(),
     onChunk:request.acceptsStreaming?text=>response.sendChunk({text}):undefined,signal:response?.signal,
   })});

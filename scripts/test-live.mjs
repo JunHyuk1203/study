@@ -51,7 +51,14 @@ try {
   const profile = await getDoc(doc(db, 'users', uid));
   assert.equal(profile.data().uid, uid);
   await invoke('updateAccount', { displayName: '검증계정' });
-  const start = await invoke('startStudySession', { subjectId: 'math' });
+  await assert.rejects(()=>invoke('startStudySession',{subjectId:'math'}),error=>error.code==='functions/invalid-argument');
+  const subject=(await invoke('updateStudyPlan',{action:'addSubject',name:'검증용 수학'})).data.subject;
+  const goal=(await invoke('updateStudyPlan',{action:'addGoal',period:'week',subjectId:subject.id,minutes:120})).data.goal;
+  const repeatGoal=(await invoke('updateStudyPlan',{action:'addGoal',period:'week',subjectId:subject.id,minutes:120})).data.goal;
+  assert.equal(goal.id,repeatGoal.id);
+  const planned=(await getDoc(doc(db,'users',uid))).data();
+  assert.equal(planned.subjects.length,1);assert.equal(planned.goals.length,1);
+  const start = await invoke('startStudySession', { subjectId: subject.id });
   sessionId = start.data.sessionId;
   await new Promise(resolve => setTimeout(resolve, 2200));
   const result = await invoke('finishStudySession', { sessionId, durationSeconds: 999999 });
@@ -70,7 +77,7 @@ try {
     assert.equal(rank.data().totalSeconds, segment.seconds);
   }
   const controllerId=randomUUID();
-  const cameraStart=await invoke('startStudySession',{subjectId:'math',cameraMode:true,controllerId});
+  const cameraStart=await invoke('startStudySession',{subjectId:subject.id,cameraMode:true,controllerId});
   sessionId=cameraStart.data.sessionId;
   assert.equal(cameraStart.data.session?.controllerId,controllerId,'Deployed start must return server session state');
   const synced=await invoke('syncStudyCamera',{sessionId,controllerId,tracking:true,sequence:1});

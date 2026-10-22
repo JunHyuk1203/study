@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import {initializeApp,deleteApp} from 'firebase/app';
 import {getAuth,createUserWithEmailAndPassword,signOut,signInWithEmailAndPassword} from 'firebase/auth';
 import {getFunctions,httpsCallable} from 'firebase/functions';
+import {getFirestore,doc,getDoc} from 'firebase/firestore';
+import {planPeriod} from '../functions/plan-domain.js';
 import {firebaseConfig} from '../firebase-config.js';
 import {schoolDates} from '../functions/integrations-domain.js';
 import {MONTHLY_LIMIT} from '../functions/ai-budget.js';
@@ -29,6 +31,15 @@ try{
   await adminAuth(admin).updateUser(user,{emailVerified:true});
   await signOut(auth);await signInWithEmailAndPassword(auth,email,password);
   await invoke('ensureProfile',{displayName:'API연동검증'});
+  if(process.argv.includes('--plan-only')) {
+    const request=await httpsCallable(functions,'chatWithStudy',{timeout:245000}).stream({model:'gemini-3.8-flash',messages:[{role:'user',text:'검증용 물리라는 학습 과목을 추가하고, 그 과목의 이번 주 공부시간 목표를 2시간으로 지금 등록해 줘. 추천만 하지 말고 계정에 저장해 줘.'}]});
+    let chunks=0;for await(const chunk of request.stream)if(chunk.text)chunks++;
+    const result=await request.data;assert.ok(result.text);assert.equal(result.cutoff,false);
+    const profile=(await getDoc(doc(getFirestore(app,'study-data'),'users',user))).data();
+    const subject=profile.subjects?.find(row=>row.name==='검증용 물리');assert.ok(subject,'AI must actually save the requested subject');
+    assert.ok(profile.goals?.some(goal=>goal.subjectId===subject.id&&goal.period==='week'&&goal.periodKey===planPeriod('week')&&goal.targetSeconds===7200),'AI must actually save the requested goal for this Sunday-based week');
+    console.log(`PASS live AI subject creation and weekly goal registration, verified in Firestore (${chunks} streamed chunks).`);
+  } else {
   const search=await invoke('searchSchools',{query:'서울고등학교'});assert.ok(search.schools.length);
   const school=search.schools.find(row=>row.name==='서울고등학교')||search.schools[0];schoolId=`${school.officeCode}_${school.schoolCode}`;
   await invoke('saveSchool',{officeCode:school.officeCode,schoolCode:school.schoolCode,grade:'1',className:'1'});
@@ -46,6 +57,7 @@ try{
   const month=schoolDates().date.slice(0,7);await db.patch(`${root}/users/${user}/aiUsage/${month}`,{fields:{spent:{integerValue:String(MONTHLY_LIMIT)},reserved:{integerValue:'0'}}});
   await assert.rejects(()=>invoke('chatWithStudy',{model:'gemini-3.8-flash',messages:[{role:'user',text:'안녕'}]}),error=>error.code==='functions/resource-exhausted');
   console.log('PASS live Flash-only briefing, shared usage, Argon third-call rejection and monthly limit rejection.');
+  }
 }finally{
   await signOut(auth).catch(()=>{});
   if(user){

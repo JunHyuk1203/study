@@ -4,14 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>study — 나의 공부 공간</title>
-  <link rel="stylesheet" href="styles.css?v=20261022-17">
-<script src="navigation.js?v=20261022-10"></script><script type="module" src="app.js?v=20261022-15"></script></head>
+  <link rel="stylesheet" href="styles.css?v=20261022-19">
+<script src="navigation.js?v=20261022-10"></script><script type="module" src="app.js?v=20261022-19"></script></head>
 <body>
   <div class="app">
     <header class="header"><a class="brand" href="index.html">STUDY.</a><a class="profile-dot" href="account.html" aria-label="내 계정">·</a></header>
     <main aria-label="홈">
       <section class="card overview"><div class="section-title"><h2>오늘의 공부</h2><span class="badge" data-data-badge>로딩 중…</span></div><p class="hero-number" data-time="today">로딩 중…</p><div class="week-chart" data-chart="days" aria-label="최근 7일 학습 시간">로딩 중…</div><div class="card-foot"><span>이번 주 <span data-time="week">로딩 중…</span></span><span class="green" data-week-comparison>로딩 중…</span></div></section>
-      <div class="two-columns"><section class="card mini-card"><span class="mini-icon sand">◷</span><p class="muted">이번 주 목표</p><p class="metric" data-week-goal>로딩 중…</p><div class="progress"><i data-week-progress style="width:0%"></i></div><p class="tiny muted" data-week-remaining>로딩 중…</p></section><section class="card mini-card"><span class="mini-icon lavender">⚑</span><p class="muted">다가오는 시험</p><p class="metric" data-upcoming-exam>로딩 중…</p><p class="tiny muted" data-upcoming-exam-details aria-live="polite">학사일정을 확인하고 있습니다.</p></section></div>
+      <div class="two-columns goal-overview"><section class="card mini-card goal-card"><button class="goal-toggle" type="button" data-goal-toggle aria-expanded="false" aria-controls="goal-panel" aria-haspopup="dialog"><span class="mini-icon sand">◷</span><span class="muted">목표 <span class="goal-chevron" aria-hidden="true">↗</span></span><span class="metric" data-goal-summary aria-live="polite">로딩 중…</span><span class="progress"><i data-goal-summary-progress style="width:0%"></i></span><span class="tiny muted">눌러서 목표 확인 · 추가</span></button></section><section class="card mini-card"><span class="mini-icon lavender">⚑</span><p class="muted">다가오는 시험</p><p class="metric" data-upcoming-exam>로딩 중…</p><p class="tiny muted" data-upcoming-exam-details aria-live="polite">학사일정을 확인하고 있습니다.</p></section></div>
+      <dialog class="goal-dialog" id="goal-panel" aria-labelledby="goal-title"><div class="goal-dialog-heading"><div><h2 id="goal-title">내가 계획한 목표</h2><p class="tiny muted">오늘 · 이번 주 · 이번 달의 공부 기록으로 달성 여부를 확인해요.</p></div><button class="goal-remove goal-dialog-close" type="button" data-goal-close aria-label="목표 창 닫기" autofocus>×</button></div>
+      <div class="goal-list" data-goal-list></div>
+      <button type="button" class="secondary-button goal-create" data-goal-create aria-expanded="false" aria-controls="goal-create-form">목표 추가하기</button>
+      <form class="goal-form" id="goal-create-form" data-goal-form hidden><h3>목표 추가</h3>
+        <div class="goal-form-grid">
+          <div class="form-field"><span id="goal-period-label">기간</span><div class="plan-picker"><input name="period" type="hidden" value="day"><button type="button" class="plan-picker-toggle" data-picker-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="goal-period-options" aria-labelledby="goal-period-label goal-period-value"><span data-picker-label id="goal-period-value">오늘 · 일간</span><span aria-hidden="true">⌄</span></button><div class="plan-picker-options" role="listbox" id="goal-period-options" aria-labelledby="goal-period-label" hidden><button type="button" role="option" data-picker-value="day" aria-selected="true" tabindex="-1">오늘 · 일간</button><button type="button" role="option" data-picker-value="week" aria-selected="false" tabindex="-1">이번 주 · 주간</button><button type="button" role="option" data-picker-value="month" aria-selected="false" tabindex="-1">이번 달 · 월간</button></div></div></div>
+          <div class="form-field"><span id="goal-subject-label">과목</span><div class="plan-picker"><input name="subjectId" type="hidden" value="all"><button type="button" class="plan-picker-toggle" data-picker-toggle aria-haspopup="listbox" aria-expanded="false" aria-controls="goal-subject-options" aria-labelledby="goal-subject-label goal-subject-value"><span data-picker-label id="goal-subject-value">전체 공부시간</span><span aria-hidden="true">⌄</span></button><div class="plan-picker-options" data-goal-subject role="listbox" id="goal-subject-options" aria-labelledby="goal-subject-label" hidden></div></div></div>
+        </div>
+        <div class="goal-duration"><label class="form-field">시간<input name="hours" type="number" min="0" max="744" step="1" value="1" required inputmode="numeric"></label><label class="form-field">분<input name="minutes" type="number" min="0" max="59" step="1" value="0" required inputmode="numeric"></label></div>
+        <div class="goal-form-actions"><button type="button" class="secondary-button" data-goal-create-cancel>취소</button><button type="submit" class="primary-button">목표 추가</button></div>
+        <p class="tiny muted">이번 주는 일요일부터 토요일까지예요. 시간은 한국 시간을 기준으로 해요.</p>
+        <p class="tiny muted">AI에게 “이번 주 전체 10시간 목표 등록해 줘”라고 요청해도 좋아요. 과목은 계정 설정 또는 AI에서 추가할 수 있어요.</p>
+      </form><p class="auth-status" data-plan-status role="status" hidden></p></dialog>
       <section class="card briefing"><div class="section-title"><h2><span class="green">✧</span> AI 브리핑</h2><span class="tiny muted">오늘의 한마디</span></div><p data-ai-briefing aria-live="polite">로딩 중…</p><div class="briefing-foot"><button class="secondary-button" data-briefing-retry hidden>다시 불러오기</button></div></section>
       <p class="auth-status" data-sync-status role="status" aria-live="polite" hidden></p>
     </main>

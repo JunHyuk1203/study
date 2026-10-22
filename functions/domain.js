@@ -1,7 +1,6 @@
 const DAY_MS = 86400000;
 const KST_MS = 9 * 3600000;
 export const MAX_SESSION_MS = 12 * 3600000;
-export const SUBJECTS = ['korean', 'math', 'english', 'science', 'social', 'other'];
 export const CAMERA_LEASE_MS = 30000;
 
 // Aggregate only server-observed active windows. An expired lease never credits the gap.

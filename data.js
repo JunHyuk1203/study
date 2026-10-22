@@ -1,9 +1,11 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
 import { readCache } from './client-cache.js?v=20261022-11';
+import { showToast } from './notifications.js?v=20261022-18';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261022-15';
 
-const subjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회', other: '기타' };
+const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
+function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }
 const KST = 9 * 3600000;
 const dateKey = (now = Date.now()) => new Date(now + KST).toISOString().slice(0, 10);
 function monday(date) {
@@ -84,7 +86,16 @@ function observeCameraReply(reply, sessionId) {
 }
 let previewSession = null;
 let authResolved = false;
-export function getStudyData() { return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser()}; }
+export function getStudyData() {
+  const today = dateKey(), sunday = new Date(`${today}T00:00:00Z`);
+  sunday.setUTCDate(sunday.getUTCDate() - sunday.getUTCDay());
+  const start = sunday.toISOString().slice(0,10), week = {totalSeconds:0,subjectSeconds:{}};
+  for (const row of state.days) if (row.date >= start && row.date <= today) {
+    week.totalSeconds += row.totalSeconds || 0;
+    for (const [id,seconds] of Object.entries(row.subjectSeconds || {})) week.subjectSeconds[id] = (week.subjectSeconds[id] || 0) + seconds;
+  }
+  return {profile:state.profile, ready:authResolved && !state.pending.has('profile'), user:getAuthUser(), stats:{day:state.today,week,month:state.month}, loading:new Set(state.pending), failed:new Set(state.failed)};
+}
 function updatePreviewTimer() {
   if (!previewSession) return;
   const active = cameraState().tracking && !cameraState().manuallyPaused && !document.hidden;
@@ -99,7 +110,11 @@ let state = emptyState();
 function emptyState() {
   return { profile: null, today: {}, week: {}, month: {}, summary: {}, focusTime: {}, lastWeek: {}, days: [], ranking: [], schoolRanking: [], ownRanking: null, active: null, notice: '', error: false, pending:new Set(['profile','today','week','month','summary','focusTime','lastWeek','days','ranking','ownRanking']), failed:new Set() };
 }
-function notice(text, error = false) { state.notice = text; state.error = error; paint(); }
+function notice(text, error = false, transient = !error) {
+  state.notice = transient ? '' : text;state.noticePath = window.location?.pathname;state.error = error;
+  if (transient && text) showToast(text);
+  paint();
+}
 function errorText(error) {
   const messages = {
     'functions/unauthenticated': '다시 로그인해 주세요.',
@@ -147,7 +162,8 @@ function paintChart(container) {
   if (!authResolved || getAuthUser() && state.pending.has(key)) { container.textContent = '로딩 중…'; return; }
   if (!getAuthUser()) { container.textContent = '로그인하면 공부 기록을 볼 수 있습니다.'; return; }
   if (state.failed.has(key)) { container.textContent = '기록을 불러오지 못했습니다.'; return; }
-  const rows = isSubjects ? Object.entries(subjects).map(([id, label]) => ({ label, seconds: state.week.subjectSeconds?.[id] || 0 })) : Array.from({ length: 7 }, (_, index) => {
+  const labels = {...Object.fromEntries(Object.entries(historicalSubjects).filter(([id]) => state.week.subjectSeconds?.[id] > 0)),...studySubjects()};
+  const rows = isSubjects ? Object.entries(labels).map(([id, label]) => ({ label, seconds: state.week.subjectSeconds?.[id] || 0 })) : Array.from({ length: 7 }, (_, index) => {
     const key = dateKey(Date.now() - (6 - index) * 86400000);
     const record = state.days.find(row => row.date === key);
     return { label: ['일', '월', '화', '수', '목', '금', '토'][new Date(`${key}T00:00:00Z`).getUTCDay()], seconds: record?.totalSeconds || 0 };
@@ -177,10 +193,6 @@ function paint() {
   const rank = state.ranking.findIndex(row => row.uid === user?.uid);
   textAll('[data-my-rank]', value('ownRanking', value('ranking', rank >= 0 ? `${rank + 1}위` : state.ownRanking?.totalSeconds ? '50위 밖' : '—')));
   textAll('[data-data-badge]', value('today', '실시간 기록'));
-  const goal = state.profile?.weeklyGoalSeconds || 0;
-  textAll('[data-week-goal]', value('profile', goal ? `${Math.floor((state.week.totalSeconds || 0) / 3600)} / ${goal/3600}시간` : '미설정'));
-  textAll('[data-week-remaining]', value('profile', goal ? `목표까지 ${time(Math.max(0, goal - (state.week.totalSeconds || 0)))}` : '등록된 학습 목표가 없습니다.'));
-  for (const bar of document.querySelectorAll('[data-week-progress]')) bar.style.width = `${goal ? Math.min(100, (state.week.totalSeconds || 0) / goal * 100) : 0}%`;
   const previous = state.lastWeek.totalSeconds || 0;
   textAll('[data-week-comparison]', value('week', value('lastWeek', previous ? `지난주 대비 ${Math.round(((state.week.totalSeconds || 0) - previous) / previous * 100)}%` : '지난주 기록 없음')));
   textAll('[data-school-name]', value('profile', state.profile?.school?.name || '등록된 학교 없음'));
@@ -189,9 +201,10 @@ function paint() {
   for (const element of document.querySelectorAll('[data-ranking]')) paintRanking(element, element.dataset.ranking === 'school' ? state.schoolRanking : state.ranking, element.dataset.ranking === 'school');
   for (const element of document.querySelectorAll('[data-chart]')) paintChart(element);
   for (const element of document.querySelectorAll('[data-sync-status]')) {
-    element.textContent = state.notice || (!user ? '기록을 저장하려면 로그인해 주세요.' : '');
+    const pageNotice = state.noticePath === window.location?.pathname ? state.notice : '';
+    element.textContent = pageNotice || (!user ? '기록을 저장하려면 로그인해 주세요.' : '');
     element.hidden = !element.textContent;
-    element.classList.toggle('is-error', state.error);
+    element.classList.toggle('is-error', Boolean(pageNotice && state.error));
   }
   for (const form of document.querySelectorAll('[data-profile-form]')) {
     form.hidden = !user;
@@ -246,6 +259,13 @@ function paintTimer() {
   if (!busy || camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
   for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
   for (const selector of document.querySelectorAll('[data-study-subject]')) {
+    const choices = studySubjects(), signature = JSON.stringify(choices);
+    if (selector.dataset?.subjects !== signature) {
+      const previous = selector.value;
+      selector.replaceChildren(...Object.entries(choices).map(([id,name]) => {const option = document.createElement('option');option.value=id;option.textContent=name;return option;}));
+      selector.value = Object.hasOwn(choices,previous) ? previous : 'other';
+      if (selector.dataset) selector.dataset.subjects = signature;
+    }
     selector.disabled = busy || Boolean(state.profile?.activeSessionId || previewSession || camera.enabled);
     if (state.active?.subjectId) selector.value = state.active.subjectId;
   }
@@ -312,6 +332,7 @@ function visibleDataKeys() {
   if (document.querySelector('[data-week-comparison]')) keys.add('lastWeek');
   if (document.querySelector('[data-chart="days"]')) keys.add('days');
   if (document.querySelector('[data-chart="subjects"]')) keys.add('week');
+  if (document.querySelector('[data-goal-summary], [data-goal-list]')) for (const key of ['today','days','month']) keys.add(key);
   if (document.querySelector('[data-ranking="global"], [data-my-rank]')) keys.add('ranking');
   if (document.querySelector('[data-my-rank]')) keys.add('ownRanking');
   if (document.querySelector('[data-ranking="school"]') && state.profile?.schoolId) keys.add('schoolRanking');
@@ -468,9 +489,11 @@ document.addEventListener('click', async event => {
       notice(cameraMode ? '스터디캠 학습을 시작했습니다. 얼굴이 인식될 때만 시간이 적립됩니다.' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
     } else {
       finishingSession = true;
-      notice('서버에 저장 중…');
+      notice('서버에 저장 중…',false,false);
       stopCamera('서버에 저장 중…');
       const result = await call('finishStudySession')({ sessionId: state.profile?.activeSessionId });
+      finishingSession = false;
+      stopCamera();
       if (result.data.studyRevision != null) {
         state.profile={...state.profile,activeSessionId:null,studyRevision:result.data.studyRevision};
         observeSession(null);
@@ -480,7 +503,7 @@ document.addEventListener('click', async event => {
       await closeCameraFocus();
     }
   } catch (error) {
-    if (cameraStart) stopCamera(errorText(error), true);
+    if (cameraStart || !starting) stopCamera(errorText(error), true);
     notice(errorText(error), true);
   }
   finally { finishingSession = false; busy = false; paintTimer(); void syncCamera(); }
