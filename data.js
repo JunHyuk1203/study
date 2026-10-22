@@ -66,13 +66,16 @@ function updateCameraDisplay() {
 }
 // Session timestamps come from the server; the device clock may be seconds ahead.
 function stopReplacedCamera(previousId,nextId) {
-  if(previousId && previousId!==nextId && state.active?.cameraMode && state.active.controllerId===cameraController && cameraState().enabled) {
-    updateCameraDisplay();
-    cameraHandoffDisplay={seconds:(cameraDisplay?.totalMs||0)/1000};
-    resetCameraSync();
-    observeSession(null);
-    stopCamera('얼굴인식 종료 완료 · 단어앱에서 학습 중');
-  }
+  if(previousId && previousId!==nextId && state.active && !state.active.activityMode && !finishingSession)leaveEndedStudy();
+}
+function leaveEndedStudy() {
+  resetCameraSync();cameraHandoffDisplay=null;observeSession(null);
+  stopCamera('학습 세션이 종료되었습니다.');
+  void closeCameraFocus().then(()=>{
+    if(!/study\.html$/.test(window.location?.pathname||''))return;
+    const home=document.querySelector?.('a[href="index.html"]');
+    if(home?.click)home.click();else window.location?.assign?.('index.html');
+  });
 }
 function resetCameraSync() {
   cameraSyncEpoch++;cameraSyncBusy=false;cameraSyncId=null;cameraSyncSequence=0;
@@ -361,24 +364,24 @@ function paintTimer() {
 
 async function syncCamera(force = false, wordChanged = false) {
   const session = state.active;
-  if (!session?.cameraMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
+  if (!session || session.activityMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
+  if(session.cameraMode&&!cameraState().enabled)return;
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
   if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
   const wordPaused=wordAppInUse();
   wordChanged ||= wordPaused!==cameraLastWordPaused;
-  const tracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
+  const tracking = !session.cameraMode || cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
   if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
-  if (!tracking && cameraLastTracking === false && !cameraSyncFailed && !wordChanged) return;
   // Status/pose changes with the same presence must not trigger extra writes.
-  if (!wordChanged && tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 20000) return;
+  if (!wordChanged && tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 5000) return;
   cameraSyncBusy = true;
   const requestEpoch=cameraSyncEpoch;
   cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
   const sequence = cameraSyncSequence = Math.max(cameraSyncSequence, session.sequence || 0) + 1;
   try {
-    const result = await call('syncStudyCamera')({ sessionId, controllerId: cameraController, tracking, sequence });
+    const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')({ sessionId, controllerId: cameraController, tracking, sequence });
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
     if(result?.data?.ignored)cameraResumeSequence=Math.max(cameraResumeSequence||0,(state.active?.sequence||sequence)+1);
@@ -386,15 +389,16 @@ async function syncCamera(force = false, wordChanged = false) {
     cameraLastWordPaused = wordPaused;
     cameraSyncFailed = false;
     cameraSyncFailures=0;cameraRetryAt=0;
-  } catch {
+  } catch (error) {
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
+    if(error?.code==='functions/failed-precondition'||error?.code==='functions/not-found'){leaveEndedStudy();return;}
     cameraSyncFailed = true; cameraPauseAt ??= performance.now();
     cameraRetryAt=Date.now()+Math.min(60000,5000*2**Math.min(cameraSyncFailures++,4));
   }
   finally {
     if(requestEpoch!==cameraSyncEpoch)return;
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
-    const currentTracking = cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
+    const currentTracking = !session.cameraMode || cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
     if (tracking !== currentTracking || !cameraSyncFailed && (wordPaused!==wordAppInUse() || cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence)) void syncCamera(true);
   }
 }
@@ -574,7 +578,7 @@ document.addEventListener('click', async event => {
     if (starting) {
       const subjectId = document.querySelector('[data-study-subject]')?.value || 'other';
       const cameraMode = cameraState().enabled;
-      const result = await call('startStudySession')({ subjectId, cameraMode, ...(cameraMode ? { controllerId: cameraController } : {}) });
+      const result = await call('startStudySession')({ subjectId, cameraMode, controllerId: cameraController });
       if (result.data?.session) {
         state.profile = { ...state.profile, activeSessionId: result.data.sessionId };
         observeCameraReply(result.data, result.data.sessionId);
@@ -687,10 +691,18 @@ window.addEventListener('study:camera-changed', () => {
   }
   paintTimer();void syncCamera(true);
 });
+let expiryCheckBusy=false,expiryCheckAt=0;
 window.setInterval(() => {
   if (connectedDay && connectedDay !== dateKey()) void connectUser();
   paintTimer();
   void syncCamera();
+  const wordExpired=state.profile?.wordStudySessionId&&state.profile?.wordAppUntilMs<=Date.now();
+  const deadline=state.active?(state.active.presenceUntilMs??state.active.leaseUntilMs??(state.active.startedAt?.toMillis?.()+10000)):null;
+  const sessionExpired=deadline!=null&&deadline<=sessionNow();
+  if(call&&!expiryCheckBusy&&Date.now()>=expiryCheckAt&&(wordExpired||sessionExpired)){
+    expiryCheckBusy=true;expiryCheckAt=Date.now()+5000;
+    void call('expireStudySessions')({}).catch(()=>{}).finally(()=>{expiryCheckBusy=false;});
+  }
   if(state.profile?.wordSnapshot?.activeSinceMs!=null&&!document.hidden)paint();
 }, 1000);
 

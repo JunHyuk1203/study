@@ -117,13 +117,13 @@ test('camera startup errors keep the focus exit enabled and close without saving
 function timerUi(skew) {
   let now=100000,monotonic=0;
   const handlers={},display={textContent:''},focusDisplay={textContent:''},focusState={textContent:''},camera={tracking:true,enabled:true};
-  let stopped=0,closed=0,holdClose=false,releaseClose;
+  let stopped=0,closed=0,holdClose=false,releaseClose,navigation;
   const context=vm.createContext({
     Date:class extends Date {static now(){return now+skew;}},performance:{now:()=>monotonic},
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>null,
     stopCamera:()=>{stopped++;camera.enabled=false;},closeCameraFocus:()=>{closed++;return holdClose?new Promise(resolve=>{releaseClose=resolve;}):Promise.resolve();},
     document:{hidden:false,querySelectorAll:selector=>selector==='[data-active-timer]'?[display,focusDisplay]:selector==='.camera-focus [data-active-timer]'?[focusDisplay]:selector==='.camera-focus [data-timer-state]'?[focusState]:[],addEventListener(){}},
-    window:{addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
+    window:{location:{pathname:'/study.html',assign:path=>{navigation=path;}},addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
   });
   vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,observeActiveSnapshot,paintTimer,syncCamera,stopReplacedCamera,message:cameraTimerMessage,setProfile:value=>{state.profile=value;},setActiveId:value=>{activeId=value;},syncState:()=>({busy:cameraSyncBusy,failed:cameraSyncFailed})};`,context);
   const configure = (send, sessionId = 'session') => {
@@ -131,7 +131,7 @@ function timerUi(skew) {
     context.sessionId = sessionId;
     vm.runInContext('call=()=>send;state.profile={activeSessionId:sessionId};', context);
   };
-  return {display,focusDisplay,focusState,camera,handlers,ui:context.ui,configure,stops:()=>({stopped,closed}),holdClose:()=>{holdClose=true;},releaseClose:()=>releaseClose?.(),shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
+  return {display,focusDisplay,focusState,camera,handlers,ui:context.ui,configure,navigation:()=>navigation,stops:()=>({stopped,closed}),holdClose:()=>{holdClose=true;},releaseClose:()=>releaseClose?.(),shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
     cameraMode:true,controllerId:'controller',sequence,accumulatedSeconds:seconds,
     updatedAt:{toMillis:()=>now},activeSinceMs:active?now:null,leaseUntilMs:active?now+30000:null,
   })};
@@ -193,7 +193,7 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
 test('a remote word handoff closes this device camera when its active session changes',()=>{
   const t=timerUi(0);t.ui.observeSession(t.snapshot(3));
   t.ui.stopReplacedCamera('camera','camera');assert.equal(t.stops().stopped,0);
-  t.ui.stopReplacedCamera('camera','word');assert.deepEqual(t.stops(),{stopped:1,closed:0});
+  t.ui.stopReplacedCamera('camera','word');assert.deepEqual(t.stops(),{stopped:1,closed:1});
   assert.equal(t.camera.enabled,false);
   t.ui.stopReplacedCamera('camera','word');assert.equal(t.stops().stopped,1);
 });
@@ -211,13 +211,13 @@ test('SP word counting freezes the camera display and menu/idle state releases i
 
 test('ten seconds without a word response requests camera resumption at the expiry boundary',async()=>{
   const t=timerUi(0),requests=[];
-  t.configure(async input=>{requests.push(input);return {data:{session:{...t.snapshot(2,requests.length>1,input.sequence),serverNowMs:requests.length===1?100000:110000}}};},'camera');
+  t.configure(async input=>{requests.push(input);return {data:{session:{...t.snapshot(2,requests.length>2,input.sequence),serverNowMs:requests.length===1?100000:requests.length===2?109999:110000}}};},'camera');
   t.ui.observeSession(t.snapshot(2,false));
   t.ui.setProfile({activeSessionId:'camera',wordCameraSessionId:'camera',wordPresenceUntilMs:110000});
   await t.ui.syncCamera();assert.equal(requests.length,1);
-  t.tick(9999);await t.ui.syncCamera();assert.equal(requests.length,1);
+  t.tick(9999);await t.ui.syncCamera();assert.equal(requests.length,2);
   t.tick(1);
-  await t.ui.syncCamera();assert.equal(requests.length,2);
+  await t.ui.syncCamera();assert.equal(requests.length,3);
   t.tick(1000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:03');
   assert.equal(t.camera.enabled,true);assert.equal(t.stops().stopped,0);
 });
@@ -343,24 +343,31 @@ test('late camera failure and snapshot cannot replace the word session or revive
   assert.equal(t.ui.syncState().failed,false);assert.equal(t.ui.syncState().busy,false);assert.equal(t.camera.enabled,false);
 });
 
-test('camera handoff keeps its screen and last time until explicitly dismissed',async()=>{
+test('an unexpected camera termination closes its focus screen automatically',async()=>{
   const t=timerUi(0);t.holdClose();t.ui.observeSession(t.snapshot(65));t.tick(2000);t.ui.paintTimer();
   t.ui.stopReplacedCamera('camera','word');t.ui.setProfile({activeSessionId:'word'});
   t.ui.observeSession({...t.snapshot(0),cameraMode:false,activityMode:true,controllerId:'word-controller'});
   t.tick(2000);t.ui.paintTimer();
-  assert.equal(t.display.textContent,'00:00:02');assert.equal(t.focusDisplay.textContent,'00:01:07');
-  assert.match(t.focusState.textContent,/얼굴인식 종료 완료/);
-  assert.equal(t.stops().closed,0);assert.equal(t.stops().stopped,1);
+  assert.equal(t.stops().closed,1);assert.equal(t.stops().stopped,1);
+  t.releaseClose();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.navigation(),'index.html');
 });
 
-test('status-only camera events do not add writes and heartbeats use a twenty-second interval',async()=>{
+test('an expired server session closes recognition and leaves the study tab without manual saving',async()=>{
+  const t=timerUi(0);t.configure(async()=>{throw {code:'functions/failed-precondition'};});
+  t.ui.observeSession(t.snapshot(0));await t.ui.syncCamera();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.camera.enabled,false);assert.equal(t.stops().closed,1);assert.equal(t.navigation(),'index.html');
+});
+
+test('status-only camera events do not add writes and heartbeats use a five-second interval',async()=>{
   const t=timerUi(0),requests=[];
   t.configure(async request=>{requests.push(request);return {data:{}};});
   t.ui.observeSession(t.snapshot(0));
   await t.ui.syncCamera();
   for(let i=0;i<100;i++)await t.ui.syncCamera(true);
   assert.equal(requests.length,1);
-  t.tick(19000);await t.ui.syncCamera();assert.equal(requests.length,1);
+  t.tick(4000);await t.ui.syncCamera();assert.equal(requests.length,1);
   t.tick(1000);await t.ui.syncCamera();assert.equal(requests.length,2);
   t.camera.tracking=false;await t.ui.syncCamera(true);
   assert.equal(requests.length,3);assert.equal(requests.at(-1).tracking,false);

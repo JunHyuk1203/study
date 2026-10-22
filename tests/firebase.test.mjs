@@ -6,7 +6,7 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies, prepareWordStudy } from '../functions/index.js';
+import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies, prepareWordStudy,expireStudySessions,heartbeatStudySession } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
 import { spendFocusTime } from '../functions/focus-time.js';
 import { generateForUser } from '../functions/ai-service.js';
@@ -449,6 +449,44 @@ test('a killed word app releases camera credit after its ten-second lease, befor
   await closeExpiredWordStudies.run({});
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,camera.sessionId);
   assert.equal((await ref.get()).data().status,'active');
+});
+
+test('atomic word start pauses camera and starts word credit in the same acknowledged transaction',async()=>{
+  const db=getFirestore(undefined,'study-data'),auth={uid:'atomic-word-start',token:{email_verified:true}},controllerId='12345678-1234-1234-1234-123456789abc';
+  await ensureProfile.run({auth,data:{displayName:'전환시작'}});
+  const camera=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  await syncStudyCamera.run({auth,data:{sessionId:camera.sessionId,controllerId,tracking:true,sequence:1}});
+  const word=await startWordStudy.run({auth,data:{controllerId,tracking:true}});
+  assert.ok(word.session.activeSinceMs!=null);
+  assert.equal((await db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`).get()).data().activeSinceMs,null);
+  const profile=(await db.doc(`users/${auth.uid}`).get()).data();
+  assert.equal(profile.wordSnapshot.activeSinceMs,word.session.activeSinceMs);assert.equal(profile.activeSessionId,camera.sessionId);
+});
+
+test('expired word and browser sessions are finalized automatically and cannot block a fresh start',async()=>{
+  const db=getFirestore(undefined,'study-data'),auth={uid:'expired-recovery',token:{email_verified:true}},controllerId='12345678-1234-1234-1234-123456789abc';
+  await ensureProfile.run({auth,data:{displayName:'자동정리'}});
+  const camera=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  const word=await startWordStudy.run({auth,data:{controllerId,tracking:true}});
+  for(const id of [camera.sessionId,word.sessionId])await db.doc(`users/${auth.uid}/sessions/${id}`).update({presenceUntilMs:Date.now()-1});
+  const next=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  assert.ok(next.sessionId!==camera.sessionId);
+  for(const id of [camera.sessionId,word.sessionId])assert.equal((await db.doc(`users/${auth.uid}/sessions/${id}`).get()).data().status,'finished');
+  await db.doc(`users/${auth.uid}/sessions/${next.sessionId}`).update({presenceUntilMs:Date.now()-1});
+  await expireStudySessions.run({auth,data:{}});
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,null);
+});
+
+test('manual browser heartbeats preserve live sessions and expired controllers cannot revive them',async()=>{
+  const db=getFirestore(undefined,'study-data'),auth={uid:'manual-heartbeat',token:{email_verified:true}},controllerId='12345678-1234-1234-1234-123456789abc';
+  await ensureProfile.run({auth,data:{displayName:'브라우저확인'}});
+  const session=await startStudySession.run({auth,data:{subjectId:'other',controllerId}});
+  const input={sessionId:session.sessionId,controllerId};
+  const beat=await heartbeatStudySession.run({auth,data:input});
+  assert.equal(beat.session.presenceUntilMs-beat.session.serverNowMs,10000);
+  await db.doc(`users/${auth.uid}/sessions/${session.sessionId}`).update({presenceUntilMs:Date.now()-1});
+  await assert.rejects(()=>heartbeatStudySession.run({auth,data:input}),e=>e.code==='failed-precondition');
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,null);
 });
 
 test('abandoned handoff reservations expire instead of permanently blocking study',async()=>{

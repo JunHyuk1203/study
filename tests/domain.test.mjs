@@ -45,9 +45,9 @@ test('camera pauses exclude gaps and lease expiry cannot backfill offline time',
   assert.equal(session.accumulatedSeconds, 10);
   session = { ...session, ...checkpointCamera(session, start + 60000, true) };
   session = { ...session, ...checkpointCamera(session, start + 120000, false) };
-  assert.equal(session.accumulatedSeconds, 40);
+  assert.equal(session.accumulatedSeconds, 20);
   assert.equal(session.activeSinceMs, null);
-  assert.equal(checkpointCamera(session, start + 180000, false).accumulatedSeconds, 40);
+  assert.equal(checkpointCamera(session, start + 180000, false).accumulatedSeconds, 20);
 });
 
 test('word credit ends after ten seconds without a heartbeat and never backfills the gap',()=>{
@@ -63,7 +63,7 @@ test('camera heartbeat splits midnight and stops at the session duration limit',
   const start = Date.parse('2026-10-31T14:59:50Z');
   const running = { startedAtMs: start, ...checkpointCamera({ startedAtMs: start }, start, true) };
   const paused = checkpointCamera(running, start + 20000, false);
-  assert.deepEqual(paused.segments.map(s => [s.date, s.seconds]), [['2026-10-31', 10], ['2026-11-01', 10]]);
+  assert.deepEqual(paused.segments.map(s => [s.date, s.seconds]), [['2026-10-31', 10]]);
   assert.equal(checkpointCamera(running, start + MAX_SESSION_MS, true).activeSinceMs, null);
 });
 

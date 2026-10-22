@@ -4,6 +4,7 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkpointCamera, WORD_LEASE_MS } from './domain.js';
 import {settleWordStats} from './word-stats.js';
+import {expireUserSessions} from './session-lifecycle.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const options = {region:'asia-northeast3',maxInstances:2,minInstances:0,memory:'256MiB',cpu:'gcf_gen1',concurrency:1,timeoutSeconds:30};
@@ -30,6 +31,8 @@ function interruptCamera(tx, ref, camera, wordSessionId, now, present) {
 
 export const startWordStudy = onCall(options, async request => {
   const uid = owner(request), controllerId = controller(request.data?.controllerId);
+  const counting=request.data?.tracking===true;
+  await expireUserSessions(db,uid);
   const profileRef = db.doc(`users/${uid}`), sessionRef = profileRef.collection('sessions').doc();
   return db.runTransaction(async tx => {
     const snapshot = await tx.get(profileRef), profile = snapshot.data();
@@ -47,7 +50,7 @@ export const startWordStudy = onCall(options, async request => {
       const session = existing.data();
       if (session?.status === 'active' && session.source === 'superword' && session.controllerId === controllerId) return reply(existing.id, session, now);
       if(session?.cameraMode&&session.status==='active') {
-        if(profile.wordCameraSessionId!==existing.id || !(profile.wordHandoffUntilMs>now.toMillis()))throw new HttpsError('failed-precondition','얼굴인식 일시정지 확인을 먼저 완료해 주세요.');
+        if(!counting&&(profile.wordCameraSessionId!==existing.id || !(profile.wordHandoffUntilMs>now.toMillis())))throw new HttpsError('failed-precondition','얼굴인식 일시정지 확인을 먼저 완료해 주세요.');
         cameraRef=existing.ref;camera=session;
       } else throw new HttpsError('already-exists','다른 학습이 진행 중입니다. 먼저 해당 학습을 종료해 주세요.');
     }
@@ -59,15 +62,18 @@ export const startWordStudy = onCall(options, async request => {
     }
     const cameraId=cameraRef?interruptCamera(tx,cameraRef,camera,sessionRef.id,now,true):null;
     const session = {uid,subjectId:subject.id,source:'superword',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraId,presenceUntilMs:now.toMillis()+WORD_LEASE_MS};
+    if(counting)Object.assign(session,checkpointCamera({...session,startedAtMs:now.toMillis()},now.toMillis(),true,WORD_LEASE_MS));
     tx.create(sessionRef,session);
     tx.create(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:session.presenceUntilMs});
-    tx.update(profileRef,{activeSessionId:cameraId||sessionRef.id,wordHandoffUntilMs:null,wordStudySessionId:sessionRef.id,wordCameraSessionId:cameraId,wordPresenceUntilMs:cameraId?session.presenceUntilMs:null,wordAppUntilMs:session.presenceUntilMs,wordTracking:false,subjects:subjects.some(row=>row.id===subject.id)?subjects:[...subjects,subject],updatedAt:now});
+    const wordSnapshot={sessionId:sessionRef.id,subjectId:subject.id,segments:session.segments,activeSinceMs:session.activeSinceMs,leaseUntilMs:session.leaseUntilMs,serverNowMs:now.toMillis()};
+    tx.update(profileRef,{activeSessionId:cameraId||sessionRef.id,wordHandoffUntilMs:null,wordStudySessionId:sessionRef.id,wordCameraSessionId:cameraId,wordPresenceUntilMs:cameraId?session.presenceUntilMs:null,wordAppUntilMs:session.presenceUntilMs,wordTracking:counting,wordSnapshot,subjects:subjects.some(row=>row.id===subject.id)?subjects:[...subjects,subject],updatedAt:now});
     return reply(sessionRef.id,session,now);
   });
 });
 
 export const syncWordStudy = onCall(options, async request => {
   const uid = owner(request), controllerId = controller(request.data?.controllerId);
+  await expireUserSessions(db,uid);
   const {sessionId,sequence,tracking} = request.data || {};
   const present=request.data?.present ?? tracking;
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean' || typeof present !== 'boolean') throw new HttpsError('invalid-argument','학습 상태가 올바르지 않습니다.');
