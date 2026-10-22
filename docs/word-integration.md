@@ -1,13 +1,15 @@
 # 단어앱 학습시간 연동
 
-`word` 프로젝트: `C:/Users/tntdr/.gemini/antigravity-ide/scratch/superword`.
+단어앱 저장소: `superword`.
 
 - 단어 카드·쇼츠·테스트 화면에서 자동 시작한다. 플래시카드·객관식·주관식·따라쓰기 테스트도 모두 합산한다. 편집·설정·기록·테스트 결과 화면 또는 10초 무입력 시 시간을 보존한 채 일시정지하고, 학습 화면에서 다시 입력하면 재개한다. 백그라운드·페이지 종료·로그아웃에서는 저장 후 종료한다. 상단 캡슐은 오늘 누적시간을 표시하므로 새 세션에서도 초기화되지 않는다.
 - 설정 왼쪽 기록 버튼에서 오늘·이번 주·날짜별 시간을 본다. 한국 날짜 기준이며 최근 학습 500회를 집계한다.
 - 단어앱 자체 기록은 단어앱 계정의 `users/{uid}/learningSessions/{id}`에 저장한다. 로컬 대기열을 먼저 기록하고 오프라인 저장은 다음 연결 시 재시도한다. 기기 기록과 서버 기록은 ID로 병합한다.
 - 스터디 연동은 별도 이름의 Firebase 앱에서 기존 스터디 이메일 또는 Google 계정으로 로그인한다. 단어앱 로그인과 독립적이다. 연동 전 기록은 소급 적립하지 않는다.
+- 스터디 로그인은 Firebase의 `browserLocalPersistence`로 보관한다. 앱 재실행 시 저장소 초기화와 기존 로그인 복원을 기다린 다음 연동 상태와 타이머를 초기화한다. 비밀번호를 앱 코드에서 별도로 저장하지 않는다. 동일 브라우저·주소에서는 연동 해제나 사이트 데이터 삭제 전까지 연결을 유지한다.
+- 연결 관계는 스터디 Firestore의 서버 전용 `wordAccountLinks/{wordAuthUid}`에 저장한다. 저장 시 양쪽 계정의 인증을 확인하며 ID와 갱신 시각만 보관한다. 스터디 로그인 저장소가 없어도 단어앱 로그인 토큰을 검증한 서버가 저장된 연결로 스터디 로그인용 단기 커스텀 토큰을 발급한다. 연동 해제는 서버 연결도 삭제한다. 비밀번호·ID 토큰·커스텀 토큰을 연결 문서에 저장하지 않는다.
 - 스터디는 `startWordStudy` / `syncWordStudy` / `finishStudySession`을 사용한다. 영단어 과목을 재사용하거나 추가하며, 서버가 관측한 30초 유효 구간만 적립한다. 20초마다 갱신한다.
-- 얼굴인식 학습 중 SP word를 열면 카메라 세션을 유지한다. SP word가 실제로 시간을 적립할 때만 서버 트랜잭션으로 카메라를 체크포인트 후 정지하고 `SP word 사용 중`을 표시한다. 10초 정지·메뉴·설정에서는 카메라가 다시 적립 가능하며, 실제 얼굴 인식·수동 일시정지 상태를 따른다. 연동된 SP word 창이 살아 있는 동안에는 스터디 탭이 뒤에 있어도 얼굴 감지를 허용하며, 영상은 기기 내에서만 처리한다.
+- 단어 학습을 시작·재개할 때 먼저 `prepareWordStudy`로 기존 얼굴인식 세션을 종료·저장한다. 서버의 `cameraStopped: true` 응답을 받은 뒤에만 단어앱 자체 타이머와 스터디 연동 타이머를 진행한다. 응답 대기나 실패 중에는 단어 시간을 적립하지 않고 자동 재시도한다. 스터디 화면은 활성 세션이 교체되면 기기 카메라와 얼굴인식 화면을 닫는다. 단어 학습 종료 후 얼굴인식을 자동으로 다시 켜지 않는다.
 - SP word는 `visibilitychange`와 창 `focus`/`blur`를 함께 확인한다. 다른 탭·창으로 전환하면 즉시 측정과 서버 presence를 종료한다. 얼굴인식과 단어 시간은 서버에서 상호 배제하며 한 구간을 두 번 적립하지 않는다.
 - 종료 요청 실패에 대비해 `closeExpiredWordStudies`가 5분마다 만료된 전용 lease를 정리한다. 정리 시점에 세션 lease를 트랜잭션에서 재검증한다. 일반 종료와 재시도는 동일 세션 ID로 중복 집계를 막는다.
 - 단어앱 자체 기록은 개인 기록이며 스터디 서버는 이 값을 보상·랭킹 적립의 근거로 사용하지 않는다.
@@ -18,7 +20,7 @@
 
 두 프로젝트의 변경을 함께 배포해야 서비스에서 동작한다.
 
-1. 스터디 Functions: `startWordStudy`, `syncWordStudy`, `closeExpiredWordStudies`, 변경한 `finishStudySession`.
+1. 스터디 Functions: `prepareWordStudy`, `saveWordStudyLink`, `restoreWordStudyLink`, `removeWordStudyLink`, `startWordStudy`, `syncWordStudy`, `closeExpiredWordStudies`, 변경한 `finishStudySession`. 복원 함수의 실행 계정에는 자기 자신의 커스텀 로그인 토큰을 서명할 권한이 필요하다.
 2. 스터디 웹: `study.html`, `data.js`.
 3. 단어앱 Firestore rules와 웹 파일: `index.html`, `study-integration.js`, `study-timer-core.js`, `study-integration.css`.
 4. 단어앱이 제공되는 호스트가 스터디 Auth 승인 도메인에 있어야 한다. 현재 설정에 `junhyuk1203.github.io`와 localhost가 포함되어 있다. Android WebView에서는 이메일 연결을 사용할 수 있다.

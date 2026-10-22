@@ -107,19 +107,21 @@ test('camera startup errors keep the focus exit enabled and close without saving
 function timerUi(skew) {
   let now=100000,monotonic=0;
   const handlers={},display={textContent:''},camera={tracking:true,enabled:true};
+  let stopped=0,closed=0;
   const context=vm.createContext({
     Date:class extends Date {static now(){return now+skew;}},performance:{now:()=>monotonic},
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>null,
+    stopCamera:()=>{stopped++;camera.enabled=false;},closeCameraFocus:async()=>{closed++;},
     document:{hidden:false,querySelectorAll:selector=>selector==='[data-active-timer]'?[display]:[],addEventListener(){}},
     window:{addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
   });
-  vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,paintTimer,syncCamera,message:cameraTimerMessage,setProfile:value=>{state.profile=value;}};`,context);
+  vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,paintTimer,syncCamera,stopReplacedCamera,message:cameraTimerMessage,setProfile:value=>{state.profile=value;}};`,context);
   const configure = (send, sessionId = 'session') => {
     context.send = send;
     context.sessionId = sessionId;
     vm.runInContext('call=()=>send;state.profile={activeSessionId:sessionId};', context);
   };
-  return {display,camera,handlers,ui:context.ui,configure,shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
+  return {display,camera,handlers,ui:context.ui,configure,stops:()=>({stopped,closed}),shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
     cameraMode:true,controllerId:'controller',sequence,accumulatedSeconds:seconds,
     updatedAt:{toMillis:()=>now},activeSinceMs:active?now:null,leaseUntilMs:active?now+30000:null,
   })};
@@ -176,6 +178,14 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
   t.camera.tracking=false;t.handlers['study:camera-changed']();
   t.ui.observeSession(t.snapshot(5,false,3));t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
   t.tick(6000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
+});
+
+test('a remote word handoff closes this device camera when its active session changes',()=>{
+  const t=timerUi(0);t.ui.observeSession(t.snapshot(3));
+  t.ui.stopReplacedCamera('camera','camera');assert.equal(t.stops().stopped,0);
+  t.ui.stopReplacedCamera('camera','word');assert.deepEqual(t.stops(),{stopped:1,closed:1});
+  assert.equal(t.camera.enabled,false);
+  t.ui.stopReplacedCamera('camera','word');assert.equal(t.stops().stopped,1);
 });
 
 test('SP word counting freezes the camera display and menu/idle state releases it',()=>{

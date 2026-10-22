@@ -63,6 +63,13 @@ function updateCameraDisplay() {
   cameraDisplay.untilMs = localMs + Math.max(0, (session.leaseUntilMs || 0) - now);
 }
 // Session timestamps come from the server; the device clock may be seconds ahead.
+function stopReplacedCamera(previousId,nextId) {
+  if(previousId && previousId!==nextId && state.active?.cameraMode && state.active.controllerId===cameraController && cameraState().enabled) {
+    observeSession(null);
+    stopCamera();
+    void closeCameraFocus();
+  }
+}
 function observeSession(session) {
   // Callable acknowledgements can arrive before an older listener snapshot.
   if (session?.cameraMode && state.active?.cameraMode && session.controllerId === state.active.controllerId && session.sequence <= state.active.sequence) return;
@@ -475,6 +482,7 @@ async function connectUser() {
       void call('ensureProfile')({displayName:displayName.length>=2?displayName:'회원'}).then(resolveProfile,rejectProfile);
     }
     const newActive = state.profile?.activeSessionId || null;
+    stopReplacedCamera(previousSessionId,newActive);
     if (newActive !== activeId) {
       activeUnsubscribe?.();
       activeId = newActive;

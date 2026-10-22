@@ -9,6 +9,7 @@ import { changePlan } from './plan-service.js';
 import {settleWordStats} from './word-stats.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 export { startWordStudy, syncWordStudy } from './word-study.js';
+export {saveWordStudyLink,restoreWordStudyLink,removeWordStudyLink} from './word-link.js';
 
 const app = getApps()[0] ?? initializeApp();
 const db = getFirestore(app, 'study-data');
@@ -102,6 +103,17 @@ export const syncStudyCamera = onCall(options, async request => {
 });
 
 export const finishStudySession = onCall(options, request => finishSession(userId(request, true), request.data?.sessionId));
+
+// The reply acknowledges that camera credit has finished before word tracking.
+export const prepareWordStudy = onCall(options, async request => {
+  const uid=userId(request,true),profileRef=db.doc(`users/${uid}`);
+  const profile=(await profileRef.get()).data(),sessionId=profile?.activeSessionId;
+  if(!sessionId)return {cameraStopped:true};
+  const session=(await profileRef.collection('sessions').doc(sessionId).get()).data();
+  if(session?.status!=='active'||!session.cameraMode)return {cameraStopped:true};
+  await finishSession(uid,sessionId);
+  return {cameraStopped:true,stoppedSessionId:sessionId};
+});
 
 async function finishSession(uid, sessionId, expiredBeforeMs = null) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId)) throw new HttpsError('invalid-argument', '학습 기록 ID가 올바르지 않습니다.');

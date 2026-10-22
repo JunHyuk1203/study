@@ -6,7 +6,7 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies } from '../functions/index.js';
+import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies, prepareWordStudy } from '../functions/index.js';
 import { splitStudyInterval } from '../functions/domain.js';
 import { spendFocusTime } from '../functions/focus-time.js';
 import { generateForUser } from '../functions/ai-service.js';
@@ -129,6 +129,9 @@ after(async () => {
 });
 
 test('anonymous and other accounts cannot read private account data', async () => {
+  const client=environment.authenticatedContext('alice').firestore();
+  await assertFails(getDoc(doc(client,'wordAccountLinks/alice')));
+  await assertFails(setDoc(doc(client,'wordAccountLinks/alice'),{wordUid:'alice',studyUid:'bob'}));
   await assertFails(getDoc(doc(environment.unauthenticatedContext().firestore(), 'users/alice')));
   await assertFails(getDoc(doc(environment.authenticatedContext('bob').firestore(), 'users/alice')));
   await assertSucceeds(getDoc(doc(environment.authenticatedContext('alice').firestore(), 'users/alice')));
@@ -371,6 +374,25 @@ test('word cleanup closes expired leases and leaves renewed sessions active',asy
   await closeExpiredWordStudies.run({});
   assert.equal((await db.doc(`users/${auth.uid}/sessions/${started.sessionId}`).get()).data().status,'finished');
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,null);
+});
+
+test('word handoff acknowledges finished camera credit before word tracking starts',async()=>{
+  const db=getFirestore(undefined,'study-data'),auth={uid:'word-camera-stop-ack',token:{email_verified:true}};
+  const controllerId='12345678-1234-1234-1234-123456789abc';
+  await ensureProfile.run({auth,data:{displayName:'종료확인'}});
+  const camera=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  const now=Math.floor(Date.now()/1000)*1000,ref=db.doc(`users/${auth.uid}/sessions/${camera.sessionId}`);
+  await ref.update({startedAt:Timestamp.fromMillis(now-10000),activeSinceMs:now-5000,leaseUntilMs:now+30000});
+  const word=await startWordStudy.run({auth,data:{controllerId}});
+  const ack=await prepareWordStudy.run({auth,data:{}});
+  assert.equal(ack.cameraStopped,true);assert.equal(ack.stoppedSessionId,camera.sessionId);
+  const stopped=(await ref.get()).data();assert.equal(stopped.status,'finished');assert.ok(stopped.creditedSeconds>=5);
+  assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId,word.sessionId);
+  assert.equal((await prepareWordStudy.run({auth,data:{}})).cameraStopped,true);
+  await assert.rejects(()=>syncStudyCamera.run({auth,data:{sessionId:camera.sessionId,controllerId,sequence:100,tracking:true}}),e=>e.code==='failed-precondition');
+  const running=await syncWordStudy.run({auth,data:{sessionId:word.sessionId,controllerId,sequence:1,tracking:true,present:true}});
+  assert.ok(running.session.activeSinceMs!=null);
+  await assert.rejects(()=>prepareWordStudy.run({data:{}}),e=>e.code==='unauthenticated');
 });
 
 test('SP word pauses an active camera without ending it and closing word resumes camera ownership',async()=>{
