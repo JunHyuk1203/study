@@ -1,5 +1,5 @@
-import { getStudyData } from './data.js?v=20261023-2';
-import { updatePlan } from './integrations.js?v=20261023-2';
+import { getStudyData } from './data.js?v=20261023-3';
+import { updatePlan } from './integrations.js?v=20261023-3';
 import { planSubjects } from './functions/plan-domain.js?v=20261022-18';
 import { goalProgress, goalSummary, durationLabel, periodLabels } from './goal-state.js?v=20261022-18';
 import { showToast } from './notifications.js?v=20261022-18';

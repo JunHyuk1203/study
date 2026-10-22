@@ -67,13 +67,10 @@ function updateCameraDisplay() {
 function stopReplacedCamera(previousId,nextId) {
   if(previousId && previousId!==nextId && state.active?.cameraMode && state.active.controllerId===cameraController && cameraState().enabled) {
     updateCameraDisplay();
-    const display=cameraHandoffDisplay={seconds:(cameraDisplay?.totalMs||0)/1000};
+    cameraHandoffDisplay={seconds:(cameraDisplay?.totalMs||0)/1000};
     resetCameraSync();
     observeSession(null);
-    stopCamera();
-    void Promise.resolve(closeCameraFocus()).finally(()=>{
-      if(cameraHandoffDisplay===display){cameraHandoffDisplay=null;paintTimer();}
-    });
+    stopCamera('얼굴인식 종료 완료 · 단어앱에서 학습 중');
   }
 }
 function resetCameraSync() {
@@ -349,6 +346,7 @@ function paintTimer() {
   if (camera.manuallyPaused&&!session?.activityMode) textAll('[data-timer-state]', cameraTimerMessage(camera));
   if (finishingSession) textAll('[data-timer-state]', '서버에 저장 중…');
   if(cameraHandoffDisplay){
+    for(const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')){button.disabled=false;button.textContent='닫기';}
     textAll('.camera-focus [data-active-timer]',clock(cameraHandoffDisplay.seconds));
     textAll('.camera-focus [data-timer-state]','얼굴인식 종료 완료 · 단어앱으로 전환');
   }
@@ -535,6 +533,9 @@ document.addEventListener('click', async event => {
     return;
   }
   const button = event.target.closest('[data-study-action]');
+  if(button?.dataset.studyAction==='stop'&&cameraHandoffDisplay&&button.closest?.('.camera-focus')){
+    cameraHandoffDisplay=null;await closeCameraFocus();paintTimer();return;
+  }
   if (button?.dataset.studyAction === 'stop' && busy && cameraState().status === 'opening' && !state.profile?.activeSessionId) {
     stopCamera(); previewSession = null; busy = false; await closeCameraFocus(); paintTimer(); return;
   }
@@ -551,6 +552,7 @@ document.addEventListener('click', async event => {
   paintTimer();
   try {
     if (cameraStart) {
+      cameraHandoffDisplay=null;
       openCameraFocus(button);
       if (!await startCamera()) return;
       if (!getAuthUser()?.emailVerified || !call) {

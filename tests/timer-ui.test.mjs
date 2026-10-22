@@ -193,7 +193,7 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
 test('a remote word handoff closes this device camera when its active session changes',()=>{
   const t=timerUi(0);t.ui.observeSession(t.snapshot(3));
   t.ui.stopReplacedCamera('camera','camera');assert.equal(t.stops().stopped,0);
-  t.ui.stopReplacedCamera('camera','word');assert.deepEqual(t.stops(),{stopped:1,closed:1});
+  t.ui.stopReplacedCamera('camera','word');assert.deepEqual(t.stops(),{stopped:1,closed:0});
   assert.equal(t.camera.enabled,false);
   t.ui.stopReplacedCamera('camera','word');assert.equal(t.stops().stopped,1);
 });
@@ -301,14 +301,14 @@ test('late camera failure and snapshot cannot replace the word session or revive
   assert.equal(t.ui.syncState().failed,false);assert.equal(t.ui.syncState().busy,false);assert.equal(t.camera.enabled,false);
 });
 
-test('camera focus keeps the last elapsed time while closing instead of showing the new word timer zero',async()=>{
+test('camera handoff keeps its screen and last time until explicitly dismissed',async()=>{
   const t=timerUi(0);t.holdClose();t.ui.observeSession(t.snapshot(65));t.tick(2000);t.ui.paintTimer();
   t.ui.stopReplacedCamera('camera','word');t.ui.setProfile({activeSessionId:'word'});
   t.ui.observeSession({...t.snapshot(0),cameraMode:false,activityMode:true,controllerId:'word-controller'});
   t.tick(2000);t.ui.paintTimer();
   assert.equal(t.display.textContent,'00:00:02');assert.equal(t.focusDisplay.textContent,'00:01:07');
   assert.match(t.focusState.textContent,/얼굴인식 종료 완료/);
-  t.releaseClose();await Promise.resolve();
+  assert.equal(t.stops().closed,0);assert.equal(t.stops().stopped,1);
 });
 
 test('status-only camera events do not add writes and heartbeats use a twenty-second interval',async()=>{
