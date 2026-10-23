@@ -623,8 +623,23 @@ test('room snapshot derives status and seconds from server session, not submitte
   await db.doc(`users/${uid}`).update({activeSessionId:ref.id});
   const result=await snapshot(uid,{seconds:99999,status:'studying'}),member=result.room.members[uid];
   assert.equal(member.status,'studying');assert.ok(member.seconds>=17&&member.seconds<25);
+  assert.equal(member.sampledAtMs,member.lastSeenMs);assert.equal(member.countUntilMs,now+10000);
+  assert.ok(result.serverNowMs>=member.sampledAtMs);
   await ref.update({activeSinceMs:null});assert.equal((await snapshot(uid)).room.members[uid].status,'resting');
   await social(uid,'close',{roomId});
+});
+
+test('request and invitation refreshes force only the selected inbox at an unchanged social revision',async()=>{
+  const db=getFirestore('study-data'),uid='scoped-refresh';await socialUser(uid);
+  const initial=await snapshot(uid),revision=initial.revision;
+  await db.doc(`users/${uid}/friendRequests/incoming`).set({uid:'incoming',displayName:'새 친구'});
+  await db.doc(`users/${uid}/roomInvites/room-new`).set({roomId:'room-new',title:'새 방',expiresAtMs:Date.now()+60000});
+  const requests=await snapshot(uid,{revision,listScope:'requests'});
+  assert.equal(requests.friendRequests[0].uid,'incoming');assert.ok(Array.isArray(requests.sentRequests));
+  assert.equal(requests.roomInvites,undefined);assert.equal(requests.friends,undefined);
+  const invites=await snapshot(uid,{revision,listScope:'invites'});
+  assert.equal(invites.roomInvites[0].roomId,'room-new');assert.equal(invites.friendRequests,undefined);
+  await assert.rejects(()=>snapshot(uid,{listScope:'arbitrary'}),error=>error.code==='invalid-argument');
 });
 
 test('daily report isolates users and includes cross-midnight records without inventing hourly camera history',async()=>{

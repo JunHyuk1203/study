@@ -1,18 +1,18 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>플레이 — study</title><link rel="stylesheet" href="styles.css?v=20261023-7"><script src="navigation.js?v=20261022-10"></script><script type="module" src="app.js?v=20261023-7"></script></head><body><div class="app">
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>플레이 — study</title><link rel="stylesheet" href="styles.css?v=20261023-8"><script src="navigation.js?v=20261022-10"></script><script type="module" src="app.js?v=20261023-8"></script></head><body><div class="app">
 <header class="header"><a class="brand" href="index.html">STUDY.</a><a class="profile-dot" href="account.html" aria-label="내 계정">·</a></header>
 <main aria-label="플레이">
-<section class="social-space" data-social aria-label="친구와 스터디룸">
-<div class="section-title"><h1>함께 공부해요</h1><button type="button" class="social-button" data-social-action="refresh">새로고침</button></div>
+<section class="social-space" data-social aria-label="친구">
+<div class="section-title"><h1>함께 공부해요</h1></div>
 <p class="auth-status" data-social-login>친구 정보를 불러오는 중…</p><p class="auth-status is-error" data-social-error role="status" hidden></p>
 <div data-social-content hidden>
+<button type="button" class="social-launcher" data-social-open="friends" aria-haspopup="dialog" aria-controls="friends-panel"><span class="social-launcher-icon" aria-hidden="true">♧</span><span><strong>친구</strong><span class="tiny muted">친구 코드 · 친구 요청 · 내 친구</span></span><span class="social-launcher-arrow" aria-hidden="true">↗</span><span class="social-launcher-badge" data-friend-request-count hidden></span></button>
+<dialog id="friends-panel" class="social-dialog" data-social-panel="friends" aria-labelledby="friends-panel-title"><div class="social-dialog-heading"><div><p class="tiny muted">함께 공부하는 친구</p><h2 id="friends-panel-title">친구</h2></div><button type="button" class="social-dialog-close" data-social-close aria-label="친구 팝업 닫기">×</button></div><p class="auth-status is-error" data-social-error role="status" hidden></p><div class="social-dialog-body">
 <section class="card"><h2>친구 코드</h2><p class="tiny muted">내 코드를 친구에게 알려주세요. 친구가 입력하면 나에게 요청이 와요.</p><div class="friend-code-row"><strong data-friend-code>코드 만들기를 눌러 주세요</strong><button type="button" class="social-button" data-social-action="code">내 코드 만들기</button><button type="button" class="social-button" data-social-action="copy">복사</button></div>
 <form class="social-inline-form" data-social-form="request"><label class="form-field">친구 코드 입력<input name="code" placeholder="친구 코드 10자리" minlength="10" maxlength="10" pattern="[A-Fa-f0-9]{10}" autocomplete="off" autocapitalize="characters" required></label><button type="submit" class="primary-button">친구 요청</button></form></section>
-<section class="card"><h2>받은 친구 요청</h2><div data-friend-requests>불러오는 중…</div><details class="social-sent"><summary>보낸 요청 보기</summary><div data-sent-requests></div></details></section>
+<section class="card"><div class="section-title"><h2>받은 친구 요청</h2><button type="button" class="social-button" data-social-action="refresh" data-social-scope="requests" aria-label="친구 요청 목록 새로고침">새로고침</button></div><p class="tiny muted social-refresh-status" data-social-refresh-status="requests" role="status"></p><div data-friend-requests>불러오는 중…</div><details class="social-sent"><summary>보낸 요청 보기</summary><div data-sent-requests></div></details></section>
 <section class="card"><h2>내 친구</h2><div data-friend-list>불러오는 중…</div></section>
-<section class="card"><div class="section-title"><h2>스터디룸</h2><span class="tiny muted">최대 12명</span></div><p class="tiny muted">친구를 초대해서 지금 함께 공부하는 일회성 방이에요.</p><div data-room-panel></div>
-<form class="social-inline-form" data-social-form="createRoom"><label class="form-field">방 이름<input name="title" maxlength="40" placeholder="예: 오늘 저녁 같이 공부하기" required></label><button type="submit" class="primary-button">방 만들기</button></form></section>
-<section class="card"><h2>받은 방 초대</h2><div data-room-invites>불러오는 중…</div></section>
+</div></dialog>
 </div>
 <dialog class="goal-dialog" data-social-confirm aria-labelledby="social-confirm-title"><h2 id="social-confirm-title">계속할까요?</h2><p class="report-note" data-confirm-text></p><div class="social-actions"><button type="button" class="social-button" data-social-action="dismiss">취소</button><button type="button" class="social-button social-danger" data-social-action="confirm" data-confirm-action>확인</button></div></dialog>
 </section>

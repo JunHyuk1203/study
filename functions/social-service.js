@@ -127,14 +127,16 @@ export async function changeSocial(db,uid,action,data={}) {
   });
 }
 
-export async function socialSnapshot(db,uid,{revision=-1,includeLists=false}={}) {
+export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,listScope}={}) {
+  if(listScope!=null&&!['requests','invites'].includes(listScope))fail('invalid-argument','새로고침할 목록이 올바르지 않습니다.');
   const ref=userRef(db,uid),profile=(await ref.get()).data();
   if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
   const result={revision:profile.socialRevision||0,code:profile.friendCode||null,room:null,serverNowMs:Date.now()};
   // Listeners are unnecessary: poll only while the Play page or a room is open,
   // and reuse lists until a server-owned revision changes.
-  if(includeLists&&revision!==result.revision) {
-    for(const collection of ['friends','friendRequests','sentRequests','roomInvites']) {
+  if(includeLists&&(listScope||revision!==result.revision)) {
+    const collections=listScope==='requests'?['friendRequests','sentRequests']:listScope==='invites'?['roomInvites']:['friends','friendRequests','sentRequests','roomInvites'];
+    for(const collection of collections) {
       const docs=await ref.collection(collection).limit(50).get();
       result[collection]=docs.docs.map(doc=>({...doc.data(),id:doc.id}));
     }
@@ -154,10 +156,12 @@ export async function socialSnapshot(db,uid,{revision=-1,includeLists=false}={})
       const tracked=live&&(!(session.cameraMode||session.activityMode)||session.activeSinceMs!=null&&session.leaseUntilMs>now);
       const seconds=live?(session.cameraMode||session.activityMode?(session.accumulatedSeconds||0)+(tracked?Math.max(0,Math.floor((Math.min(now,session.leaseUntilMs)-session.activeSinceMs)/1000)):0):Math.max(0,Math.floor((now-session.startedAt.toMillis())/1000))):0;
       const subjectName=session?(currentProfile.subjects||[]).find(row=>row.id===session.subjectId)?.name||'기타':'';
-      const members={...room.members,[uid]:{...room.members[uid],displayName:name(currentProfile),lastSeenMs:now,status:tracked?'studying':'resting',seconds,subjectName}};
+      const countUntilMs=tracked?Math.min(session.presenceUntilMs,session.startedAt.toMillis()+12*3600000,session.cameraMode||session.activityMode?session.leaseUntilMs:Infinity):now;
+      const members={...room.members,[uid]:{...room.members[uid],displayName:name(currentProfile),lastSeenMs:now,sampledAtMs:now,countUntilMs,status:tracked?'studying':'resting',seconds,subjectName}};
       tx.update(roomRef,{members});
       return {...room,id:roomRef.id,members};
     });
   }
+  result.serverNowMs=Date.now();
   return result;
 }

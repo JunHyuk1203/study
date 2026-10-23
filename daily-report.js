@@ -68,7 +68,8 @@ function paint(report) {
   }
 }
 async function load(force=false) {
-  if(!document.querySelector('[data-daily-report]')||document.hidden)return;
+  const root=document.querySelector('[data-daily-report]');
+  if(!root||document.hidden||root.closest?.('dialog')&&!root.closest('dialog').open)return;
   const user=getAuthUser(),data=getStudyData();
   if(!user){for(const node of document.querySelectorAll('[data-daily-report]'))node.textContent='로그인하면 오늘의 리포트를 볼 수 있어요.';return;}
   if(!data.ready)return;
@@ -86,6 +87,7 @@ async function load(force=false) {
 }
 document.addEventListener('click',event=>{if(event.target.closest('[data-report-refresh]'))void load(true);});
 for(const event of ['study:navigated','study:data-changed'])window.addEventListener(event,()=>void load());
+window.addEventListener('study:panel-opened',event=>{if(event.detail?.kind==='report')void load();});
 window.addEventListener('study:auth-changed',()=>{epoch++;cached=null;cacheKey='';for(const node of document.querySelectorAll('[data-daily-report]'))node.textContent='리포트를 불러오는 중…';void load();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)void load();});
 void authReady.then(()=>load());

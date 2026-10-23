@@ -1,5 +1,34 @@
 .social-space { min-width:0; }
 .social-space>.section-title { margin-bottom:20px; }
+.social-launcher { position:relative;display:flex;align-items:center;gap:16px;width:100%;min-height:100px;padding:22px;text-align:left;border:1px solid var(--border);border-radius:22px;background:var(--paper);color:var(--text);cursor:pointer;transition:background .2s,transform .2s,box-shadow .2s; }
+.social-launcher:hover { background:#f2f5eb;box-shadow:0 6px 22px #30402a0b;transform:translateY(-2px); }
+.social-launcher>span:nth-child(2) { display:grid;gap:5px;min-width:0; }
+.social-launcher strong { font-size:17px; }
+.social-launcher .tiny { line-height:1.6; }
+.social-launcher-icon { display:grid;place-items:center;flex:0 0 46px;height:46px;border-radius:15px;background:var(--sage);color:var(--green);font-size:28px; }
+.social-launcher-arrow { margin-left:auto;color:var(--green);font-size:22px; }
+.social-launcher-badge { position:absolute;right:16px;top:12px;padding:0 6px;min-width:20px;border-radius:10px;background:var(--green);color:white;font-size:11px;text-align:center; }
+.social-dialog { width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;border:1px solid var(--border);border-radius:26px;margin:auto;background:var(--bg);color:var(--text);overflow-y:auto;overscroll-behavior:contain;box-shadow:0 24px 100px #26382133;transform-origin:center; }
+.social-dialog.report-dialog { width:min(900px,calc(100vw - 32px)); }
+.social-dialog[open] { animation:social-panel-open .36s cubic-bezier(.22,.7,.24,1) both; }
+.social-dialog.is-closing { animation:social-panel-close .22s ease-in both; }
+.social-dialog::backdrop { background:#24301e55;backdrop-filter:blur(5px);animation:social-backdrop-open .28s ease both; }
+.social-dialog.is-closing::backdrop { animation:social-backdrop-close .22s ease both; }
+.social-dialog-heading { position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 24px;background:var(--bg);border-bottom:1px solid var(--border); }
+.social-dialog-heading h2 { margin-top:3px;font-size:20px; }
+.social-dialog-close { display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;padding:0;border:1px solid var(--border);border-radius:50%;background:var(--paper);color:var(--green);font-size:26px;cursor:pointer;line-height:1; }
+.social-dialog-body { padding:20px; }
+.social-dialog-body>.card:last-child { margin-bottom:0; }
+.social-dialog>[data-social-error] { margin:16px 24px 0; }
+.social-refresh-status { margin:6px 0;min-height:16px; }
+.study-room-launch,.daily-report-card { min-width:0;margin-bottom:14px; }
+html:has(.social-dialog[open]) { overflow:hidden; }
+.app:has(.social-dialog[open])>main { overflow:hidden; }
+@keyframes social-panel-open { from { opacity:0;transform:translate(var(--social-from-x,0px),var(--social-from-y,24px)) scale(.18);border-radius:36px; } to { opacity:1;transform:translate(0,0) scale(1); } }
+@keyframes social-panel-close { from { opacity:1;transform:translate(0,0) scale(1); } to { opacity:0;transform:translate(var(--social-from-x,0px),var(--social-from-y,24px)) scale(.18); } }
+@keyframes social-backdrop-open { from { opacity:0; } to { opacity:1; } }
+@keyframes social-backdrop-close { to { opacity:0; } }
+@media(prefers-reduced-motion:reduce) { .social-launcher { transition:none; }.social-launcher:hover { transform:none; }.social-dialog[open],.social-dialog.is-closing,.social-dialog::backdrop,.social-dialog.is-closing::backdrop { animation:none; } }
 .social-button { border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:var(--sage);color:var(--green);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap; }
 .social-button:disabled { opacity:.5;cursor:wait; }
 .social-danger { color:#944b43;background:#f4e7e2; }
@@ -66,9 +95,7 @@
 .daily-report-card>[data-daily-report]>.tiny { margin-top:22px; }
 @media(min-width:768px) {
   main[aria-label="플레이"]>.social-space { grid-column:1/-1; }
-  [data-social-content] { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start; }
-  [data-social-content]>.card { margin:0; }
-  [data-social-content]>.card:has([data-room-panel]) { grid-column:1/-1; }
+  main[aria-label="학습"]>.study-room-launch,main[aria-label="학습"]>.daily-report-card { grid-column:1/-1;margin:0; }
   .room-peers { grid-template-columns:repeat(4,minmax(0,1fr)); }
   .report-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .report-bars { gap:12px; }

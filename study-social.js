@@ -2,8 +2,13 @@ import {authReady,getAuthUser} from './auth.js?v=20261022-1';
 import {getStudyData} from './data.js?v=20261023-6';
 import {studyCall,serviceError,element as el,duration} from './study-api.js';
 import {showToast} from './notifications.js?v=20261022-18';
+import {roomClock,memberTime} from './room-time.js?v=20261023-8';
+import {openSocialPanel} from './social-dialog.js?v=20261023-8';
 let state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};
 let revision=-1,owner=null,requesting=false,busy=false,lastPoll=0,epoch=0,lastError='';
+let roomClockAnchor=null;
+const refreshQueue=new Set(),refreshing=new Set();
+const roomNow=()=>roomClockAnchor?roomClockAnchor.serverMs+Math.max(0,performance.now()-roomClockAnchor.localMs):Date.now();
 function button(text,action,id) {const node=el('button','social-button',text);node.type='button';node.dataset.socialAction=action;if(id)node.dataset.socialId=id;return node;}
 function empty(text) {return el('p','empty-data',text);}
 function pair(title,description,actions=[]) {
@@ -17,12 +22,33 @@ function peerCards(room,compact=false) {
   const grid=el('div',compact?'room-peers room-peers-compact':'room-peers');
   for(const id of room.memberIds) {
     const member=room.members[id];if(!member)continue;
-    const away=Date.now()-member.lastSeenMs>45000,studying=!away&&member.status==='studying';
+    const away=roomNow()-member.lastSeenMs>45000,studying=!away&&member.status==='studying';
     const card=el('article',`room-peer${studying?' is-studying':''}`),avatar=el('div','room-avatar',studying?'◷':'☕');avatar.setAttribute('aria-hidden','true');
-    card.append(avatar,el('strong','',`${member.displayName}${id===getAuthUser()?.uid?' (나)':''}${id===room.hostUid?' · 방장':''}`),el('span','room-peer-status',away?'연결 확인 중':studying?'공부 중':'휴식 중'),el('span','tiny muted',member.subjectName||'시작 전'),el('span','room-peer-time',duration(member.seconds)));
+    const timer=el('span','room-peer-time',roomClock(memberTime(member,roomNow())));timer.dataset.roomMemberTime=id;
+    const status=el('span','room-peer-status',away?'연결 확인 중':studying?'공부 중':'휴식 중');status.dataset.roomMemberStatus=id;
+    card.append(avatar,el('strong','',`${member.displayName}${id===getAuthUser()?.uid?' (나)':''}${id===room.hostUid?' · 방장':''}`),status,el('span','tiny muted',member.subjectName||'시작 전'),timer);
     grid.append(card);
   }
   return grid;
+}
+function tickRoomTimers() {
+  if(document.hidden||!state.room)return;
+  const now=roomNow();
+  for(const node of document.querySelectorAll('[data-room-member-time]')) {
+    const member=state.room.members[node.dataset.roomMemberTime];
+    node.textContent=roomClock(memberTime(member,now));
+  }
+  for(const node of document.querySelectorAll('[data-room-member-status]')) {
+    const member=state.room.members[node.dataset.roomMemberStatus];if(!member)continue;
+    const away=now-member.lastSeenMs>45000;
+    node.textContent=away?'연결 확인 중':member.status==='studying'?(member.countUntilMs!=null&&now>=member.countUntilMs?'상태 동기화 중':'공부 중'):'휴식 중';
+  }
+}
+function paintRefreshButtons() {
+  for(const node of document.querySelectorAll('[data-social-scope]')) {
+    const pending=refreshing.has(node.dataset.socialScope);
+    node.disabled=busy||pending;node.textContent=pending?'갱신 중…':'새로고침';node.setAttribute('aria-busy',String(pending));
+  }
 }
 function paint() {
   const user=getAuthUser(),verified=user?.emailVerified;
@@ -33,6 +59,8 @@ function paint() {
   }
   for(const node of document.querySelectorAll('[data-friend-code]'))node.textContent=state.code||'코드 만들기를 눌러 주세요';
   for(const node of document.querySelectorAll('[data-social-error]')){node.textContent=lastError;node.hidden=!lastError;}
+  for(const node of document.querySelectorAll('[data-friend-request-count]')){node.textContent=String(state.friendRequests.length);node.hidden=!state.friendRequests.length;}
+  for(const node of document.querySelectorAll('[data-room-invite-count]')){const count=state.roomInvites.filter(row=>row.expiresAtMs>roomNow()).length;node.textContent=String(count);node.hidden=!count;}
   list('[data-friend-list]',state.friends,'친구 코드를 입력해 첫 친구를 추가해 보세요.',row=>pair(row.displayName,'',[
     ...(state.room&&!state.room.memberIds.includes(row.uid)?[button('방에 초대','inviteOne',row.uid)]:[]),button('삭제','remove',row.uid)]));
   list('[data-friend-requests]',state.friendRequests,'받은 친구 요청이 없어요.',row=>pair(row.displayName,'친구 요청을 보냈어요.',[button('수락','accept',row.uid),button('거절','reject',row.uid)]));
@@ -48,11 +76,11 @@ function paint() {
       heading.append(copy,button(isHost?'방 종료':'나가기',isHost?'confirmClose':'leave',room.id));
       const count=el('p','tiny muted');count.dataset.roomCount='';
       const peers=el('div');peers.dataset.roomPeers='';
-      const link=el('a','primary-button','스터디캠으로 함께 공부하기');link.href='study.html';
+      const link=el('a','primary-button','스터디캠으로 함께 공부하기');link.href='study.html#study-camera';
       const invite=el('form','room-invite-form');invite.dataset.socialForm='invite';
       invite.append(el('h4','','친구 여러 명 초대하기'));const choices=el('div','room-invite-choices');choices.dataset.inviteChoices='';
       const send=el('button','secondary-button','선택한 친구 초대');send.type='submit';invite.append(choices,send);
-      root.append(heading,count,peers,link,el('p','tiny muted','공부·휴식 상태와 현재 학습 세션 시간이 약 10초마다 공유됩니다.'),invite);
+      root.append(heading,count,peers,link,el('p','tiny muted','공부시간은 매초 표시되며 서버와 주기적으로 동기화됩니다. 휴식·연결 만료 시에는 멈춥니다.'),invite);
     }
     root.querySelector('[data-room-count]').textContent=`${room.memberIds.length}/12명 참여 중 · 영상·음성 전송 없이 상태 공유`;
     root.querySelector('[data-room-peers]').replaceChildren(peerCards(room));
@@ -61,12 +89,13 @@ function paint() {
     if(choices.dataset.signature!==signature) {
       choices.dataset.signature=signature;choices.replaceChildren();
       for(const friend of friends){const label=el('label','room-invite-choice'),input=el('input');input.type='checkbox';input.name='uids';input.value=friend.uid;label.append(input,el('span','',friend.displayName),...(room.invitedUids.includes(friend.uid)?[el('span','tiny muted','초대 보냄')]:[]));choices.append(label);}
-      if(!friends.length)choices.append(empty('초대할 친구가 없습니다. 친구를 먼저 추가해 주세요.'));
+      if(!friends.length)choices.append(empty('초대할 친구가 없습니다. 플레이 탭에서 친구를 먼저 추가해 주세요.'));
     }
   }
   for(const form of document.querySelectorAll('[data-social-form="createRoom"]'))form.hidden=Boolean(state.room);
   paintDock();
-  for(const node of document.querySelectorAll('[data-social] button'))node.disabled=busy;
+  for(const node of document.querySelectorAll('[data-social] button'))node.disabled=node.hasAttribute('data-social-close')||node.hasAttribute('data-social-open')?false:busy;
+  paintRefreshButtons();tickRoomTimers();
 }
 function paintDock() {
   let dock=document.querySelector('[data-room-dock]');
@@ -75,28 +104,35 @@ function paintDock() {
   if(focus) {
     if(!dock||!focus.contains(dock)){dock?.remove();dock=el('section','room-focus-peers');dock.dataset.roomDock='';focus.append(dock);}
     dock.replaceChildren(el('h3','',`${state.room.title} · ${state.room.memberIds.length}명`),peerCards(state.room,true));
-  } else if(!document.querySelector('[data-social]')) {
-    if(!dock||dock.tagName!=='A'){dock?.remove();dock=el('a','room-dock');dock.dataset.roomDock='';dock.href='play.html';document.body.append(dock);}
+  } else if(!document.querySelector('[data-room-panel]')) {
+    if(!dock||dock.tagName!=='A'){dock?.remove();dock=el('a','room-dock');dock.dataset.roomDock='';dock.href='study.html#study-room';document.body.append(dock);}
     dock.textContent=`◷ ${state.room.title} · ${state.room.memberIds.length}명 함께 공부 중`;
   } else dock?.remove();
 }
-async function poll(force=false) {
+async function poll(force=false,listScope) {
   const user=getAuthUser(),play=Boolean(document.querySelector('[data-social]'));
-  if(!user?.emailVerified||document.hidden||requesting||busy)return;
+  if(!user?.emailVerified||document.hidden||busy)return;
+  if(requesting){if(force){refreshQueue.add(listScope||'all');if(listScope){refreshing.add(listScope);paintRefreshButtons();}}return;}
   const data=getStudyData();if(!data.ready||!data.profile)return;
   if(!play&&!state.room&&!data.profile.activeRoomId)return;
   const period=state.room?10000:20000;
   if(!force&&Date.now()-lastPoll<period)return;
   requesting=true;lastPoll=Date.now();const token=epoch,uid=user.uid;
+  if(listScope){refreshing.add(listScope);paintRefreshButtons();}
   try {
-    const next=await studyCall('getStudySocial',{revision,includeLists:play});
+    const next=await studyCall('getStudySocial',{revision,includeLists:play,...(listScope?{listScope}:{})});
     if(token!==epoch||getAuthUser()?.uid!==uid)return;
     const previousRoom=state.room;
-    state={...state,...next};if(play)revision=next.revision;
+    state={...state,...next};if(play&&!listScope)revision=next.revision;
+    if(Number.isFinite(next.serverNowMs))roomClockAnchor={serverMs:next.serverNowMs,localMs:performance.now()};
     if(previousRoom&&!state.room)showToast('스터디룸이 종료되었거나 만료되었습니다.');
     lastError='';paint();
-  } catch(error){if(token===epoch){lastError=serviceError(error);paint();}}
-  finally{requesting=false;}
+    if(listScope)for(const node of document.querySelectorAll(`[data-social-refresh-status="${listScope}"]`))node.textContent='목록을 최신 상태로 불러왔습니다.';
+  } catch(error){if(token===epoch){lastError=serviceError(error);paint();if(listScope)for(const node of document.querySelectorAll(`[data-social-refresh-status="${listScope}"]`))node.textContent='새로고침하지 못했습니다. 다시 시도해 주세요.';}}
+  finally{
+    requesting=false;if(listScope)refreshing.delete(listScope);else refreshing.clear();paintRefreshButtons();
+    if(refreshQueue.size){const next=refreshQueue.has('all')?'all':refreshQueue.values().next().value;if(next==='all')refreshQueue.clear();else refreshQueue.delete(next);void poll(true,next==='all'?undefined:next);}
+  }
 }
 async function change(action,data={}) {
   if(busy)return;
@@ -122,7 +158,7 @@ document.addEventListener('submit',event=>{
 document.addEventListener('click',event=>{
   const target=event.target.closest('[data-social-action]');if(!target)return;
   const action=target.dataset.socialAction,id=target.dataset.socialId;
-  if(action==='refresh'){void poll(true);return;}
+  if(action==='refresh'){void poll(true,target.dataset.socialScope);return;}
   if(action==='copy') {
     if(!state.code)return;
     if(!navigator.clipboard){showToast(`내 친구 코드: ${state.code}`);return;}
@@ -140,13 +176,15 @@ document.addEventListener('click',event=>{
   if(action==='inviteOne'){void change('invite',{roomId:state.room?.id,uids:[id]});return;}
   void change(action,['join','decline','leave','close'].includes(action)?{roomId:id}:{uid:id});
 });
-function navigate(){paint();void poll(true);}
+function navigate(){paint();void poll(true);if(window.location?.hash==='#study-room')openSocialPanel('rooms',document.querySelector('[data-social-open="rooms"]'));}
 window.addEventListener('study:navigated',navigate);
 window.addEventListener('study:data-changed',()=>{paintDock();void poll();});
 window.addEventListener('study:camera-changed',paintDock);
 window.addEventListener('study:auth-changed',()=>{
-  const uid=getAuthUser()?.uid||null;if(uid===owner)return;owner=uid;epoch++;revision=-1;lastPoll=0;lastError='';state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};paint();void poll(true);
+  const uid=getAuthUser()?.uid||null;if(uid===owner)return;owner=uid;epoch++;revision=-1;lastPoll=0;lastError='';roomClockAnchor=null;refreshQueue.clear();refreshing.clear();for(const dialog of document.querySelectorAll('[data-social-panel][open]'))dialog.close();state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};paint();void poll(true);
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll(true);});
 setInterval(()=>{paintDock();void poll();},5000);
+setInterval(tickRoomTimers,1000);
+window.addEventListener('hashchange',()=>{if(window.location.hash==='#study-room')navigate();});
 void authReady.then(navigate);

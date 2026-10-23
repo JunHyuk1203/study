@@ -24,7 +24,7 @@ function userId(request, verified = false) {
 
 export const getDailyReport = onCall(options, request => dailyReport(db,userId(request)));
 export const updateStudySocial = onCall(options, request => changeSocial(db,userId(request,true),request.data?.action,request.data));
-export const getStudySocial = onCall(options, request => socialSnapshot(db,userId(request,true),{revision:request.data?.revision,includeLists:request.data?.includeLists===true}));
+export const getStudySocial = onCall(options, request => socialSnapshot(db,userId(request,true),{revision:request.data?.revision,includeLists:request.data?.includeLists===true,listScope:request.data?.listScope}));
 
 export const ensureProfile = onCall(options, async (request) => {
   const uid = userId(request);

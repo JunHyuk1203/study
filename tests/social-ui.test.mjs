@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
+import {roomClock,memberTime} from '../room-time.js';
 const socialSource=(await readFile(new URL('../study-social.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
 const reportSource=(await readFile(new URL('../daily-report.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
 function setup(source,{call=async()=>({revision:1,room:null}),report=false}={}) {
@@ -10,7 +11,7 @@ function setup(source,{call=async()=>({revision:1,room:null}),report=false}={}) 
     authReady:new Promise(()=>{}),user:{uid:'alice',emailVerified:true},getAuthUser:()=>context.user,
     getStudyData:()=>({ready:true,profile:{uid:context.user?.uid,studyRevision:1}}),
     studyDate:()=> '2026-10-23',studyCall:call,serviceError:error=>error.message,showToast(){},
-    element:()=>({}),el:()=>({}),duration:value=>String(value),setInterval(){},navigator:{},
+    element:()=>({}),el:()=>({}),duration:value=>String(value),roomClock,memberTime,openSocialPanel(){},performance:{now:()=>0},setInterval(){},navigator:{},
     window:{addEventListener:(name,handler)=>{events[name]=handler;}},
     document:{hidden:false,addEventListener(){},querySelector:selector=>report&&selector==='[data-daily-report]'?node:null,
       querySelectorAll:selector=>report&&selector==='[data-daily-report]'?[node]:[]},
@@ -55,4 +56,32 @@ test('account changes clear a previously rendered private report before a new fe
   context.user=null;events['study:auth-changed']();
   assert.equal(node.textContent,'로그인하면 오늘의 리포트를 볼 수 있어요.');
   assert.equal(vm.runInContext('cached',context),null);
+});
+
+test('request refresh forces its own list without consuming the shared revision or replacing invitations',async()=>{
+  let args;
+  const {context}=setup(socialSource,{call:async(name,data)=>{args=data;return {revision:99,room:null,friendRequests:[{uid:'new-friend'}],sentRequests:[]};}});
+  context.document.querySelector=selector=>selector==='[data-social]'?{}:null;
+  vm.runInContext("revision=3;state.roomInvites=[{roomId:'keep-invitation'}]",context);
+  await vm.runInContext("poll(true,'requests')",context);
+  assert.equal(args.listScope,'requests');assert.equal(args.includeLists,true);
+  assert.equal(vm.runInContext('revision',context),3);
+  assert.equal(vm.runInContext('state.friendRequests[0].uid',context),'new-friend');
+  assert.equal(vm.runInContext('state.roomInvites[0].roomId',context),'keep-invitation');
+});
+
+test('a list refresh clicked during polling is queued instead of discarded',async()=>{
+  let release;const calls=[];
+  const {context}=setup(socialSource,{call:async(name,data)=>{calls.push(data);if(calls.length===1)return new Promise(resolve=>{release=resolve;});return {revision:4,room:null,roomInvites:[]};}});
+  context.document.querySelector=selector=>selector==='[data-social]'?{}:null;
+  const first=vm.runInContext('poll(true)',context);
+  await vm.runInContext("poll(true,'invites')",context);
+  assert.equal(calls.length,1);release({revision:3,room:null});await first;await Promise.resolve();
+  assert.equal(calls.length,2);assert.equal(calls[1].listScope,'invites');
+});
+
+test('closed report popups do not fetch detailed records until opened',async()=>{
+  let calls=0;const {context,node}=setup(reportSource,{report:true,call:async()=>{calls++;}});
+  node.closest=()=>({open:false});
+  await vm.runInContext('load()',context);assert.equal(calls,0);
 });
