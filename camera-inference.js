@@ -19,21 +19,22 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     160, 158, 153, 144, 385, 387, 373, 380].every(i => finitePoint(face[i])));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
   const wrists = pose ? [15, 16].map(i => pose[i]).filter(visiblePoint) : [];
-  const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .25 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
+  const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
   const eyeMid = faceValid ? { x: (face[33].x + face[263].x) / 2, y: (face[33].y + face[263].y) / 2 } : null;
   const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(face[33], face[263])) > .65;
   const phones = boxes.filter(o => o.class === 'cell phone').map(o => {
     const center = { x: o.box[0] + o.box[2] / 2, y: o.box[1] + o.box[3] / 2 };
     const touching = hands.some(p => nearBox(p, o.box, .08)) || wrists.some(p => nearBox(p, o.box, .1));
-    const raised = head ? center.y < Math.min(.75, head.y + .22) && Math.abs(center.x - head.x) < .4 :
-      center.y < .65 && center.x > .15 && center.x < .85;
-    const used = o.score >= .35 && (touching || o.score >= .6 && raised);
+    const upright = o.box[3] >= .18 && o.box[3] > o.box[2]*1.15 && center.x > .1 && center.x < .9;
+    const raised = upright || (head ? center.y < Math.min(.8, head.y + .28) && Math.abs(center.x - head.x) < .45 :
+      center.y < .7 && center.x > .1 && center.x < .9);
+    const used = o.score >= .3 && (touching || o.score >= .45 && raised);
     return { score: o.score, touching, raised, used };
   });
   const phoneUse = phones.some(o => o.used);
   const bestPhone = phones.filter(o => o.used).sort((a,b) => b.score-a.score)[0] || phones.sort((a,b) => b.score-a.score)[0];
-  const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : bestPhone.score < .35 ? 'weak' : 'desk' } :
+  const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : bestPhone.score < .3 ? 'weak' : 'desk' } :
     { score: 0, stage: 'not-found' };
   const studyContext = boxes.some(o => (o.class === 'book' && headDown) ||
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
@@ -126,18 +127,18 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         if (time - objectTime >= 800) {
           input.width = width; input.height = height;
           context.drawImage(source, 0, 0, width, height);
-          cachedObjects = await objects.detect(context.getImageData(0, 0, width, height), 30, .25);
-          if (!cachedObjects.some(o => o.class === 'cell phone' && o.score >= .35)) {
+          cachedObjects = await objects.detect(context.getImageData(0, 0, width, height), 30, .2);
+          if (!cachedObjects.some(o => o.class === 'cell phone' && o.score >= .3)) {
             const region = phoneSearchRegion(poseResult, handResult);
             input.width = Math.max(1, Math.round(region.width*width)); input.height = Math.max(1, Math.round(region.height*height));
             context.drawImage(source, region.x*width, region.y*height, region.width*width, region.height*height, 0, 0, input.width, input.height);
-            const zoomed = await objects.detect(context.getImageData(0, 0, input.width, input.height), 30, .25);
+            const zoomed = await objects.detect(context.getImageData(0, 0, input.width, input.height), 30, .2);
             cachedObjects.push(...zoomed.filter(o => o.class === 'cell phone').map(o => ({...o,
               bbox: [region.x*width + o.bbox[0]*region.width*width/input.width,
                 region.y*height + o.bbox[1]*region.height*height/input.height,
                 o.bbox[2]*region.width*width/input.width, o.bbox[3]*region.height*height/input.height]})));
           }
-          const foundPhones = cachedObjects.filter(o => o.class === 'cell phone' && o.score >= .35);
+          const foundPhones = cachedObjects.filter(o => o.class === 'cell phone' && o.score >= .3);
           if (foundPhones.length) { phones = foundPhones; phoneTime = time; }
           else if (time-phoneTime < 1500) cachedObjects.push(...phones);
           objectTime = time;

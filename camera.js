@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261022-9';
-import { createFocusTracker } from './camera-focus.js?v=20261023-3';
-import { paintCameraDebug } from './camera-debug.js?v=20261023-2';
+import { createFocusTracker } from './camera-focus.js?v=20261023-4';
+import { paintCameraDebug } from './camera-debug.js?v=20261023-3';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let reason = null;
@@ -15,7 +15,7 @@ let avatarPose = null;
 let fallbackAttempted = false;
 let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
-let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1;
+let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
@@ -137,6 +137,7 @@ function setStatus(next, text, active = false) {
 }
 export function stopCamera(text = '얼굴 인식으로 학습 시작', error = false) {
   revision++;
+  frameEpoch++;
   enabled = false; ready = false; inFlight = false; manuallyPaused = false;
   lastVideoTime = -1;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
@@ -172,11 +173,12 @@ function acceptResult(data) {
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261023-2', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261023-3', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
+    if (data.epoch != null && data.epoch !== frameEpoch) return;
     if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
     if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
@@ -186,6 +188,10 @@ function startRecognitionWorker(token, light = false) {
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
+  if (document.hidden) {
+    ready = false; inFlight = false; worker?.terminate(); worker = null; clearTimeout(loadingDeadline);
+    return;
+  }
   if (fallbackAttempted) { recognitionError(detail); return; }
   fallbackAttempted = true; ready = false; inFlight = false; avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
@@ -196,21 +202,49 @@ function recoverRecognition(token, detail) {
     startRecognitionWorker(token, true);
   } catch (error) { if (token === revision) recognitionError(error.message); }
 }
-async function frame(token) {
-  if (!enabled || token !== revision) return;
+async function frame(token, epoch = frameEpoch) {
+  if (!enabled || token !== revision || epoch !== frameEpoch) return;
   if (ready && !inFlight && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     inFlight = true;
     try {
       const target = worker;
       const bitmap = await createImageBitmap(video);
-      if (token !== revision) { bitmap.close(); return; }
+      if (token !== revision || epoch !== frameEpoch) { bitmap.close(); return; }
       if (worker !== target || !ready) { bitmap.close(); inFlight = false; }
-      else target.postMessage({ type: 'frame', bitmap, time: performance.now() }, [bitmap]);
+      else target.postMessage({ type: 'frame', bitmap, time: performance.now(), epoch }, [bitmap]);
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
-  if (!enabled || token !== revision) return;
-  loop = setTimeout(() => frame(token), 200);
+  if (!enabled || token !== revision || epoch !== frameEpoch) return;
+  loop = setTimeout(() => frame(token, epoch), 200);
+}
+function startCameraWatchdog(token) {
+  clearInterval(watchdog);
+  watchdog = setInterval(() => {
+    // Background throttling and camera suspension must not kill the recognition loop.
+    if (token !== revision || !enabled || document.hidden) return;
+    if (ready && performance.now() - lastResult > 3000) {
+      focusTracker.reset(); diagnostics = null;
+      setStatus('paused', '카메라 인식 응답 없음 · 일시정지');
+      if (!fallbackAttempted) recoverRecognition(token, 'Worker stopped responding');
+      else if (performance.now() - lastResult > 6000) recognitionError('Light worker stopped responding');
+    }
+  }, 1000);
+}
+function resumeCameraRecognition() {
+  if (!enabled || document.hidden || !stream) return;
+  const token = revision;
+  frameEpoch++; clearTimeout(loop); inFlight = false; lastVideoTime = -1; lastResult = performance.now();
+  focusTracker.reset(); diagnostics = null;
+  setStatus('scanning', '얼굴을 다시 확인하는 중…');
+  if (!worker) {
+    fallbackAttempted = true;
+    try { startRecognitionWorker(token, true); } catch (error) { recognitionError(error.message); return; }
+  }
+  const epoch = frameEpoch;
+  if (video.paused) void video.play().catch(() => { if (token === revision && epoch === frameEpoch && !document.hidden) setStatus('paused', '카메라 영상 복구 대기 중…'); });
+  startCameraWatchdog(token);
+  void frame(token);
 }
 export async function startCamera() {
   if (enabled) return false;
@@ -226,6 +260,7 @@ export async function startCamera() {
     for (const track of stream.getVideoTracks()) {
       track.addEventListener('ended', () => { if (token === revision) stopCamera('카메라 연결이 끊겼습니다. 다시 켜 주세요.', true); });
       track.addEventListener('mute', () => { if (token === revision) { focusTracker.reset(); diagnostics = null; setStatus('paused', '카메라 영상 중단 · 일시정지'); } });
+      track.addEventListener('unmute', () => { if (token === revision) resumeCameraRecognition(); });
     }
     await video.play();
     if (token !== revision) return false;
@@ -235,14 +270,7 @@ export async function startCamera() {
       // Never move expensive inference onto the UI thread, even in compatibility mode.
       void recoverRecognition(token, error.message);
     }
-    watchdog = setInterval(() => {
-      if (ready && performance.now() - lastResult > 3000) {
-        focusTracker.reset(); diagnostics = null;
-        setStatus('paused', '카메라 인식 응답 없음 · 일시정지');
-        if (!fallbackAttempted) void recoverRecognition(token, 'Worker stopped responding');
-        else if (performance.now() - lastResult > 6000) recognitionError('Light worker stopped responding');
-      }
-    }, 1000);
+    startCameraWatchdog(token);
     void frame(token);
     return true;
   } catch (error) {
@@ -255,10 +283,14 @@ export async function startCamera() {
 document.addEventListener('visibilitychange', () => {
   if (!enabled) return;
   if(document.hidden && cameraVisible())return;
+  frameEpoch++;
+  if (stream) { clearTimeout(loop); inFlight = false; }
   lastVideoTime = -1;
   focusTracker.reset(); diagnostics = null;
   setStatus(document.hidden ? 'paused' : 'scanning', document.hidden ? '화면을 벗어났습니다 · 일시정지' : '얼굴을 다시 확인하는 중…');
+  if (!document.hidden) resumeCameraRecognition();
 });
+window.addEventListener('pageshow', event => { if (event.persisted) resumeCameraRecognition(); });
 window.addEventListener('study:navigated', () => {
   if (!document.querySelector('.app > main [data-camera]') && enabled) stopCamera();
   if (!document.querySelector('.app > main [data-camera]') && focusPanel) void closeCameraFocus();
@@ -274,5 +306,9 @@ document.addEventListener('keydown', event => {
   }
   if (event.key === 'Escape') focusPanel.querySelector('.cam-end').click();
 });
-window.addEventListener('pagehide', () => stopCamera());
+window.addEventListener('pagehide', event => {
+  if (!event.persisted) { stopCamera(); return; }
+  frameEpoch++; clearTimeout(loop); inFlight = false; focusTracker.reset(); diagnostics = null;
+  setStatus('paused', '화면을 벗어났습니다 · 일시정지');
+});
 paint();

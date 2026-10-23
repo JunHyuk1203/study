@@ -103,7 +103,7 @@ try {
     else assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
   }
   const controllerResult = await page.evaluate(async () => {
-    const camera = await import('/camera.js?v=20261023-3');
+    const camera = await import('/camera.js?v=20261023-4');
     camera.openCameraFocus(document.querySelector('[data-camera-toggle]'));
     if (!await camera.startCamera()) throw new Error(camera.cameraState().message);
     try {
@@ -118,19 +118,35 @@ try {
         },200);
       });
       const debugText=document.querySelector('[data-camera-debug]').textContent;
-      return {paused,debugText,stopped: (camera.stopCamera(),camera.cameraState()),remainingVideos:document.querySelectorAll('video').length};
+      const originalHidden=Object.getOwnPropertyDescriptor(document,'hidden');
+      let background=true;
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>background});
+      try{
+        document.dispatchEvent(new Event('visibilitychange'));
+        document.querySelector('video').pause();
+        await new Promise(resolve=>setTimeout(resolve,300));
+        background=false;document.dispatchEvent(new Event('visibilitychange'));
+        await new Promise((resolve,reject)=>{
+          const timeout=setTimeout(()=>{clearInterval(poll);reject(new Error('Camera did not recover after visibility return'));},15000);
+          const poll=setInterval(()=>{const state=camera.cameraState();if(state.reason==='away' && state.status==='paused'){
+            clearInterval(poll);clearTimeout(timeout);resolve();
+          }},100);
+        });
+      }finally{if(originalHidden)Object.defineProperty(document,'hidden',originalHidden);else delete document.hidden;}
+      return {paused,debugText,recovered:true,stopped: (camera.stopCamera(),camera.cameraState()),remainingVideos:document.querySelectorAll('video').length};
     } finally { camera.stopCamera(); }
   });
   assert.equal(controllerResult.paused.tracking,false);
   assert.equal(controllerResult.stopped.enabled,false);
   assert.equal(controllerResult.remainingVideos,0);
-  assert.match(controllerResult.debugText,/자리 이탈.*즉시 정지.*경고 기준 도달/);
-  console.log('controller: synthetic camera automatically paused for absence; stop released video and worker');
+  assert.equal(controllerResult.recovered,true);
+  assert.match(controllerResult.debugText,/자리 이탈.*경고·정지 기준 도달/);
+  console.log('controller: automatic warning/pause, background return/video restart, and stop cleanup passed');
   for(const width of [390,1280]){
     await page.setViewportSize({width,height:900});
     const layout=await page.evaluate(async()=>{
-      const {createFocusTracker}=await import('/camera-focus.js?v=20261023-3');
-      const {paintCameraDebug}=await import('/camera-debug.js?v=20261023-2');
+      const {createFocusTracker}=await import('/camera-focus.js?v=20261023-4');
+      const {paintCameraDebug}=await import('/camera-debug.js?v=20261023-3');
       const tracker=createFocusTracker();
       for(let t=0;t<=10000;t+=500)tracker.update({reliable:true,face:true,body:false,activityVector:[.5,.5,.5,.5,0,.4,0,0,0]},t);
       const root=document.querySelector('.camera-focus [data-camera]');
@@ -139,7 +155,7 @@ try {
       return {left:rect.left,right:rect.right,viewport:innerWidth,overflow:panel.scrollWidth>panel.clientWidth,text:panel.textContent};
     });
     assert.ok(layout.left>=0 && layout.right<=layout.viewport,`debug panel outside viewport: ${width}`);
-    assert.equal(layout.overflow,false);assert.match(layout.text,/정지까지 35.0초/);
+    assert.equal(layout.overflow,false);assert.match(layout.text,/경고·정지까지 12.5초/);
     await page.locator('[data-camera-debug]').scrollIntoViewIfNeeded();
     await page.screenshot({path:resolve(root,`.codex-focus-debug-${width}.png`),fullPage:true});
     console.log(`debug UI ${width}px: countdown visible, no horizontal overflow`);

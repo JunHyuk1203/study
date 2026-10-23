@@ -12,18 +12,19 @@ function advance(tracker, signals, from, to, step = 500) {
   for (let t = from; t <= to; t += step) state = tracker.update(signals, t);
   return state;
 }
-test('debug timers distinguish pause deadlines from warning deadlines and clear on reset', () => {
+test('debug timers show identical warning and pause deadlines and clear on reset', () => {
   const tracker=createFocusTracker();
   advance(tracker,healthy,0,2000);
   tracker.update({...healthy,eyesClosed:true},2200);
   tracker.update({...healthy,eyesClosed:true},2400);
   let row=tracker.getDebug().rows.find(row=>row.key==='sleep');
-  assert.equal(row.elapsedMs,200); assert.equal(row.pauseRemainingMs,150); assert.equal(row.warningRemainingMs,1300);
+  assert.equal(row.elapsedMs,200); assert.equal(row.pauseRemainingMs,550); assert.equal(row.warningRemainingMs,550);
   tracker.update({...healthy,phoneUse:true},2800);
   row=tracker.getDebug().rows.find(row=>row.key==='phone');
-  assert.equal(row.pauseRemainingMs,0); assert.equal(row.warningRemainingMs,1500);
-  assert.match(focusDebugRows(tracker.getDebug()).find(row=>row.key==='phone').text,/즉시 정지.*경고까지 1.5초/);
-  tracker.update(healthy,3000); tracker.update(healthy,3500);
+  assert.equal(row.pauseRemainingMs,750); assert.equal(row.warningRemainingMs,750);
+  assert.match(focusDebugRows(tracker.getDebug()).find(row=>row.key==='phone').text,/경고·정지까지 0.75초/);
+  tracker.update({...healthy,phoneUse:true},3550);
+  tracker.update(healthy,4000); tracker.update(healthy,4500);
   assert.equal(tracker.getDebug().resumeRemainingMs,1500);
   tracker.reset(); assert.equal(tracker.getDebug(),null);
   assert.ok(focusDebugRows(null).every(row=>row.text==='분석 대기'));
@@ -32,30 +33,32 @@ test('idle debug countdown ignores brief movement and resets after sustained mot
   const tracker=createFocusTracker();
   advance(tracker,healthy,0,10000);
   let row=tracker.getDebug().rows.find(row=>row.key==='idle');
-  assert.equal(row.elapsedMs,10000); assert.equal(row.pauseRemainingMs,35000);
+  assert.equal(row.elapsedMs,10000); assert.equal(row.pauseRemainingMs,12500);
   const moving={...healthy,activityVector:[.8,.5,.5,.5,0,.4,0,0,0]};
   tracker.update(moving,10500);
   row=tracker.getDebug().rows.find(row=>row.key==='idle');
   assert.equal(row.elapsedMs,10500);
   advance(tracker,moving,11000,12000);
   row=tracker.getDebug().rows.find(row=>row.key==='idle');
-  assert.ok(row.elapsedMs<=500); assert.ok(row.pauseRemainingMs>=44500);
+  assert.ok(row.elapsedMs<=1500); assert.ok(row.pauseRemainingMs>=21000);
   tracker.update({...healthy,studyActivity:true},12500);
   assert.equal(tracker.getDebug().rows.find(row=>row.key==='idle').blocked,'학습 동작 감지');
   tracker.update({...healthy,activityVector:null},13000);
   assert.equal(tracker.getDebug().rows.find(row=>row.key==='idle').blocked,'얼굴 방향 확인 필요');
 });
 for (const [reason, signals, delay] of [
-  ['sleep', { ...healthy, eyesClosed: true }, 1500],
-  ['phone', { ...healthy, phoneUse: true }, 1500],
-  ['away', { ...healthy, face: false, body: false }, 2000],
+  ['sleep', { ...healthy, eyesClosed: true }, 750],
+  ['phone', { ...healthy, phoneUse: true }, 750],
+  ['away', { ...healthy, face: false, body: false }, 1000],
 ]) test(`${reason}: stops credit, warns after persistence and automatically recovers`, () => {
   const tracker = createFocusTracker();
   assert.equal(advance(tracker, healthy, 0, 2000).tracking, true);
   const pending = tracker.update(signals, 2500);
-  assert.equal(pending.tracking, reason === 'sleep');
-  assert.equal(pending.status, reason === 'sleep' ? 'tracking' : 'scanning');
-  const warned = advance(tracker, signals, 3000, 2500 + delay);
+  assert.equal(pending.tracking, true);
+  assert.equal(pending.status, 'tracking');
+  const before=advance(tracker,signals,2750,2500+delay-250,250);
+  assert.equal(before.tracking,true);assert.notEqual(before.status,'paused');
+  const warned = tracker.update(signals,2500+delay);
   assert.equal(warned.reason, reason);
   assert.equal(warned.status, 'paused');
   assert.equal(tracker.update(healthy, 5000).tracking, false);
@@ -69,24 +72,26 @@ test('a blink or brief occlusion never becomes a persistent behavior warning', (
   assert.equal(tracker.update(healthy, 2600).tracking, true);
   assert.equal(advance(tracker, healthy, 2900, 4400).tracking, true);
 });
-test('prolonged eye closure stops time after blink grace, before the sleep warning', () => {
+test('eye closure continues timing before confirmation and warns exactly when it pauses', () => {
   const tracker=createFocusTracker(); advance(tracker,healthy,0,2000);
   assert.equal(tracker.update({...healthy,eyesClosed:true},2200).tracking,true);
   const state=tracker.update({...healthy,eyesClosed:true},2600);
-  assert.equal(state.tracking,false); assert.equal(state.status,'scanning');
+  assert.equal(state.tracking,true); assert.equal(state.status,'tracking');
+  const confirmed=tracker.update({...healthy,eyesClosed:true},2950);
+  assert.equal(confirmed.tracking,false);assert.equal(confirmed.status,'paused');assert.equal(confirmed.reason,'sleep');
 });
-test('idle requires 45 seconds of stillness and exits on observed movement', () => {
+test('idle requires 22.5 seconds of stillness and exits on observed movement', () => {
   const tracker = createFocusTracker();
-  assert.equal(advance(tracker, healthy, 0, 44500).tracking, true);
-  assert.equal(tracker.update(healthy, 45000).reason, 'idle');
+  assert.equal(advance(tracker, healthy, 0, 22000).tracking, true);
+  assert.equal(tracker.update(healthy, 22500).reason, 'idle');
   const moving = { ...healthy, activityVector: [.7,.5,.5,.5,0,.4,0,0,0] };
-  assert.equal(advance(tracker, moving, 45500, 49000).tracking, true);
+  assert.equal(advance(tracker, moving, 23000, 26500).tracking, true);
 });
 test('ordinary blinks do not restart the long stillness observation window', () => {
   const tracker=createFocusTracker(); let state;
   for(let t=0;t<=60000;t+=200) {
     state=tracker.update({...healthy,eyesClosed:t>2000 && t%4000===0},t);
-    if(t>=45000)assert.equal(state.reason,'idle');
+    if(t>=22600)assert.equal(state.reason,'idle');
   }
   assert.equal(state.reason,'idle'); assert.equal(state.tracking,false);
 });
@@ -101,17 +106,31 @@ test('face alone can trigger idle without shoulders, wrists or hands, despite mi
     const vector=[...healthy.activityVector];
     vector[0]+=.02*Math.sin(t/500);vector[2]+=.15*Math.sin(t/300);vector[3]+=.15*Math.sin(t/300);
     state=tracker.update({...healthy,body:false,activityVector:vector},t);
-    if(t>=45000)assert.equal(state.reason,'idle');
+    if(t>=22600)assert.equal(state.reason,'idle');
   }
   assert.equal(state.tracking,false);
 });
-test('a one-frame head landmark spike does not restart the 45 second countdown', () => {
+test('a one-frame head landmark spike does not restart the idle countdown', () => {
   const tracker=createFocusTracker();let state;
   for(let t=0;t<=46000;t+=200){
     const vector=[...healthy.activityVector];if(t===20000)vector[0]+=.2;
     state=tracker.update({...healthy,activityVector:vector},t);
   }
   assert.equal(state.reason,'idle');
+});
+test('moderate sustained movement releases idle sooner, while a brief phone appearance never pauses time', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+  const moving={...healthy,activityVector:[.56,.5,.5,.5,0,.4,0,0,0]};
+  assert.equal(advance(tracker,moving,23000,26500,250).tracking,true);
+  assert.equal(tracker.update({...moving,phoneUse:true},26750).tracking,true);
+  assert.equal(tracker.update(moving,27000).tracking,true);
+});
+test('phone confirmation takes priority when the phone covers the face', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  const covered={...healthy,face:false,body:false,phoneUse:true};
+  assert.equal(tracker.update(covered,2250).tracking,true);
+  const state=tracker.update(covered,3000);
+  assert.equal(state.reason,'phone');assert.equal(state.tracking,false);assert.equal(state.status,'paused');
 });
 test('missing/partial observations and long gaps cannot keep crediting time', () => {
   for (const signals of [null, {}, { ...healthy, reliable: false }, { ...healthy, face: false }]) {
@@ -143,7 +162,7 @@ test('a raised phone is usable without hands or a downward head, while a desk ph
   assert.equal(extract().phoneUse, true);
   s.hands.landmarks = []; s.pose.landmarks[0][15] = { x:.5,y:.6,visibility:.9 };
   assert.equal(extract().phoneUse, true);
-  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.3 }],100,100).phoneUse,false);
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.25 }],100,100).phoneUse,false);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.4 }],100,100).phoneUse,true);
 });
 test('eye closure, reading context, absence and wrist visibility are extracted independently', () => {
@@ -169,7 +188,7 @@ test('static books and laptops are context, only actual hand motion is study act
 });
 test('phone diagnostics distinguish no object, weak predictions, desk placement and use', () => {
   const s=scene();
-  for(const [objects,stage]of [[[],'not-found'],[[{...phone,score:.3}],'weak'],[[{...phone,bbox:[40,80,20,20]}],'desk'],[[phone],'using']]){
+  for(const [objects,stage]of [[[],'not-found'],[[{...phone,score:.25}],'weak'],[[{...phone,bbox:[40,80,20,20]}],'desk'],[[phone],'using']]){
     const evidence=extractFocusSignals(s.face,s.pose,s.hands,objects,100,100).phoneEvidence;
     const tracker=createFocusTracker();tracker.update({...healthy,phoneEvidence:evidence},0);
     assert.equal(evidence.stage,stage);
@@ -193,7 +212,7 @@ test('controller propagates behavior pauses, ignores stale results and auto resu
   const controller = context.controller;
   const send = (time, signals=healthy, captured=time) => { now=time; controller.acceptResult({time:captured,signals}); return controller.cameraState(); };
   send(0); assert.equal(send(2000).tracking,true);
-  assert.equal(send(2200,{...healthy,phoneUse:true}).tracking,false);
+  assert.equal(send(2200,{...healthy,phoneUse:true}).tracking,true);
   assert.equal(send(3800,{...healthy,phoneUse:true}).reason,'phone');
   send(4000); assert.equal(send(6000).tracking,true);
   assert.equal(send(9001,healthy,6000).tracking,false);
@@ -227,6 +246,32 @@ test('worker failures retry once in another worker, never on the UI thread, and 
   assert.equal(context.controller.cameraState().status,'error');
   assert.doesNotMatch(code,/loadCameraInference|fallbackDetector/);
 });
+test('returning from a long background suspension restarts video and the frame loop, rejecting old frames', async () => {
+  let now=0,plays=0,watch;
+  const handlers={},events={},workers=[],posted=[];
+  const video={setAttribute(){},readyState:2,currentTime:1,paused:false,play(){plays++;this.paused=false;return Promise.resolve();}};
+  const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener:(name,fn)=>handlers[name]=fn};
+  class Worker{constructor(){workers.push(this);}postMessage(data){posted.push(data);}terminate(){this.terminated=true;}}
+  const code=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,setTimeout:()=>1,clearTimeout(){},setInterval:fn=>{watch=fn;return 1;},clearInterval(){},
+    createImageBitmap:async()=>({close(){}}),performance:{now:()=>now},facePose:()=>null,window:{addEventListener:(name,fn)=>events[name]=fn,dispatchEvent(){}}});
+  vm.runInContext(`${code}\nenabled=true;stream={getVideoTracks:()=>[{muted:false}]};startRecognitionWorker(revision);ready=true;inFlight=true;startCameraWatchdog(revision);globalThis.controller={cameraState,flight:()=>inFlight};`,context);
+  document.hidden=true;handlers.visibilitychange();now=60000;watch();
+  assert.equal(workers.length,1);assert.notEqual(workers[0].terminated,true);
+  video.paused=true;document.hidden=false;handlers.visibilitychange();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(plays,1);
+  const frame=posted.find(data=>data.type==='frame');assert.ok(frame);assert.ok(frame.epoch>0);
+  workers[0].onmessage({data:{type:'result',epoch:0,time:now,signals:healthy}});
+  workers[0].onmessage({data:{type:'error',stage:'frame',epoch:0,message:'old background frame failed'}});
+  assert.equal(workers.length,1);
+  assert.equal(context.controller.flight(),true);
+  for(let step=0;step<=2000;step+=500){now=60000+step;workers[0].onmessage({data:{type:'result',epoch:frame.epoch,time:now,signals:healthy}});}
+  assert.equal(context.controller.cameraState().tracking,true);
+  events.pagehide({persisted:true});assert.equal(context.controller.cameraState().enabled,true);
+  events.pageshow({persisted:true});await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(posted.filter(data=>data.type==='frame').length>=2);
+});
 test('WASM inference preserves 800ms object cadence in standard and light mode', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class {getContext(){return {drawImage(){},getImageData(){return {};}};}};
@@ -243,7 +288,7 @@ test('WASM inference preserves 800ms object cadence in standard and light mode',
       try{
         const first=await engine.detect({width:100,height:100},0);
         await engine.detect({width:100,height:100},200);await engine.detect({width:100,height:100},800);
-        assert.equal(first.backend,'wasm');assert.equal(calls.length,2);assert.equal(calls[0][2],.25);
+        assert.equal(first.backend,'wasm');assert.equal(calls.length,2);assert.equal(calls[0][2],.2);
         assert.equal(base,light?'lite_mobilenet_v2':'mobilenet_v2');
       }finally{engine.close();}
     }
