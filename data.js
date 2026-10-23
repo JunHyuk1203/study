@@ -28,6 +28,8 @@ let functionsSdk;
 let authServices;
 let db;
 let call;
+let resolveDataReady;
+const dataReady = new Promise(resolve => { resolveDataReady = resolve; });
 let generation = 0;
 let connectedUid = null;
 let connectedDay = null;
@@ -555,9 +557,6 @@ document.addEventListener('click', async event => {
   if (!starting && (previewSession || !state.profile?.activeSessionId)) {
     stopCamera(); previewSession = null; await closeCameraFocus(); paintTimer(); return;
   }
-  if (!cameraStart && !getAuthUser()) { window.location.assign('login.html'); return; }
-  if (!cameraStart && !getAuthUser().emailVerified) { notice('계정 화면에서 이메일 인증을 완료해 주세요.', true); return; }
-  if (!cameraStart && !call) { notice('저장 서비스를 연결 중입니다. 잠시 후 다시 시도해 주세요.', true); return; }
   busy = true;
   paintTimer();
   try {
@@ -565,13 +564,23 @@ document.addEventListener('click', async event => {
       cameraHandoffDisplay=null;
       openCameraFocus(button);
       if (!await startCamera()) return;
-      if (!getAuthUser()?.emailVerified || !call) {
+    }
+    // A missing user/callable during startup is still loading, not guest mode.
+    if (starting && !await authReady) throw { code: 'functions/unavailable' };
+    const user = getAuthUser();
+    if (cameraStart) {
+      if (!user?.emailVerified) {
         previewSession = { totalMs: 0, activeSince: null };
         updatePreviewTimer();
         notice('체험 모드입니다. 로그인과 이메일 인증 후 시작한 학습부터 계정에 저장됩니다.',false,false);
         return;
       }
     }
+    if (!user) { window.location.assign('login.html'); return; }
+    if (!user.emailVerified) { notice('계정 화면에서 이메일 인증을 완료해 주세요.', true); return; }
+    if (!call) await dataReady;
+    if (!call) throw { code: 'functions/unavailable' };
+    await connectUser();
     await profileReady;
     // Email verification can change before the cached ID token is refreshed.
     await authServices.auth.currentUser.getIdToken(true);
@@ -724,3 +733,4 @@ try {
     await connectUser();
   }
 } catch (error) { notice(errorText(error), true); }
+finally { resolveDataReady(); }

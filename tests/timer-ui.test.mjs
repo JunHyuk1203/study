@@ -142,7 +142,7 @@ test('failed camera session creation displays the error inside the focus screen'
   const button={disabled:false,dataset:{studyAction:'start'},hasAttribute:()=>true};
   const user={uid:'owner',emailVerified:true};
   const context=vm.createContext({
-    cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>user,
+    cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>user,authReady:Promise.resolve(true),
     openCameraFocus(){},startCamera:async()=>true,
     stopCamera:(message,error)=>{camera.enabled=false;camera.tracking=false;camera.status=error?'error':'off';camera.message=message;},
     document:{querySelectorAll:()=>[],querySelector:()=>null,addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}},
@@ -152,6 +152,47 @@ test('failed camera session creation displays the error inside the focus screen'
   for(const click of clicks)await click({target:{closest:selector=>selector==='[data-study-action]'?button:null}});
   assert.equal(camera.status,'error');
   assert.match(context.message(camera),/저장 서비스에 연결하지 못했습니다/);
+});
+
+function cameraStartup(authReady) {
+  const clicks=[],camera={enabled:true,tracking:true,status:'tracking'};
+  const button={disabled:false,dataset:{studyAction:'start'},hasAttribute:()=>true};
+  const context=vm.createContext({
+    authReady,cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>context.user,
+    performance:{now:()=>0},openCameraFocus(){},startCamera:async()=>true,
+    stopCamera:(message,error)=>{camera.enabled=false;camera.status=error?'error':'off';camera.message=message;},
+    document:{querySelectorAll:()=>[],querySelector:()=>null,addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}},
+    window:{addEventListener(){},setInterval(){},dispatchEvent(){}},Event:class {},
+  });
+  vm.runInContext(`${source}\npaint=()=>{};paintTimer=()=>{};globalThis.saved=0;authServices={auth:{currentUser:{getIdToken:async()=>{}}}};globalThis.preview=()=>previewSession;globalThis.connect=()=>{call=()=>async()=>{saved++;return {data:{}};};resolveDataReady();};globalThis.failConnection=()=>resolveDataReady();`,context);
+  return {context,camera,start:()=>Promise.all(clicks.map(click=>click({target:{closest:selector=>selector==='[data-study-action]'?button:null}})))};
+}
+
+test('camera start waits for restored login and delayed storage before creating an account session',async()=>{
+  let resolveAuth;
+  const t=cameraStartup(new Promise(resolve=>{resolveAuth=resolve;}));
+  const pending=t.start();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.context.preview(),null);assert.equal(t.context.saved,0);
+  t.context.user={uid:'owner',emailVerified:true};resolveAuth(true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.context.preview(),null);assert.equal(t.context.saved,0);
+  t.context.connect();await pending;
+  assert.equal(t.context.saved,1);assert.equal(t.context.preview(),null);
+});
+
+for(const failure of ['auth','storage'])test(`failed ${failure} initialization never silently starts a camera preview`,async()=>{
+  const t=cameraStartup(Promise.resolve(failure==='auth'?null:true));
+  t.context.user={uid:'owner',emailVerified:true};
+  t.context.failConnection();await t.start();
+  assert.equal(t.context.preview(),null);assert.equal(t.context.saved,0);
+  assert.equal(t.camera.status,'error');assert.match(t.camera.message,/저장 서비스에 연결하지 못했습니다/);
+});
+
+for(const user of [null,{uid:'owner',emailVerified:false}])test(`resolved ${user?'unverified member':'guest'} can still use camera preview`,async()=>{
+  const t=cameraStartup(Promise.resolve(true));t.context.user=user;
+  await t.start();
+  assert.ok(t.context.preview());assert.equal(t.context.saved,0);
 });
 
 test('Focus Time shows saved currency independently of the active timer and total study time', async () => {
