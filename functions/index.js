@@ -5,6 +5,8 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { checkpointCamera, WORD_LEASE_MS, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
+import {changeSocial, socialSnapshot} from './social-service.js';
+import {dailyReport} from './report-service.js';
 import {finishSession as finishSessionRecord, expireUserSessions} from './session-lifecycle.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 export { startWordStudy, syncWordStudy } from './word-study.js';
@@ -19,6 +21,10 @@ function userId(request, verified = false) {
   if (verified && request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', '이메일을 인증해 주세요.');
   return request.auth.uid;
 }
+
+export const getDailyReport = onCall(options, request => dailyReport(db,userId(request)));
+export const updateStudySocial = onCall(options, request => changeSocial(db,userId(request,true),request.data?.action,request.data));
+export const getStudySocial = onCall(options, request => socialSnapshot(db,userId(request,true),{revision:request.data?.revision,includeLists:request.data?.includeLists===true}));
 
 export const ensureProfile = onCall(options, async (request) => {
   const uid = userId(request);

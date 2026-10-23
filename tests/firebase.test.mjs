@@ -16,6 +16,8 @@ import { chatWithStudy, getAiUsage, getSchoolOverview, searchSchools, saveSchool
 import { schoolAgent } from '../functions/school-agent.js';
 import { cachedBriefing } from '../functions/briefing-cache.js';
 import { createDailyNeis } from '../functions/neis-cache.js';
+import {getDailyReport,getStudySocial,updateStudySocial} from '../functions/index.js';
+import {studyDate} from '../functions/report-math.js';
 
 const projectId = 'demo-study';
 function mockProvider(context, generate) {
@@ -547,6 +549,91 @@ test('NEIS daily cache survives function instance changes and remains server-onl
   const client=environment.authenticatedContext('alice').firestore();
   await assertFails(getDoc(doc(client,'neisDailyCache',rows.docs[0].id)));
   await assertFails(setDoc(doc(client,'neisDailyCache',rows.docs[0].id),{rows:[]}));
+});
+
+const socialAuth=uid=>({uid,token:{email_verified:true}});
+const social=(uid,action,data={})=>updateStudySocial.run({auth:socialAuth(uid),data:{action,...data}});
+const snapshot=(uid,data={})=>getStudySocial.run({auth:socialAuth(uid),data:{includeLists:true,...data}});
+async function socialUser(uid) {await ensureProfile.run({auth:socialAuth(uid),data:{displayName:uid.slice(0,20)}});return social(uid,'code');}
+
+test('social callables require authentication and verified email; private social data stays server-only',async()=>{
+  for(const callable of [getDailyReport,getStudySocial,updateStudySocial])await assert.rejects(()=>callable.run({data:{}}),error=>error.code==='unauthenticated');
+  await assert.rejects(()=>getStudySocial.run({auth:{uid:'unverified',token:{}},data:{}}),error=>error.code==='failed-precondition');
+  const client=environment.authenticatedContext('alice').firestore();
+  for(const path of ['friendCodes/1234567890','studyRooms/test-room','users/alice/friends/bob','users/alice/friendRequests/bob']){
+    await assertFails(getDoc(doc(client,path)));await assertFails(setDoc(doc(client,path),{uid:'alice'}));
+  }
+});
+
+test('friend codes support request, cancel, reject, accept, duplicate protection and symmetric removal',async()=>{
+  const a='social-alice',b='social-bob';
+  const [ac,bc]=await Promise.all([socialUser(a),socialUser(b)]);
+  assert.match(ac.code,/^[A-F0-9]{10}$/);assert.equal((await social(a,'code')).code,ac.code);
+  await assert.rejects(()=>social(a,'request',{code:ac.code}),error=>error.code==='invalid-argument');
+  await social(a,'request',{code:bc.code.toLowerCase()});
+  assert.equal((await snapshot(b)).friendRequests[0].uid,a);
+  await assert.rejects(()=>social(a,'request',{code:bc.code}),error=>error.code==='already-exists');
+  await social(a,'cancel',{uid:b});assert.equal((await snapshot(b)).friendRequests.length,0);
+  await social(a,'request',{code:bc.code});await social(b,'reject',{uid:a});assert.equal((await snapshot(a)).sentRequests.length,0);
+  await social(a,'request',{code:bc.code});await social(b,'accept',{uid:a});
+  assert.equal((await snapshot(a)).friends[0].uid,b);assert.equal((await snapshot(b)).friends[0].uid,a);
+  await assert.rejects(()=>social(b,'accept',{uid:a}),error=>error.code==='already-exists');
+  await social(a,'remove',{uid:b});assert.equal((await snapshot(b)).friends.length,0);
+});
+
+test('rooms require friend invitations, allow multiple guests and permanently close when host leaves',async()=>{
+  const host='room-host',guest='room-guest',outsider='room-outsider';
+  const [,guestCode]=await Promise.all([socialUser(host),socialUser(guest),socialUser(outsider)]);
+  await social(host,'request',{code:guestCode.code});await social(guest,'accept',{uid:host});
+  const {roomId}=await social(host,'createRoom',{title:'함께 공부'});
+  await assert.rejects(()=>social(outsider,'join',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(host,'invite',{roomId,uids:[outsider]}),error=>error.code==='permission-denied');
+  await social(host,'invite',{roomId,uids:[guest]});assert.equal((await snapshot(guest)).roomInvites[0].roomId,roomId);
+  await social(guest,'join',{roomId});
+  assert.equal((await snapshot(host)).room.memberIds.length,2);
+  await assert.rejects(()=>social(guest,'close',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(guest,'createRoom',{title:'두 번째 방'}),error=>error.code==='already-exists');
+  await social(host,'leave',{roomId});assert.equal((await snapshot(guest)).room,null);
+  await assert.rejects(()=>social(guest,'join',{roomId}),error=>error.code==='failed-precondition');
+  assert.equal((await getFirestore('study-data').doc(`users/${guest}`).get()).data().activeRoomId,null);
+});
+
+test('room capacity serializes simultaneous joins and expired invitations cannot enter',async()=>{
+  const db=getFirestore('study-data'),host='capacity-host';await socialUser(host);
+  const guests=Array.from({length:12},(_,i)=>`capacity-guest-${i}`);
+  await Promise.all(guests.map(async uid=>{await socialUser(uid);await db.doc(`users/${host}/friends/${uid}`).set({uid,displayName:uid});}));
+  const {roomId}=await social(host,'createRoom',{title:'정원 검사'});
+  await social(host,'invite',{roomId,uids:guests.slice(0,11)});await social(host,'invite',{roomId,uids:guests.slice(11)});
+  for(const uid of guests.slice(0,10))await social(uid,'join',{roomId});
+  const results=await Promise.allSettled(guests.slice(10).map(uid=>social(uid,'join',{roomId})));
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
+  assert.equal(results.find(row=>row.status==='rejected').reason.code,'resource-exhausted');
+  assert.equal((await snapshot(host)).room.memberIds.length,12);
+  const waiting=guests.slice(10)[results.findIndex(row=>row.status==='rejected')];
+  await db.doc(`users/${waiting}/roomInvites/${roomId}`).update({expiresAtMs:Date.now()-1});
+  await assert.rejects(()=>social(waiting,'join',{roomId}),error=>error.code==='permission-denied');
+  await db.doc(`studyRooms/${roomId}`).update({expiresAtMs:Date.now()-1});assert.equal((await snapshot(host)).room,null);
+});
+
+test('room snapshot derives status and seconds from server session, not submitted values',async()=>{
+  const db=getFirestore('study-data'),uid='room-presence';await socialUser(uid);
+  const {roomId}=await social(uid,'createRoom',{title:'실제 기록'}),now=Date.now();
+  const ref=db.doc(`users/${uid}/sessions/room-server-session-123`);
+  await ref.set({uid,status:'active',subjectId:'other',cameraMode:true,startedAt:Timestamp.fromMillis(now-60000),presenceUntilMs:now+60000,accumulatedSeconds:15,activeSinceMs:now-2000,leaseUntilMs:now+10000});
+  await db.doc(`users/${uid}`).update({activeSessionId:ref.id});
+  const result=await snapshot(uid,{seconds:99999,status:'studying'}),member=result.room.members[uid];
+  assert.equal(member.status,'studying');assert.ok(member.seconds>=17&&member.seconds<25);
+  await ref.update({activeSinceMs:null});assert.equal((await snapshot(uid)).room.members[uid].status,'resting');
+  await social(uid,'close',{roomId});
+});
+
+test('daily report isolates users and includes cross-midnight records without inventing hourly camera history',async()=>{
+  const db=getFirestore('study-data'),uid='daily-report-user';await socialUser(uid);
+  const date=studyDate(),start=Date.parse(`${date}T00:00:00+09:00`);
+  await db.doc(`users/${uid}/sessions/report-cross-midnight`).set({uid,status:'finished',subjectId:'math',cameraMode:true,startedAt:Timestamp.fromMillis(start-600000),endedAt:Timestamp.fromMillis(start+600000),segments:[{date,seconds:300}]});
+  await db.doc(`users/${uid}/sessions/report-active`).set({uid,status:'active',subjectId:'math',startedAt:Timestamp.fromMillis(start+600000)});
+  const result=await getDailyReport.run({auth:socialAuth(uid),data:{uid:'alice',date:'2020-01-01'}});
+  assert.equal(result.date,date);assert.equal(result.totalSeconds,300);assert.equal(result.unallocatedSeconds,300);assert.equal(result.sessionCount,1);assert.equal(result.hasActiveSession,true);assert.equal(result.days.length,7);
 });
 
 test('email registration/login/logout and Google credentials use Auth without creating DB profiles', async () => {

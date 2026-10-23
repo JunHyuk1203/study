@@ -1,0 +1,83 @@
+.social-space { min-width:0; }
+.social-space>.section-title { margin-bottom:20px; }
+.social-button { border:1px solid var(--border);border-radius:10px;padding:8px 12px;background:var(--sage);color:var(--green);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap; }
+.social-button:disabled { opacity:.5;cursor:wait; }
+.social-danger { color:#944b43;background:#f4e7e2; }
+.friend-code-row { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0; }
+[data-friend-code] { font:700 20px/1.6 ui-monospace,monospace;letter-spacing:2px;flex:1 1 100%;overflow-wrap:anywhere; }
+.social-inline-form { display:flex;align-items:flex-end;gap:12px;margin-top:16px; }
+.social-inline-form .form-field { flex:1;min-width:0;margin:0; }
+.social-inline-form .primary-button { flex:0 0 auto;width:auto;padding:10px 16px;margin:0;min-height:45px; }
+.social-person { display:flex;align-items:center;gap:12px;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border); }
+.social-person:last-child { border-bottom:0; }
+.social-person-copy { min-width:0;overflow-wrap:anywhere; }
+.social-person-copy strong { font-size:13px; }
+.social-actions { display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0; }
+.social-sent { margin-top:16px;font-size:12px; }
+.social-sent summary,.report-hour-details summary { cursor:pointer;color:var(--green); }
+.room-heading { display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:20px; }
+.room-peers { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0; }
+.room-peer { display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px 10px;border:1px solid var(--border);border-radius:16px;background:#f5f4ed;text-align:center;min-width:0; }
+.room-peer.is-studying { background:#edf3e7;border-color:#a9bb99; }
+.room-peer strong { max-width:100%;overflow-wrap:anywhere;font-size:12px; }
+.room-avatar { width:42px;height:42px;display:grid;place-items:center;border-radius:50%;background:var(--paper);font-size:24px; }
+.room-peer-status { color:var(--green);font-size:11px; }
+.room-peer-time { font-variant-numeric:tabular-nums;font-size:14px;font-weight:700; }
+.room-invite-form { margin-top:24px;padding-top:18px;border-top:1px solid var(--border); }
+.room-invite-form h4 { margin:0 0 10px; }
+.room-invite-choices { max-height:240px;overflow-y:auto; }
+.room-invite-choice { display:flex;align-items:center;gap:8px;padding:10px 0;font-size:13px;cursor:pointer; }
+.room-invite-choice input { accent-color:var(--green);width:18px;height:18px; }
+.room-invite-choice .tiny { margin-left:auto; }
+.room-focus-peers { grid-column:1/-1;margin-top:24px;border-top:1px solid var(--border);padding-top:16px; }
+.room-peers-compact { grid-template-columns:repeat(auto-fit,minmax(100px,1fr)); }
+.room-peers-compact .room-peer { padding:12px 6px; }
+.room-dock { position:fixed;bottom:calc(88px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:150;max-width:calc(100vw - 32px);border:1px solid #afc19d;border-radius:30px;padding:10px 18px;background:#edf3e7;box-shadow:0 4px 20px #263b221c;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.report-date { margin:16px 0;color:var(--muted);font-size:11px; }
+.report-metrics { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0; }
+.report-metric { padding:14px 12px;border-radius:12px;background:#f0f3e9;min-width:0; }
+.report-metric dt { font-size:11px;color:var(--muted); }
+.report-metric dd { margin:5px 0 0;font-size:19px;font-weight:700;letter-spacing:-.5px; }
+.report-section { margin-top:26px;padding-top:22px;border-top:1px solid var(--border);min-width:0; }
+.report-section>h3 { margin-bottom:6px; }
+.report-note { padding:12px 14px;border-radius:10px;background:#f2eddf;font-size:12px;margin:16px 0;line-height:1.7; }
+.report-breakdown { display:grid;gap:14px;margin-top:16px; }
+.report-row-heading { display:flex;justify-content:space-between;gap:12px;font-size:12px; }
+.report-row-heading>span:first-child { overflow-wrap:anywhere; }
+.report-row-heading>span:last-child { white-space:nowrap; }
+.report-horizontal-track { height:9px;background:#edf0e6;border-radius:6px;margin-top:7px;overflow:hidden; }
+.report-horizontal-track>span { display:block;height:100%;border-radius:6px; }
+.report-bars { display:flex;align-items:stretch;gap:6px;height:165px;margin:20px 0 6px;padding-top:4px; }
+.report-column { display:flex;flex:1;min-width:0;flex-direction:column;align-items:center;gap:5px; }
+.report-bar-track { flex:1;min-height:0;position:relative;width:100%;max-width:44px;background:#f0f2e9;border-radius:6px 6px 0 0; }
+.report-bar { position:absolute;bottom:0;width:100%;min-height:0;border-radius:6px 6px 0 0; }
+.report-axis { display:block;font-size:10px;min-height:16px;white-space:nowrap; }
+.report-bar-value { font-size:9px;text-align:center;line-height:1.3;min-height:24px;white-space:pre-line; }
+.report-hours { height:135px;gap:3px; }
+.report-hours .report-bar { background:var(--green)!important; }
+.report-hours .report-bar-track { border-radius:3px 3px 0 0; }
+.report-hour-details { margin-top:14px;font-size:12px; }
+.report-hour-values { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px; }
+.report-hour-values .report-metric { padding:8px; }
+.report-hour-values dd { font-size:12px; }
+.report-session-list { list-style:none;padding:0;margin:16px 0 0;display:grid;gap:12px;max-height:420px;overflow-y:auto; }
+.report-session-list li { padding:12px;border-left:3px solid #91a67c;background:#f5f5ee;border-radius:0 10px 10px 0; }
+.report-insight { padding:10px 0;font-size:13px;line-height:1.8; }
+.daily-report-card>[data-daily-report]>.tiny { margin-top:22px; }
+@media(min-width:768px) {
+  main[aria-label="플레이"]>.social-space { grid-column:1/-1; }
+  [data-social-content] { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start; }
+  [data-social-content]>.card { margin:0; }
+  [data-social-content]>.card:has([data-room-panel]) { grid-column:1/-1; }
+  .room-peers { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .report-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .report-bars { gap:12px; }
+  .report-hours { gap:6px; }
+  .report-bar-value { font-size:11px; }
+  .room-dock { bottom:24px; }
+}
+@media(max-width:359px) {
+  .social-inline-form { flex-direction:column;align-items:stretch; }
+  .social-inline-form .primary-button { width:100%; }
+  .social-person { flex-wrap:wrap; }
+}

@@ -1,3 +1,4 @@
+import {hourlyInterval, mergeHours} from './report-math.js';
 const DAY_MS = 86400000;
 const KST_MS = 9 * 3600000;
 export const MAX_SESSION_MS = 12 * 3600000;
@@ -9,8 +10,10 @@ export function checkpointCamera(session, nowMs, tracking, leaseMs = CAMERA_LEAS
   const now = Math.floor(nowMs / 1000) * 1000;
   const deadline = session.startedAtMs + MAX_SESSION_MS;
   const buckets = new Map((session.segments || []).map(segment => [segment.date, { ...segment }]));
+  let hourlySeconds = session.hourlySeconds || {};
   if (session.activeSinceMs != null) {
     const end = Math.min(now, session.leaseUntilMs, deadline);
+    if (end > session.activeSinceMs) hourlySeconds = mergeHours(hourlySeconds, hourlyInterval(session.activeSinceMs, end));
     if (end > session.activeSinceMs) for (const segment of splitStudyInterval(session.activeSinceMs, end)) {
       const previous = buckets.get(segment.date);
       buckets.set(segment.date, { ...segment, seconds: (previous?.seconds || 0) + segment.seconds });
@@ -18,7 +21,7 @@ export function checkpointCamera(session, nowMs, tracking, leaseMs = CAMERA_LEAS
   }
   const active = tracking && now < deadline;
   const segments = [...buckets.values()];
-  return { segments, accumulatedSeconds: segments.reduce((sum, row) => sum + row.seconds, 0), activeSinceMs: active ? now : null, leaseUntilMs: active ? Math.min(now + leaseMs, deadline) : null, cameraStatus: active ? 'tracking' : 'paused' };
+  return { segments, hourlySeconds, accumulatedSeconds: segments.reduce((sum, row) => sum + row.seconds, 0), activeSinceMs: active ? now : null, leaseUntilMs: active ? Math.min(now + leaseMs, deadline) : null, cameraStatus: active ? 'tracking' : 'paused' };
 }
 
 export function validDisplayName(value) {
