@@ -3,7 +3,7 @@ import { firebaseConfig } from './firebase-config.js';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache } from './client-cache.js?v=20261022-11';
 import { showToast } from './notifications.js?v=20261022-18';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261023-5';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261023-6';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }

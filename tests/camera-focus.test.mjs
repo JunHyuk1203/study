@@ -126,6 +126,19 @@ test('moderate sustained movement releases idle sooner, while a brief phone appe
   assert.equal(tracker.update({...moving,phoneUse:true},26750).tracking,true);
   assert.equal(tracker.update(moving,27000).tracking,true);
 });
+test('small sustained head and gaze movements release idle without requiring shoulders', () => {
+  for (const changes of [[[0,.04]], [[4,.2]], [[6,.15]], [[2,.2],[3,.2]], [[7,.15],[8,.15]]]) {
+    const tracker=createFocusTracker();
+    advance(tracker,{...healthy,body:false},0,22500);
+    const activityVector=[...healthy.activityVector];
+    for(const [index,delta] of changes) activityVector[index]+=delta;
+    const moving={...healthy,body:false,activityVector};
+    advance(tracker,moving,22700,24500,200);
+    assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<1000,JSON.stringify(changes));
+    assert.equal(advance(tracker,moving,24700,26700,200).tracking,true);
+  }
+});
+
 test('phone confirmation takes priority when the phone covers the face', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const covered={...healthy,face:false,body:false,phoneUse:true};
