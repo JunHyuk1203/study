@@ -317,7 +317,7 @@ html,body{height:100%;overflow:hidden;overscroll-behavior:none}
   main[aria-label="학습"]>.study-cam>.subject-picker{margin-bottom:calc(32 * var(--gui))}
   main[aria-label="학습"]>.card{grid-column:1/-1}
   main[aria-label="학습"]>.two-columns .card{margin-bottom:0}
-  main[aria-label="플레이"]>.character-card{grid-row:span 2;height:100%;min-height:calc(340 * var(--gui))}
+  main[aria-label="플레이"]>.character-card{grid-column:1/-1;height:auto;min-height:calc(340 * var(--gui))}
   main[aria-label="플레이"]>.two-columns .card{margin-bottom:0}
   main[aria-label="플레이"]>.timer-panel,main[aria-label="플레이"]>.demo-note{grid-column:1/-1}
   main[aria-label="플레이"]>.demo-note{margin-top:0;font-size:calc(11 * var(--gui));letter-spacing:0}

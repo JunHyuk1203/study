@@ -26,7 +26,8 @@ function peerCards(room,compact=false) {
     const card=el('article',`room-peer${studying?' is-studying':''}`),avatar=el('div','room-avatar',studying?'◷':'☕');avatar.setAttribute('aria-hidden','true');
     const timer=el('span','room-peer-time',roomClock(memberTime(member,roomNow())));timer.dataset.roomMemberTime=id;
     const status=el('span','room-peer-status',away?'연결 확인 중':studying?'공부 중':'휴식 중');status.dataset.roomMemberStatus=id;
-    card.append(avatar,el('strong','',`${member.displayName}${id===getAuthUser()?.uid?' (나)':''}${id===room.hostUid?' · 방장':''}`),status,el('span','tiny muted',member.subjectName||'시작 전'),timer);
+    card.append(avatar,el('strong','',`${member.displayName}${id===getAuthUser()?.uid?' (나)':''}${id===room.hostUid?' · 방장':''}`),status,el('span','tiny muted',member.subjectName||'시작 전'));
+    if(!compact||id!==getAuthUser()?.uid)card.append(timer);
     grid.append(card);
   }
   return grid;
