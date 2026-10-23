@@ -1,7 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261022-9';
-import { createFocusTracker } from './camera-focus.js?v=20261023-2';
-import { paintCameraDebug } from './camera-debug.js?v=20261023-1';
-import { loadCameraInference } from './camera-inference.js?v=20261023-1';
+import { createFocusTracker } from './camera-focus.js?v=20261023-3';
+import { paintCameraDebug } from './camera-debug.js?v=20261023-2';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let reason = null;
@@ -13,7 +12,7 @@ video.playsInline = true;
 video.setAttribute('aria-hidden', 'true');
 video.className = 'cam-analysis-video';
 let avatarPose = null;
-let fallbackDetector, fallbackAttempted = false, fallbackLoading = false;
+let fallbackAttempted = false;
 let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
 let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1;
@@ -145,8 +144,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   stream?.getTracks().forEach(track => track.stop()); stream = null;
   video.srcObject = null;
   video.remove(); avatarPose = null;
-  fallbackDetector?.close(); fallbackDetector = null;
-  fallbackAttempted = fallbackLoading = false;
+  fallbackAttempted = false;
   focusTracker.reset(); diagnostics = null; reason = null;
   setStatus(error ? 'error' : 'off', text);
 }
@@ -157,7 +155,6 @@ function recognitionError(detail = '') {
   // Preserve the avatar; never start crediting time without successful detection.
   avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
-  fallbackDetector?.close(); fallbackDetector = null;
   console.error('Study camera initialization failed:', detail);
   setStatus('error', '인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요');
 }
@@ -170,27 +167,34 @@ function acceptResult(data) {
   avatarPose = points ? facePose({ 1: points[0], 33: points[1], 263: points[2] }) : null;
   const stale = !Number.isFinite(data.time) || now - data.time > 3000;
   const decision = focusTracker.update(stale ? null : data.signals, now);
-  diagnostics = focusTracker.getDebug();
+  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
-async function recoverRecognition(token, detail) {
-  if (token !== revision || !enabled || fallbackLoading) return;
+function startRecognitionWorker(token, light = false) {
+  const target = new Worker(new URL('./camera-worker.js?v=20261023-2', import.meta.url));
+  worker = target;
+  target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
+  target.onmessage = ({ data }) => {
+    if (token !== revision || worker !== target) return;
+    if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
+    if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
+    if (data.type === 'result') acceptResult(data);
+  };
+  loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
+  target.postMessage({ type: 'init', light });
+}
+function recoverRecognition(token, detail) {
+  if (token !== revision || !enabled) return;
   if (fallbackAttempted) { recognitionError(detail); return; }
-  fallbackAttempted = fallbackLoading = true; ready = false; inFlight = false; avatarPose = null;
+  fallbackAttempted = true; ready = false; inFlight = false; avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
   worker?.terminate(); worker = null; clearTimeout(loadingDeadline);
   console.warn('Study camera worker fallback:', detail);
-  setStatus('scanning', '호환 모드로 행동 인식을 준비하는 중…');
-  loadingDeadline = setTimeout(() => { if (token === revision) recognitionError('Fallback timed out'); }, 60000);
+  setStatus('scanning', '경량 Worker로 행동 인식을 준비하는 중…');
   try {
-    const detector = await loadCameraInference(document.createElement('canvas'));
-    if (token !== revision || !enabled || status === 'error') { detector.close(); return; }
-    fallbackDetector = detector; ready = true; lastResult = performance.now();
-    clearTimeout(loadingDeadline);
-    setStatus('scanning', '얼굴을 확인하는 중…');
+    startRecognitionWorker(token, true);
   } catch (error) { if (token === revision) recognitionError(error.message); }
-  finally { if (token === revision) fallbackLoading = false; }
 }
 async function frame(token) {
   if (!enabled || token !== revision) return;
@@ -198,20 +202,11 @@ async function frame(token) {
     lastVideoTime = video.currentTime;
     inFlight = true;
     try {
-      if (fallbackDetector) {
-        const bitmap = await createImageBitmap(video);
-        let result;
-        try {
-          if (token !== revision || !enabled) return;
-          result = await fallbackDetector.detect(bitmap, performance.now());
-        } finally { bitmap.close(); }
-        if (token !== revision || !enabled) return;
-        acceptResult(result);
-      } else {
-        const bitmap = await createImageBitmap(video);
-        if (token !== revision) { bitmap.close(); return; }
-        worker.postMessage({ type: 'frame', bitmap, time: performance.now() }, [bitmap]);
-      }
+      const target = worker;
+      const bitmap = await createImageBitmap(video);
+      if (token !== revision) { bitmap.close(); return; }
+      if (worker !== target || !ready) { bitmap.close(); inFlight = false; }
+      else target.postMessage({ type: 'frame', bitmap, time: performance.now() }, [bitmap]);
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
   if (!enabled || token !== revision) return;
@@ -235,28 +230,17 @@ export async function startCamera() {
     await video.play();
     if (token !== revision) return false;
     setStatus('scanning', '카메라 연결됨 · AI 행동 인식 준비 중…');
-    try { worker = new Worker(new URL('./camera-worker.js?v=20261023-1', import.meta.url)); }
+    try { startRecognitionWorker(token); }
     catch (error) {
-      // A blocked/unsupported Worker must still try the complete inference pipeline.
+      // Never move expensive inference onto the UI thread, even in compatibility mode.
       void recoverRecognition(token, error.message);
-    }
-    if (worker) {
-      worker.onerror = error => { error.preventDefault(); void recoverRecognition(token, error.message); };
-      worker.onmessage = ({ data }) => {
-        if (token !== revision || fallbackAttempted) return;
-        if (data.type === 'error') { void recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
-        if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
-        if (data.type !== 'result') return;
-        acceptResult(data);
-      };
-      worker.postMessage({ type: 'init' });
-      loadingDeadline = setTimeout(() => { void recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
     }
     watchdog = setInterval(() => {
       if (ready && performance.now() - lastResult > 3000) {
         focusTracker.reset(); diagnostics = null;
         setStatus('paused', '카메라 인식 응답 없음 · 일시정지');
         if (!fallbackAttempted) void recoverRecognition(token, 'Worker stopped responding');
+        else if (performance.now() - lastResult > 6000) recognitionError('Light worker stopped responding');
       }
     }, 1000);
     void frame(token);

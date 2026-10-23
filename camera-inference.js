@@ -19,14 +19,23 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     160, 158, 153, 144, 385, 387, 373, 380].every(i => finitePoint(face[i])));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
   const wrists = pose ? [15, 16].map(i => pose[i]).filter(visiblePoint) : [];
-  const boxes = objects.filter(o => o.score >= .55).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
+  const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .25 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
   const eyeMid = faceValid ? { x: (face[33].x + face[263].x) / 2, y: (face[33].y + face[263].y) / 2 } : null;
   const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(face[33], face[263])) > .65;
-  const phoneUse = boxes.some(o => o.class === 'cell phone' &&
-    (hands.some(p => nearBox(p, o.box)) || wrists.some(p => nearBox(p, o.box, .07))) &&
-    (headDown || (head && distance(head, { x: o.box[0] + o.box[2] / 2, y: o.box[1] + o.box[3] / 2 }) < .3)));
-  const studyActivity = boxes.some(o => (o.class === 'book' && headDown) ||
+  const phones = boxes.filter(o => o.class === 'cell phone').map(o => {
+    const center = { x: o.box[0] + o.box[2] / 2, y: o.box[1] + o.box[3] / 2 };
+    const touching = hands.some(p => nearBox(p, o.box, .08)) || wrists.some(p => nearBox(p, o.box, .1));
+    const raised = head ? center.y < Math.min(.75, head.y + .22) && Math.abs(center.x - head.x) < .4 :
+      center.y < .65 && center.x > .15 && center.x < .85;
+    const used = o.score >= .35 && (touching || o.score >= .6 && raised);
+    return { score: o.score, touching, raised, used };
+  });
+  const phoneUse = phones.some(o => o.used);
+  const bestPhone = phones.filter(o => o.used).sort((a,b) => b.score-a.score)[0] || phones.sort((a,b) => b.score-a.score)[0];
+  const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : bestPhone.score < .35 ? 'weak' : 'desk' } :
+    { score: 0, stage: 'not-found' };
+  const studyContext = boxes.some(o => (o.class === 'book' && headDown) ||
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
     (o.class === 'book' && hands.some(p => nearBox(p, o.box))));
   const blends = Object.fromEntries((faceResult.faceBlendshapes?.[0]?.categories || []).map(c => [c.categoryName, c.score]));
@@ -43,11 +52,40 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     (face[468].y - (face[159].y + face[145].y) / 2) / Math.max(.01, distance(face[33], face[133])),
     (face[473].y - (face[386].y + face[374].y) / 2) / Math.max(.01, distance(face[362], face[263])),
   ] : [];
-  const activityVector = faceValid && wrists.length === 2 ?
-    [head.x, head.y, ...gaze, ...wrists.flatMap(p => [p.x, p.y]), ...headDirection, ...verticalGaze] : null;
-  return { reliable: true, face: faceValid, body, eyesClosed, phoneUse, studyActivity, activityVector };
+  const activityVector = faceValid ? [head.x, head.y, ...gaze, ...headDirection, ...verticalGaze] : null;
+  const studyPoints = [pose?.[15], pose?.[16], ...(handResult.landmarks || []).map(hand => hand[8])].map(p =>
+    visiblePoint(p) ? { x: p.x, y: p.y } : null);
+  return { reliable: true, face: faceValid, body, eyesClosed, phoneUse, phoneEvidence,
+    studyActivity: false, studyContext, studyPoints, activityVector };
 }
-export async function createCameraInference(vision, cocoSsd, tf, canvas) {
+
+export function createStudyMotionTracker() {
+  let reference = null, referenceTime = null, lastMotion = -Infinity;
+  return {
+    update(context, points, now) {
+      if (!context) { reference = null; referenceTime = null; lastMotion = -Infinity; return false; }
+      if (reference) {
+        const moving = points.some((point, i) => point && reference[i] && distance(point, reference[i]) > .025);
+        if (moving) { lastMotion = now; reference = points; referenceTime = now; }
+      }
+      if (referenceTime === null || now-referenceTime > 1500) { reference = points; referenceTime = now; }
+      return now-lastMotion <= 1000;
+    },
+  };
+}
+
+export function phoneSearchRegion(poseResult, handResult) {
+  let points = (handResult.landmarks || []).flat().filter(visiblePoint);
+  if (!points.length) points = [poseResult.landmarks?.[0]?.[15], poseResult.landmarks?.[0]?.[16]].filter(visiblePoint);
+  if (!points.length) return { x: .225, y: .2, width: .55, height: .65 };
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const width = Math.min(.7, Math.max(.28, maxX - minX + .2));
+  const height = Math.min(.7, Math.max(.32, maxY - minY + .22));
+  return { x: Math.max(0, Math.min(1-width, (minX+maxX-width)/2)),
+    y: Math.max(0, Math.min(1-height, (minY+maxY-height)/2)), width, height };
+}
+export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false } = {}) {
   const resources = [];
   try {
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
@@ -65,28 +103,50 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas) {
       ...options('hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'), numHands: 2,
     });
     resources.push(hand);
-    await tf.setBackend('cpu');
+    let accelerated = false;
+    if (tf.wasm) {
+      try { accelerated = await tf.setBackend('wasm'); } catch { /* Worker-only CPU fallback. */ }
+    }
+    if (!accelerated) await tf.setBackend('cpu');
     await tf.ready();
-    const objects = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    const objects = await cocoSsd.load({ base: light ? 'lite_mobilenet_v2' : 'mobilenet_v2' });
     resources.push(objects);
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
-    let cachedObjects = [], objectTime = -Infinity;
+    let cachedObjects = [], objectTime = -Infinity, phones = [], phoneTime = -Infinity;
+    const studyMotion = createStudyMotionTracker();
     return {
       async detect(source, time) {
+        const startedAt = performance.now();
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
+        const faceResult = face.detectForVideo(source, time);
+        const poseResult = pose.detectForVideo(source, time);
+        const handResult = hand.detectForVideo(source, time);
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
         if (time - objectTime >= 800) {
           input.width = width; input.height = height;
           context.drawImage(source, 0, 0, width, height);
-          cachedObjects = await objects.detect(context.getImageData(0, 0, width, height), 12, .55);
+          cachedObjects = await objects.detect(context.getImageData(0, 0, width, height), 30, .25);
+          if (!cachedObjects.some(o => o.class === 'cell phone' && o.score >= .35)) {
+            const region = phoneSearchRegion(poseResult, handResult);
+            input.width = Math.max(1, Math.round(region.width*width)); input.height = Math.max(1, Math.round(region.height*height));
+            context.drawImage(source, region.x*width, region.y*height, region.width*width, region.height*height, 0, 0, input.width, input.height);
+            const zoomed = await objects.detect(context.getImageData(0, 0, input.width, input.height), 30, .25);
+            cachedObjects.push(...zoomed.filter(o => o.class === 'cell phone').map(o => ({...o,
+              bbox: [region.x*width + o.bbox[0]*region.width*width/input.width,
+                region.y*height + o.bbox[1]*region.height*height/input.height,
+                o.bbox[2]*region.width*width/input.width, o.bbox[3]*region.height*height/input.height]})));
+          }
+          const foundPhones = cachedObjects.filter(o => o.class === 'cell phone' && o.score >= .35);
+          if (foundPhones.length) { phones = foundPhones; phoneTime = time; }
+          else if (time-phoneTime < 1500) cachedObjects.push(...phones);
           objectTime = time;
         }
-        const faceResult = face.detectForVideo(source, time);
-        const poseResult = pose.detectForVideo(source, time);
-        const handResult = hand.detectForVideo(source, time);
         const points = faceResult.faceLandmarks[0];
-        return { type: 'result', time, signals: extractFocusSignals(faceResult, poseResult, handResult, cachedObjects, width, height),
+        const signals = extractFocusSignals(faceResult, poseResult, handResult, cachedObjects, width, height);
+        signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);
+        delete signals.studyPoints;
+        return { type: 'result', time, signals, backend: tf.getBackend(), mode: light ? 'light' : 'standard', inferenceMs: performance.now()-startedAt,
           landmarks: points ? [points[1], points[33], points[263]] : null };
       },
       close() { for (const model of resources) (model.close || model.dispose).call(model); },
@@ -95,21 +155,4 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas) {
     for (const model of resources) (model.close || model.dispose).call(model);
     throw error;
   }
-}
-let scripts;
-export async function loadCameraInference(canvas) {
-  const vision = await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`);
-  scripts ??= (async () => {
-    for (const src of ['https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js',
-      'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js']) {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = src; script.crossOrigin = 'anonymous'; script.onload = resolve;
-        script.onerror = () => { script.remove(); reject(new Error(`Cannot load ${src}`)); };
-        document.head.append(script);
-      });
-    }
-  })().catch(error => { scripts = null; throw error; });
-  await scripts;
-  return createCameraInference(vision, globalThis.cocoSsd, globalThis.tf, canvas);
 }
