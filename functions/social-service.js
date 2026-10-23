@@ -1,4 +1,4 @@
-import {randomBytes} from 'node:crypto';
+import {createSocialCode,normalizeSocialCode,isShortSocialCode} from './social-code.js';
 import {FieldValue} from 'firebase-admin/firestore';
 import {HttpsError} from 'firebase-functions/v2/https';
 import {schoolRoomInfo} from './integrations-domain.js';
@@ -19,16 +19,22 @@ export async function changeSocial(db,uid,action,data={}) {
     const ref=userRef(db,uid),profile=(await tx.get(ref)).data(),now=Date.now();
     if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
     if(action==='code') {
-      if(profile.friendCode)return {code:profile.friendCode};
-      const code=randomBytes(5).toString('hex').toUpperCase(),codeRef=db.doc(`friendCodes/${code}`);
-      if((await tx.get(codeRef)).exists)fail('aborted','코드를 다시 생성해 주세요.');
+      if(isShortSocialCode(profile.friendCode))return {code:profile.friendCode};
+      let code,codeRef;
+      for(let attempt=0;attempt<8;attempt++) {
+        code=createSocialCode();codeRef=db.doc(`friendCodes/${code}`);
+        if(!(await tx.get(codeRef)).exists)break;
+        codeRef=null;
+      }
+      if(!codeRef)fail('aborted','코드를 다시 생성해 주세요.');
+      if(profile.friendCode)tx.delete(db.doc(`friendCodes/${profile.friendCode}`));
       tx.create(codeRef,{uid});tx.update(ref,{friendCode:code,socialRevision:FieldValue.increment(1)});return {code};
     }
     if(['request','accept','reject','cancel','remove'].includes(action)) {
       let other=data.uid;
       if(action==='request') {
-        const code=String(data.code||'').trim().toUpperCase();
-        if(!/^[A-F0-9]{10}$/.test(code))fail('invalid-argument','친구 코드 10자리를 확인해 주세요.');
+        const code=normalizeSocialCode(data.code);
+        if(!isShortSocialCode(code))fail('invalid-argument','친구 코드 6자리를 확인해 주세요.');
         other=(await tx.get(db.doc(`friendCodes/${code}`))).data()?.uid;
         if(!other)fail('not-found','친구 코드를 찾을 수 없습니다.');
       }
@@ -72,7 +78,7 @@ export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,list
   if(listScope!=null&&!['requests','invites'].includes(listScope))fail('invalid-argument','새로고침할 목록이 올바르지 않습니다.');
   const ref=userRef(db,uid),profile=(await ref.get()).data();
   if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
-  const result={revision:profile.socialRevision||0,code:profile.friendCode||null,room:null,serverNowMs:Date.now()};
+  const result={revision:profile.socialRevision||0,code:isShortSocialCode(profile.friendCode)?profile.friendCode:null,room:null,serverNowMs:Date.now()};
   result.schoolRoom=schoolRoomInfo(profile.school);
   if(includeSchoolRooms)result.schoolRooms=await roomDirectory(db,uid,profile);
   // Listeners are unnecessary: poll only while the Play page or a room is open,

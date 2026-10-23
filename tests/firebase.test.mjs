@@ -567,6 +567,9 @@ test('school public rooms share a permanent room only with the stored school and
   const joined=await Promise.all([social(a,'joinSchool'),social(b,'joinSchool')]);
   assert.equal(joined[0].roomId,joined[1].roomId);
   const roomId=joined[0].roomId,room=(await snapshot(a)).room;
+  await db.doc(`studyRooms/${roomId}`).update({allowOtherGrades:true});
+  assert.ok(!(await snapshot(c,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
+  assert.ok(!(await snapshot(d,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
   assert.equal(room.type,'school');assert.equal(room.hostUid,null);assert.equal(room.memberIds.length,2);
   await assert.rejects(()=>social(c,'joinSchool',{roomId}),error=>error.code==='permission-denied');
   await assert.rejects(()=>social(d,'joinSchool',{roomId}),error=>error.code==='permission-denied');
@@ -608,6 +611,7 @@ test('unified rooms support private code previews, code rotation and public/priv
   for(const uid of [host,guest,other]){await socialUser(uid);await db.doc(`users/${uid}`).update({school:{...school,grade:uid===other?'1':'2'}});}
   const {roomId}=await social(host,'createRoom',{title:'비공개 공부',visibility:'private'});
   const code=await social(host,'roomCode',{roomId});
+  assert.match(code.code,/^[A-HJ-NP-Z2-9]{6}$/);
   const preview=await social(guest,'previewCode',{code:code.code});
   assert.equal(preview.preview.memberCount,1);assert.equal(preview.preview.members[0].isHost,true);
   assert.equal((await db.doc(`users/${guest}`).get()).data().activeRoomId??null,null);
@@ -617,7 +621,8 @@ test('unified rooms support private code previews, code rotation and public/priv
   const rotated=await social(host,'roomCode',{roomId});
   assert.equal((await db.doc(`roomCodes/${code.code}`).get()).exists,false);
   await assert.rejects(()=>social(other,'joinCode',{code:code.code}),error=>error.code==='not-found');
-  await social(other,'joinCode',{code:rotated.code});
+  await db.doc(`users/${other}`).update({school:{...school,schoolCode:'9010999',grade:'1'}});
+  await social(other,'joinCode',{code:` ${rotated.code.slice(0,3).toLowerCase()}-${rotated.code.slice(3).toLowerCase()} `});
   await assert.rejects(()=>social(host,'updateRoom',{roomId,title:'공개 공부',visibility:'public'}),error=>error.code==='failed-precondition');
   await social(other,'leave',{roomId});
   await social(host,'updateRoom',{roomId,title:'공개 공부',visibility:'public'});
@@ -627,6 +632,47 @@ test('unified rooms support private code previews, code rotation and public/priv
   await social(host,'updateRoom',{roomId,title:'다시 비공개',visibility:'private'});
   assert.ok(!(await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.some(room=>room.id===roomId));
   await social(host,'leave',{roomId});assert.equal((await snapshot(guest)).room.hostUid,host);
+});
+
+test('custom public rooms optionally allow other grades in the same school across listing, joining and presence',async()=>{
+  const db=getFirestore('study-data'),host='grades-host',guest='grades-guest',outsider='grades-outsider';
+  const school={name:'학년고등학교',kind:'고등학교',officeCode:'S10',schoolCode:'9010888',grade:'2',className:'1'};
+  for(const uid of [host,guest,outsider]){await socialUser(uid);await db.doc(`users/${uid}`).update({school:{...school,grade:uid===host?'2':'1',schoolCode:uid===outsider?'9010889':school.schoolCode}});}
+  const {roomId}=await social(host,'createRoom',{title:'다른 학년도 함께',visibility:'public',allowOtherGrades:true});
+  assert.equal((await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.find(row=>row.id===roomId).allowOtherGrades,true);
+  assert.ok(!(await snapshot(outsider,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
+  await assert.rejects(()=>social(outsider,'join',{roomId}),error=>error.code==='permission-denied');
+  await social(guest,'join',{roomId});assert.equal((await snapshot(guest)).room.id,roomId);
+  await assert.rejects(()=>social(host,'updateRoom',{roomId,title:'같은 학년만',visibility:'public',allowOtherGrades:false}),error=>error.code==='failed-precondition');
+  await social(guest,'leave',{roomId});
+  await social(host,'updateRoom',{roomId,title:'같은 학년만',visibility:'public',allowOtherGrades:false});
+  assert.ok(!(await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
+  await assert.rejects(()=>social(guest,'previewRoom',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(guest,'join',{roomId}),error=>error.code==='permission-denied');
+  await social(host,'updateRoom',{roomId,title:'다시 모든 학년',visibility:'public',allowOtherGrades:true});
+  await social(guest,'join',{roomId});
+  await db.doc(`users/${guest}`).update({school:{...school,grade:'3'}});
+  assert.equal((await snapshot(guest)).room.id,roomId);
+  await db.doc(`users/${guest}`).update({school:{...school,schoolCode:'9010889'}});
+  assert.equal((await snapshot(guest)).room,null);
+});
+
+test('long codes must be reissued and old friend mappings are removed',async()=>{
+  const db=getFirestore('study-data'),host='short-host',guest='short-guest';
+  await socialUser(host);await socialUser(guest);
+  const oldFriendCode='ABCDEF0123';
+  await db.doc(`users/${host}`).update({friendCode:oldFriendCode});await db.doc(`friendCodes/${oldFriendCode}`).set({uid:host});
+  assert.equal((await snapshot(host)).code,null);
+  await assert.rejects(()=>social(guest,'request',{code:oldFriendCode}),error=>error.code==='invalid-argument');
+  const renewed=await social(host,'code');assert.match(renewed.code,/^[A-HJ-NP-Z2-9]{6}$/);
+  assert.equal((await db.doc(`friendCodes/${oldFriendCode}`).get()).exists,false);
+  await social(guest,'request',{code:renewed.code});
+  const {roomId}=await social(host,'createRoom',{title:'새 코드 방'}),oldRoomCode='ABCDEF012345';
+  await db.doc(`studyRooms/${roomId}`).update({joinCode:oldRoomCode});await db.doc(`roomCodes/${oldRoomCode}`).set({roomId});
+  await assert.rejects(()=>social(guest,'previewCode',{code:oldRoomCode}),error=>error.code==='invalid-argument');
+  const code=await social(host,'roomCode',{roomId});assert.match(code.code,/^[A-HJ-NP-Z2-9]{6}$/);
+  assert.equal((await db.doc(`roomCodes/${oldRoomCode}`).get()).exists,false);
+  await social(guest,'joinCode',{code:code.code});
 });
 
 test('room cleanup deletes codes, invitations and all memberships after three hours without service visits',async()=>{
@@ -694,9 +740,9 @@ test('social callables require authentication and verified email; private social
 test('friend codes support request, cancel, reject, accept, duplicate protection and symmetric removal',async()=>{
   const a='social-alice',b='social-bob';
   const [ac,bc]=await Promise.all([socialUser(a),socialUser(b)]);
-  assert.match(ac.code,/^[A-F0-9]{10}$/);assert.equal((await social(a,'code')).code,ac.code);
+  assert.match(ac.code,/^[A-HJ-NP-Z2-9]{6}$/);assert.equal((await social(a,'code')).code,ac.code);
   await assert.rejects(()=>social(a,'request',{code:ac.code}),error=>error.code==='invalid-argument');
-  await social(a,'request',{code:bc.code.toLowerCase()});
+  await social(a,'request',{code:` ${bc.code.slice(0,3).toLowerCase()}-${bc.code.slice(3).toLowerCase()} `});
   assert.equal((await snapshot(b)).friendRequests[0].uid,a);
   await assert.rejects(()=>social(a,'request',{code:bc.code}),error=>error.code==='already-exists');
   await social(a,'cancel',{uid:b});assert.equal((await snapshot(b)).friendRequests.length,0);
@@ -710,6 +756,9 @@ test('friend codes support request, cancel, reject, accept, duplicate protection
 test('rooms require invitations and retain the original host when the host leaves',async()=>{
   const host='room-host',guest='room-guest',outsider='room-outsider';
   const [,guestCode]=await Promise.all([socialUser(host),socialUser(guest),socialUser(outsider)]);
+  const school={name:'초대고등학교',kind:'고등학교',officeCode:'S10',schoolCode:'9010777',grade:'2',className:'1'};
+  await getFirestore('study-data').doc(`users/${host}`).update({school});
+  await getFirestore('study-data').doc(`users/${guest}`).update({school:{...school,schoolCode:'9010778',grade:'1'}});
   await social(host,'request',{code:guestCode.code});await social(guest,'accept',{uid:host});
   const {roomId}=await social(host,'createRoom',{title:'함께 공부'});
   await assert.rejects(()=>social(outsider,'join',{roomId}),error=>error.code==='permission-denied');

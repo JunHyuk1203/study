@@ -29,6 +29,17 @@ test('unified room previews show counts, collapsible people and the three presen
   vm.runInContext("expandedRooms.add('preview-room')",context);assert.equal(vm.runInContext('previewCard(row)',context).children[1].open,true);
 });
 
+test('room browser shows participation and creation only until joined, then restores them after leaving',()=>{
+  const {context}=setup(socialSource),current={hidden:true},join={hidden:false},create={hidden:false};
+  context.document.querySelectorAll=selector=>selector==='[data-room-current]'?[current]:selector==='[data-room-browse]'?[join,create]:[];
+  vm.runInContext('paintSchoolEntry()',context);
+  assert.equal(current.hidden,true);assert.equal(join.hidden,false);assert.equal(create.hidden,false);
+  vm.runInContext("state.room={id:'joined-room'};paintSchoolEntry()",context);
+  assert.equal(current.hidden,false);assert.equal(join.hidden,true);assert.equal(create.hidden,true);
+  vm.runInContext('state.room=null;paintSchoolEntry()',context);
+  assert.equal(current.hidden,true);assert.equal(join.hidden,false);assert.equal(create.hidden,false);
+});
+
 test('private code lookup previews a room without joining it',async()=>{
   const calls=[],preview={id:'private',title:'비공개',memberCount:0,members:[]};
   const {context}=setup(socialSource,{call:async(name,data)=>{calls.push(data);return {code:'ABCDEF123456',preview};}});

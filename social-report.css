@@ -23,6 +23,12 @@
 .room-preview-host { font-weight:700;color:var(--green); }
 .room-code-value { font-family:monospace;font-size:16px;letter-spacing:1px;user-select:all;overflow-wrap:anywhere; }
 .room-code-tools,[data-room-settings] { margin-top:18px;padding-top:14px;border-top:1px solid var(--border); }
+.room-directory-group { margin-top:18px;padding:16px;border:1px solid var(--border);border-radius:16px;background:var(--bg); }
+.room-directory-group .section-title { margin-bottom:10px; }
+.room-directory-group h3,.room-join-code h3 { margin:0;font-size:15px; }
+.room-directory-group .room-heading { margin-top:8px; }
+.room-join-code { margin-top:22px;padding-top:20px;border-top:1px solid var(--border); }
+.room-join-code>.tiny { margin-top:8px; }
 .social-dialog.school-join-dialog { width:min(360px,calc(100vw - 40px));border-radius:22px; }
 .school-join-dialog .social-dialog-heading { padding:16px 18px;border-bottom:0; }
 .school-join-dialog .social-dialog-heading h2 { font-size:18px; }
@@ -58,9 +64,13 @@ html:has(.social-dialog[open]) { overflow:hidden; }
 .social-danger { color:#944b43;background:#f4e7e2; }
 .friend-code-row { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0; }
 [data-friend-code] { font:700 20px/1.6 ui-monospace,monospace;letter-spacing:2px;flex:1 1 100%;overflow-wrap:anywhere; }
-.social-inline-form { display:flex;align-items:flex-end;gap:12px;margin-top:16px; }
-.social-inline-form .form-field { flex:1;min-width:0;margin:0; }
-.social-inline-form .primary-button { flex:0 0 auto;width:auto;padding:10px 16px;margin:0;min-height:45px; }
+.social-inline-form { display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-top:16px; }
+.social-inline-form .form-field { flex:1 1 180px;min-width:0;margin:0; }
+.social-inline-form .primary-button,.social-inline-form .secondary-button { flex:0 0 auto;width:auto;padding:10px 16px;margin:0;min-height:45px;white-space:nowrap; }
+.social-inline-form input[name="code"] { text-transform:uppercase; }
+.room-grade-option { display:flex;align-items:flex-start;gap:8px;margin:14px 0;font-size:12px;line-height:1.6; }
+.room-grade-option input { flex:0 0 auto;margin-top:3px;accent-color:var(--green); }
+form:has(select[name="visibility"] option[value="private"]:checked) .room-grade-option { display:none; }
 .social-person { display:flex;align-items:center;gap:12px;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border); }
 .social-person:last-child { border-bottom:0; }
 .social-person-copy { min-width:0;overflow-wrap:anywhere; }
@@ -129,6 +139,7 @@ html:has(.social-dialog[open]) { overflow:hidden; }
 }
 @media(max-width:359px) {
   .social-inline-form { flex-direction:column;align-items:stretch; }
-  .social-inline-form .primary-button { width:100%; }
+  .social-inline-form .form-field { flex-basis:auto; }
+  .social-inline-form .primary-button,.social-inline-form .secondary-button { width:100%; }
   .social-person { flex-wrap:wrap; }
 }

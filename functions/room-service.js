@@ -1,4 +1,4 @@
-import {randomBytes} from 'node:crypto';
+import {createSocialCode,normalizeSocialCode,isShortSocialCode} from './social-code.js';
 import {FieldValue} from 'firebase-admin/firestore';
 import {HttpsError} from 'firebase-functions/v2/https';
 import {schoolRoomInfo} from './integrations-domain.js';
@@ -17,13 +17,13 @@ export function roomDeadline(room) {
   return members.length?Math.max(...members.map(member=>Number(member.lastSeenMs)||room.createdAtMs))+ROOM_IDLE_MS:(room.emptySinceMs??room.createdAtMs)+ROOM_IDLE_MS;
 }
 export const roomAvailable=(room,id,now=Date.now())=>Boolean(room&&room.status==='open'&&(isGeneralRoom(room,id)||roomDeadline(room)>now));
-const sameSchool=(room,profile)=>{const info=schoolRoomInfo(profile.school);return Boolean(info&&room.schoolId===info.schoolId&&room.grade===info.grade);};
+export const canAccessPublicRoom=(room,id,profile)=>{const info=schoolRoomInfo(profile.school);return Boolean(info&&room.schoolId===info.schoolId&&(room.grade===info.grade||!isGeneralRoom(room,id)&&room.allowOtherGrades===true));};
 const memberRecord=(uid,profile,now)=>({uid,displayName:profile.displayName||'공부 친구',joinedAtMs:now,lastSeenMs:now,status:'resting',seconds:0,subjectName:''});
 export function roomPreview(room,id,now=Date.now()) {
   const members=Object.entries(room.members||{}).sort(([a],[b])=>Number(b===room.hostUid)-Number(a===room.hostUid)).map(([uid,member])=>({displayName:member.displayName||'공부 친구',isHost:uid===room.hostUid,online:now-member.lastSeenMs<ROOM_OFFLINE_MS,status:now-member.lastSeenMs>=ROOM_OFFLINE_MS?'offline':member.status==='studying'&&(member.countUntilMs==null||member.countUntilMs>now)?'studying':'resting',participating:true}));
   const memberCount=members.length;
   if(room.hostUid&&!members.some(member=>member.isHost))members.unshift({displayName:room.hostName||'방장',isHost:true,online:false,status:'offline',participating:false});
-  return {id,title:room.title,visibility:visibility(room),permanent:isGeneralRoom(room,id),memberCount,members};
+  return {id,title:room.title,visibility:visibility(room),allowOtherGrades:!isGeneralRoom(room,id)&&room.allowOtherGrades===true,permanent:isGeneralRoom(room,id),memberCount,members};
 }
 // Reads all participants before any writes; deletion and membership changes are atomic.
 async function deleteRoom(tx,db,ref,room) {
@@ -38,8 +38,8 @@ async function deleteRoom(tx,db,ref,room) {
   tx.delete(ref);
 }
 async function resolveCode(tx,db,value) {
-  const code=String(value||'').trim().toUpperCase();
-  if(!/^[A-F0-9]{12}$/.test(code))fail('invalid-argument','방 코드 12자리를 확인해 주세요.');
+  const code=normalizeSocialCode(value);
+  if(!isShortSocialCode(code))fail('invalid-argument','방 코드 6자리를 확인해 주세요.');
   const mapping=(await tx.get(db.doc(`roomCodes/${code}`))).data();
   if(!mapping||!validId(mapping.roomId))fail('not-found','유효한 방 코드를 찾을 수 없습니다.');
   return {code,roomId:mapping.roomId};
@@ -60,6 +60,7 @@ export async function changeRoom(db,uid,action,data={}) {
         if(roomAvailable(previous,profile.activeRoomId,now)&&previous.memberIds.includes(uid))fail('already-exists','참여 중인 방에서 먼저 나가 주세요.');
       }
       const roomRef=db.collection('studyRooms').doc(),room={type:'custom',visibility:access,title,hostUid:uid,hostName:profile.displayName||'공부 친구',status:'open',createdAtMs:now,deleteAfterMs:now+ROOM_IDLE_MS,memberIds:[uid],invitedUids:[],members:{[uid]:memberRecord(uid,profile,now)},...(info?{schoolId:info.schoolId,grade:info.grade,schoolRoomKey:info.id}:{})};
+      room.allowOtherGrades=data.allowOtherGrades===true;
       tx.create(roomRef,room);tx.update(ref,{activeRoomId:roomRef.id,...bump});return {roomId:roomRef.id};
     }
     let roomId=data.roomId,code;
@@ -72,7 +73,7 @@ export async function changeRoom(db,uid,action,data={}) {
     if(!roomAvailable(room,roomId,now))fail('not-found','방이 삭제되었거나 더 이상 입장할 수 없습니다.');
     const general=isGeneralRoom(room,roomId),member=room.memberIds.includes(uid),host=room.hostUid===uid,access=visibility(room);
     if(code&&room.joinCode!==code)fail('permission-denied','만료된 방 코드입니다.');
-    if(access==='public'&&!sameSchool(room,profile)&&action!=='leave'&&action!=='close')fail('permission-denied','같은 학교·학년의 공개방만 이용할 수 있습니다.');
+    if(access==='public'&&!canAccessPublicRoom(room,roomId,profile)&&action!=='leave'&&action!=='close')fail('permission-denied','이 방에 허용된 학교·학년만 이용할 수 있습니다.');
     const invitation=access==='private'&&!member&&['join','previewRoom'].includes(action)?(await tx.get(inbox(db,uid,roomId))).data():null;
     const invited=room.invitedUids.includes(uid)&&invitation?.expiresAtMs>now;
     if(action==='previewCode'||action==='previewRoom') {
@@ -98,16 +99,22 @@ export async function changeRoom(db,uid,action,data={}) {
       if(!['public','private'].includes(access))fail('invalid-argument','공개 여부를 선택해 주세요.');
       const participants=await tx.getAll(...room.memberIds.map(id=>userRef(db,id)));
       const invitees=room.invitedUids.length?await tx.getAll(...room.invitedUids.map(id=>userRef(db,id))):[];
-      if(access==='public'&&(!info||participants.some(doc=>schoolRoomInfo(doc.data()?.school)?.id!==info.id)))fail('failed-precondition','같은 학교·학년 참여자만 남은 상태에서 공개로 변경해 주세요.');
-      const patch={title,visibility:access,type:'custom',...(info?{schoolId:info.schoolId,grade:info.grade,schoolRoomKey:info.id}:{})};
+      const allowOtherGrades=data.allowOtherGrades===true;
+      const patch={title,visibility:access,allowOtherGrades,type:'custom',...(info?{schoolId:info.schoolId,grade:info.grade,schoolRoomKey:info.id}:{})};
+      if(access==='public'&&(!info||participants.some(doc=>!canAccessPublicRoom({...room,...patch},roomId,doc.data()||{}))))fail('failed-precondition','허용된 학교·학년의 참여자만 남은 상태에서 공개 범위를 변경해 주세요.');
       if(room.joinCode&&access==='public'){tx.delete(db.doc(`roomCodes/${room.joinCode}`));patch.joinCode=FieldValue.delete();}
       if(access==='public'){patch.invitedUids=[];for(const invitee of invitees){tx.delete(inbox(db,invitee.id,roomId));if(invitee.exists)tx.update(invitee.ref,bump);}}
       tx.update(roomRef,patch);tx.update(ref,bump);return {updated:true};
     }
     if(action==='roomCode') {
       if(!host||access!=='private')fail('permission-denied','비공개방 방장만 코드를 만들 수 있습니다.');
-      const value=randomBytes(6).toString('hex').toUpperCase(),codeRef=db.doc(`roomCodes/${value}`);
-      if((await tx.get(codeRef)).exists)fail('aborted','다시 시도해 주세요.');
+      let value,codeRef;
+      for(let attempt=0;attempt<8;attempt++) {
+        value=createSocialCode();codeRef=db.doc(`roomCodes/${value}`);
+        if(!(await tx.get(codeRef)).exists)break;
+        codeRef=null;
+      }
+      if(!codeRef)fail('aborted','다시 시도해 주세요.');
       if(room.joinCode)tx.delete(db.doc(`roomCodes/${room.joinCode}`));
       tx.create(codeRef,{roomId});tx.update(roomRef,{joinCode:value});return {code:value};
     }
@@ -146,16 +153,16 @@ export async function roomDirectory(db,uid,profile) {
   if(info) {
     const general=(await db.doc(`studyRooms/${info.id}`).get()).data();
     rows.push(roomPreview(general||{title:info.title,permanent:true,visibility:'public',members:{}},info.id,now));
-    const docs=await db.collection('studyRooms').where('schoolRoomKey','==',info.id).where('status','==','open').orderBy('createdAtMs','desc').limit(50).get();
-    for(const doc of docs.docs)if(visibility(doc.data())==='public'&&roomAvailable(doc.data(),doc.id,now))rows.push(roomPreview(doc.data(),doc.id,now));
+    const docs=await db.collection('studyRooms').where('schoolId','==',info.schoolId).where('status','==','open').orderBy('createdAtMs','desc').limit(50).get();
+    for(const doc of docs.docs)if(visibility(doc.data())==='public'&&canAccessPublicRoom(doc.data(),doc.id,profile)&&roomAvailable(doc.data(),doc.id,now)&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now));
   }
   const invites=await userRef(db,uid).collection('roomInvites').limit(50).get();
   const owned=await db.collection('studyRooms').where('hostUid','==',uid).limit(50).get();
-  for(const doc of owned.docs)if(roomAvailable(doc.data(),doc.id,now)&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now));
+  for(const doc of owned.docs)if(roomAvailable(doc.data(),doc.id,now)&&(visibility(doc.data())==='private'||canAccessPublicRoom(doc.data(),doc.id,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now));
   for(const invite of invites.docs) {
     if(invite.data().expiresAtMs<=now)continue;
     const doc=await db.doc(`studyRooms/${invite.id}`).get(),room=doc.data();
-    if(roomAvailable(room,doc.id,now)&&room.invitedUids.includes(uid)&&(visibility(room)==='private'||sameSchool(room,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(room,doc.id,now));
+    if(roomAvailable(room,doc.id,now)&&room.invitedUids.includes(uid)&&(visibility(room)==='private'||canAccessPublicRoom(room,doc.id,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(room,doc.id,now));
   }
   return rows;
 }
@@ -169,7 +176,7 @@ export async function syncRoom(db,uid,expectedId) {
       else tx.update(ref,{activeRoomId:null,...bump});return null;
     }
     if(!room.memberIds.includes(uid)){tx.update(ref,{activeRoomId:null,...bump});return null;}
-    if(visibility(room)==='public'&&!sameSchool(room,profile)) {
+    if(visibility(room)==='public'&&!canAccessPublicRoom(room,expectedId,profile)) {
       const members={...room.members};delete members[uid];const ids=room.memberIds.filter(id=>id!==uid);
       if(!isGeneralRoom(room,expectedId)&&!ids.length){await deleteRoom(tx,db,roomRef,room);return null;}
       const next={...room,members,memberIds:ids,emptySinceMs:ids.length?null:now};
@@ -193,7 +200,7 @@ export async function syncRoom(db,uid,expectedId) {
 export async function readActivityRoom(tx,db,uid,profile) {
   if(!profile?.activeRoomId)return null;
   const ref=db.doc(`studyRooms/${profile.activeRoomId}`),room=(await tx.get(ref)).data();
-  return roomAvailable(room,ref.id)&&room.memberIds.includes(uid)&&(visibility(room)==='private'||sameSchool(room,profile))?{ref,room}:null;
+  return roomAvailable(room,ref.id)&&room.memberIds.includes(uid)&&(visibility(room)==='private'||canAccessPublicRoom(room,ref.id,profile))?{ref,room}:null;
 }
 // Word-app heartbeats also count as service visits, even when STUDY is closed.
 export function publishWordRoom(tx,activity,uid,profile,session,now,present,camera) {

@@ -54,7 +54,7 @@ function paintRefreshButtons() {
 const expandedRooms=new Set();
 function previewCard(row,action='join') {
   const card=el('article','room-preview-card'),heading=el('div','room-heading'),copy=el('div');
-  copy.append(el('strong','',row.title),el('p','tiny muted',`${row.permanent?'기본방':row.visibility==='public'?'공개':'비공개'} · ${row.memberCount}명 참여 중`));
+  copy.append(el('strong','',row.title),el('p','tiny muted',`${row.permanent?'학년 기본방':row.visibility==='public'?`공개 · ${row.allowOtherGrades?'같은 학교 모든 학년':'같은 학교·학년'}`:'비공개'} · ${row.memberCount}명 참여 중`));
   const enter=button('입장',row.permanent?'joinSchool':action,row.id);enter.disabled=busy||Boolean(state.room);
   heading.append(copy,enter);card.append(heading);
   const details=el('details','room-preview-members');details.dataset.roomPreviewId=row.id;details.open=expandedRooms.has(row.id);
@@ -66,6 +66,8 @@ function previewCard(row,action='join') {
 }
 function paintSchoolEntry() {
   const {ready,profile}=getStudyData(),school=profile?.school,user=getAuthUser();
+  for(const node of document.querySelectorAll('[data-room-current]'))node.hidden=!state.room;
+  for(const node of document.querySelectorAll('[data-room-browse]'))node.hidden=Boolean(state.room);
   for(const label of document.querySelectorAll('[data-school-room-label]'))label.textContent=!ready?'계정 정보를 불러오는 중…':school?`${school.name} ${school.grade}학년 기본방 · 공개·비공개방`:'함께 공부할 방을 만들거나 초대받아 입장하세요';
   list('[data-room-directory]',state.schoolRooms||[],state.schoolRooms?'입장 가능한 방이 없어요. 학교를 등록하거나 새 방을 만들어 보세요.':'방 목록을 불러오는 중…',row=>previewCard(row));
   for(const root of document.querySelectorAll('[data-room-code-preview]'))root.replaceChildren(...(state.codePreview?[previewCard(state.codePreview.preview,'joinCode')]:[]));
@@ -76,12 +78,12 @@ function paintSchoolEntry() {
   for(const form of document.querySelectorAll('[data-room-settings]')) {
     const room=state.room;form.hidden=!room||room.hostUid!==user?.uid||room.permanent||!room.hostUid;
     if(!form.hidden) {
-      const access=room.visibility||(room.type==='school'?'public':'private'),signature=JSON.stringify([room.id,room.title,access]);
-      if(form.dataset.signature!==signature){form.elements.title.value=room.title;form.elements.visibility.value=access;form.dataset.signature=signature;}
+      const access=room.visibility||(room.type==='school'?'public':'private'),signature=JSON.stringify([room.id,room.title,access,room.allowOtherGrades===true]);
+      if(form.dataset.signature!==signature){form.elements.title.value=room.title;form.elements.visibility.value=access;form.elements.allowOtherGrades.checked=room.allowOtherGrades===true;form.dataset.signature=signature;}
     }
   }
   for(const node of document.querySelectorAll('[data-room-code-tools]'))node.hidden=!state.room||state.room.hostUid!==user?.uid||(state.room.visibility||(state.room.type==='school'?'public':'private'))!=='private';
-  for(const node of document.querySelectorAll('[data-room-code]'))node.textContent=state.room?.joinCode||'방 코드를 생성해 공유하세요.';
+  for(const node of document.querySelectorAll('[data-room-code]'))node.textContent=state.room?.joinCode?.length===6?state.room.joinCode:'새 6자리 방 코드를 생성해 공유하세요.';
 }
 
 function paint() {
@@ -191,7 +193,7 @@ async function change(action,data={}) {
 document.addEventListener('submit',event=>{
   const form=event.target.closest('[data-social-form]');if(!form)return;event.preventDefault();
   const values=new FormData(form),action=form.dataset.socialForm;
-  const data=['request','previewCode'].includes(action)?{code:values.get('code')}:['createRoom','createSchoolRoom','updateRoom'].includes(action)?{title:values.get('title'),visibility:values.get('visibility'),...(action==='updateRoom'?{roomId:state.room?.id}:{})}:{roomId:state.room?.id,uids:values.getAll('uids')};
+  const data=['request','previewCode'].includes(action)?{code:values.get('code')}:['createRoom','createSchoolRoom','updateRoom'].includes(action)?{title:values.get('title'),visibility:values.get('visibility'),allowOtherGrades:values.get('allowOtherGrades')==='on',...(action==='updateRoom'?{roomId:state.room?.id}:{})}:{roomId:state.room?.id,uids:values.getAll('uids')};
   void change(action,data);
 });
 document.addEventListener('click',event=>{
