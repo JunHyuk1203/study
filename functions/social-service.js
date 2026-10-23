@@ -80,13 +80,15 @@ export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,list
   if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
   const result={revision:profile.socialRevision||0,code:isShortSocialCode(profile.friendCode)?profile.friendCode:null,room:null,serverNowMs:Date.now()};
   result.schoolRoom=schoolRoomInfo(profile.school);
-  if(includeSchoolRooms)result.schoolRooms=await roomDirectory(db,uid,profile);
+  let invites;
+  const readInvites=()=>invites??=(ref.collection('roomInvites').limit(50).get());
+  if(includeSchoolRooms)result.schoolRooms=await roomDirectory(db,uid,profile,readInvites);
   // Listeners are unnecessary: poll only while the Play page or a room is open,
   // and reuse lists until a server-owned revision changes.
   if(includeLists&&(listScope||revision!==result.revision)) {
     const collections=listScope==='requests'?['friendRequests','sentRequests']:listScope==='invites'?['roomInvites']:['friends','friendRequests','sentRequests','roomInvites'];
     for(const collection of collections) {
-      const docs=await ref.collection(collection).limit(50).get();
+      const docs=await (collection==='roomInvites'?readInvites():ref.collection(collection).limit(50).get());
       result[collection]=docs.docs.map(doc=>({...doc.data(),id:doc.id}));
     }
   }

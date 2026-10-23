@@ -1,7 +1,7 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import { firebaseConfig } from './firebase-config.js';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
-import { readCache } from './client-cache.js?v=20261022-11';
+import { readCache, statsRevision } from './client-cache.js?v=20261024-1';
 import { showToast } from './notifications.js?v=20261022-18';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261023-6';
 
@@ -436,7 +436,7 @@ function visibleDataKeys() {
 async function loadVisibleData() {
   if (!sdk || !connectedUid || state.pending.has('profile') || document.hidden) return;
   const token = generation, uid = connectedUid, today = dateKey(), week = monday(today);
-  const revision = state.profile?.studyRevision || 0, currentSchoolId=state.profile?.schoolId || '';
+  const currentSchoolId=state.profile?.schoolId || '';
   const paths = {today:['dailyStats',today],week:['weeklyStats',week],month:['monthlyStats',today.slice(0,7)],summary:['stats','summary'],focusTime:['stats','focusTime'],lastWeek:['weeklyStats',monday(dateKey(Date.now()-7*86400000))]};
   const keys=visibleDataKeys();
   const apply=(key,result)=>{
@@ -446,7 +446,8 @@ async function loadVisibleData() {
     }
   };
   await Promise.all([...keys].filter(key=>key!=='today'||!keys.has('days')).map(async key => {
-    const cacheKey = `${uid}:stats:${today}:${revision}:${currentSchoolId}:${key}`;
+    const keyRevision=statsRevision(state.profile,key);
+    const cacheKey = `${uid}:stats:v2:${today}:${keyRevision}:${currentSchoolId}:${key}`;
     const cached = readCache.get(cacheKey);
     if (cached !== undefined) {apply(key,cached);return;}
     if (dataRequests.has(cacheKey)) return;
@@ -463,7 +464,7 @@ async function loadVisibleData() {
           const rows = await sdk.getDocs(sdk.query(sdk.collection(db,...path),sdk.orderBy('totalSeconds','desc'),sdk.orderBy('uid'),sdk.limit(50)));
           result = rows.docs.map(row => row.data());
         }
-        if (token !== generation || revision !== (state.profile?.studyRevision || 0) || currentSchoolId !== (state.profile?.schoolId || '')) return;
+        if (token !== generation || keyRevision !== statsRevision(state.profile,key) || currentSchoolId !== (state.profile?.schoolId || '')) return;
         readCache.set(cacheKey,result,key.includes('Ranking') || key === 'ranking' ? 5*60000 : 15*60000);
         apply(key,result);
       } catch (error) {
@@ -682,7 +683,7 @@ document.addEventListener('submit', async event => {
     const displayName = form.elements.displayName.value.trim();
     await profileReady;
     await call('updateAccount')({ displayName });
-    await authServices.updateProfile(authServices.auth.currentUser, { displayName });
+    if(authServices.auth.currentUser.displayName!==displayName)await authServices.updateProfile(authServices.auth.currentUser, { displayName });
     window.dispatchEvent(new Event('study:navigated'));
     notice('닉네임을 저장했습니다.');
   } catch (error) { notice(errorText(error), true); }

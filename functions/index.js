@@ -57,8 +57,8 @@ export const updateAccount = onCall(options, async (request) => {
     if (profile.data().schoolId) rankingRefs.push(db.doc(`schoolLeaderboards/${profile.data().schoolId}/weeks/${week}/entries/${uid}`));
     const rankingRows = await transaction.getAll(...rankingRefs);
     const update = { displayName: request.data.displayName.trim(), updatedAt: Timestamp.now() };
-    transaction.update(ref, update);
-    for (const row of rankingRows) if (row.exists) transaction.update(row.ref, update);
+    if(profile.data().displayName!==update.displayName)transaction.update(ref, update);
+    for (const row of rankingRows) if (row.exists&&row.data().displayName!==update.displayName) transaction.update(row.ref, update);
   });
   return { updated: true };
 });
@@ -94,9 +94,9 @@ export const startStudySession = onCall(options, async (request) => {
 
 export const syncStudyCamera = onCall(options, async request => {
   const uid = userId(request, true);
-  await expireUserSessions(db,uid);
   const { sessionId, controllerId, sequence, tracking } = request.data || {};
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean') throw new HttpsError('invalid-argument', '카메라 상태가 올바르지 않습니다.');
+  await expireUserSessions(db,uid);
   return db.runTransaction(async transaction => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`);
     const record = await transaction.get(ref);
@@ -123,8 +123,8 @@ export const finishStudySession = onCall(options, request => finishSession(userI
 export const expireStudySessions = onCall(options, request => expireUserSessions(db,userId(request,true)));
 export const heartbeatStudySession = onCall(options, async request => {
   const uid=userId(request,true),{sessionId,controllerId}=request.data||{};
-  await expireUserSessions(db,uid);
   if(typeof sessionId!=='string'||!/^[A-Za-z0-9_-]{20,128}$/.test(sessionId))throw new HttpsError('invalid-argument','학습 기록 ID가 올바르지 않습니다.');
+  await expireUserSessions(db,uid);
   return db.runTransaction(async tx=>{
     const ref=db.doc(`users/${uid}/sessions/${sessionId}`),session=(await tx.get(ref)).data();
     if(!session||session.status!=='active')throw new HttpsError('failed-precondition','진행 중인 기록이 없습니다.');

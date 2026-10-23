@@ -24,12 +24,13 @@ export async function usageFor(user) {
 async function reserve(user, model, inputTokens, rate, requested, countDaily = true) {
   const {date}=schoolDates(), monthRef=db.doc(`users/${user}/aiUsage/${date.slice(0,7)}`),dayRef=db.doc(`users/${user}/aiDaily/${date}`),reservationRef=db.doc(`aiReservations/${randomUUID()}`);
   return db.runTransaction(async tx=>{
-    const [monthly,daily]=await tx.getAll(monthRef,dayRef), spent=monthly.data()?.spent||0,reserved=monthly.data()?.reserved||0;
-    if(countDaily&&model==='gemini-4-argon'&&(daily.data()?.argonCalls||0)>=2)throw new HttpsError('resource-exhausted','Argon은 한국 시간 기준 하루 2회까지 이용할 수 있습니다.');
+    const dailyLimited=countDaily&&model==='gemini-4-argon';
+    const [monthly,daily]=await tx.getAll(...(dailyLimited?[monthRef,dayRef]:[monthRef])), spent=monthly.data()?.spent||0,reserved=monthly.data()?.reserved||0;
+    if(dailyLimited&&(daily.data()?.argonCalls||0)>=2)throw new HttpsError('resource-exhausted','Argon은 한국 시간 기준 하루 2회까지 이용할 수 있습니다.');
     let quote;
     try{quote=allowance({model,inputTokens,spent,reserved,exchangeRate:rate,requested});}catch{throw new HttpsError('resource-exhausted','이번 달 AI 이용 한도 1,000원에 도달했습니다.');}
     tx.set(monthRef,{spent,reserved:reserved+quote.amount,updatedAt:Timestamp.now()},{merge:true});
-    if(countDaily&&model==='gemini-4-argon')tx.set(dayRef,{argonCalls:(daily.data()?.argonCalls||0)+1,updatedAt:Timestamp.now()},{merge:true});
+    if(dailyLimited)tx.set(dayRef,{argonCalls:(daily.data()?.argonCalls||0)+1,updatedAt:Timestamp.now()},{merge:true});
     tx.create(reservationRef,{user,month:date.slice(0,7),model,amount:quote.amount,status:'reserved',createdAt:Timestamp.now()});
     return {...quote,monthRef,reservationRef,rate};
   });

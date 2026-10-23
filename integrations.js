@@ -1,8 +1,8 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { getStudyData } from './data.js?v=20261023-21';
+import { getStudyData } from './data.js?v=20261024-1';
 import { firebaseConfig } from './firebase-config.js';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
-import { readCache } from './client-cache.js?v=20261022-11';
+import { readCache } from './client-cache.js?v=20261024-1';
 import { briefingPeriod } from './functions/briefing-period.js?v=20261022-11';
 import { renderCalendar } from './school-calendar.js?v=20261022-12';
 
@@ -20,17 +20,32 @@ async function client(name) {
 }
 async function call(name, data = {}) { return (await (await client(name))(data)).data; }
 export async function updatePlan(input) { return call('updateStudyPlan',input); }
+const remoteRequests=new Map();
 async function cachedCall(name, data = {}, ttl = 30*60000, force = false) {
   const {user,profile}=getStudyData();
   const period=briefingPeriod();
   const key=`${user?.uid}:remote:${name}:${JSON.stringify([profile?.school||null,period.date,name==='getStudyBriefing'?period.id:null,data])}`;
   const saved=force?undefined:readCache.get(key);
   if(saved!==undefined)return saved;
-  const result=await call(name,force&&name==='getStudyBriefing'?{...data,force:true}:data);
-  if(['getSchoolOverview','getUpcomingExams'].includes(name))ttl=Date.parse(`${period.date}T00:00:00+09:00`)+86400000-Date.now();
-  // Partial upstream failures must remain retryable instead of being cached.
-  if(!Object.values(result.errors||{}).some(Boolean)) readCache.set(key,result,result.expiresAtMs?Math.max(0,result.expiresAtMs-Date.now()):ttl);
-  return result;
+  if(!force&&name==='getSchoolOverview'&&data.eventsOnly===true){
+    const {eventsOnly,...fullData}=data;
+    const fullKey=`${user?.uid}:remote:${name}:${JSON.stringify([profile?.school||null,period.date,null,fullData])}`;
+    const full=readCache.get(fullKey);
+    if(full!==undefined)return full;
+  }
+  if(!force&&remoteRequests.has(key))return remoteRequests.get(key).promise;
+  const request={};
+  remoteRequests.set(key,request);
+  request.promise=(async()=>{
+    try {
+      const result=await call(name,force&&name==='getStudyBriefing'?{...data,force:true}:data);
+      if(['getSchoolOverview','getUpcomingExams'].includes(name))ttl=Date.parse(`${period.date}T00:00:00+09:00`)+86400000-Date.now();
+      // An older automatic request must not overwrite a manual refresh.
+      if(remoteRequests.get(key)===request&&!Object.values(result.errors||{}).some(Boolean))readCache.set(key,result,result.expiresAtMs?Math.max(0,result.expiresAtMs-Date.now()):ttl);
+      return result;
+    } finally {if(remoteRequests.get(key)===request)remoteRequests.delete(key);}
+  })();
+  return request.promise;
 }
 function errorMessage(error) {
   if (error?.code === 'functions/unauthenticated') return '다시 로그인해 주세요.';

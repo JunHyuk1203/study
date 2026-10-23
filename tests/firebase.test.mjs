@@ -512,6 +512,9 @@ test('word heartbeat publishes canonical stats before finish and finish credits 
   let days=await db.collection(`users/${auth.uid}/dailyStats`).get();
   assert.ok(settled>=10);assert.equal(days.docs.reduce((sum,row)=>sum+row.data().totalSeconds,0),settled);
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().wordSnapshot.sessionId,word.sessionId);
+  const checkpointProfile=(await db.doc(`users/${auth.uid}`).get()).data();
+  assert.equal(checkpointProfile.wordCheckpointRevision,1);
+  assert.equal(checkpointProfile.studyRevision-checkpointProfile.wordCheckpointRevision,0);
   await syncWordStudy.run({auth,data:input});
   await ref.update({activeSinceMs:Math.floor(Date.now()/1000)*1000-5000,leaseUntilMs:Date.now()+30000});
   const finished=await finishStudySession.run({auth,data:{sessionId:word.sessionId}});
@@ -520,6 +523,9 @@ test('word heartbeat publishes canonical stats before finish and finish credits 
   assert.equal(days.docs.reduce((sum,row)=>sum+row.data().totalSeconds,0),finished.creditedSeconds);
   assert.ok(finished.creditedSeconds>=settled+5);
   assert.equal((await db.doc(`users/${auth.uid}/stats/summary`).get()).data().totalSeconds,finished.creditedSeconds);
+  const finishedProfile=(await db.doc(`users/${auth.uid}`).get()).data();
+  assert.equal(finishedProfile.wordCheckpointRevision,1);
+  assert.equal(finishedProfile.studyRevision-finishedProfile.wordCheckpointRevision,1);
 });
 
 test('Firestore briefing cache serves a slot once and rejects simultaneous duplicate generation',async()=>{

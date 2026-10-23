@@ -76,10 +76,10 @@ export const startWordStudy = onCall(options, async request => {
 
 export const syncWordStudy = onCall(options, async request => {
   const uid = owner(request), controllerId = controller(request.data?.controllerId);
-  await expireUserSessions(db,uid);
   const {sessionId,sequence,tracking} = request.data || {};
   const present=request.data?.present ?? tracking;
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean' || typeof present !== 'boolean') throw new HttpsError('invalid-argument','학습 상태가 올바르지 않습니다.');
+  await expireUserSessions(db,uid);
   return db.runTransaction(async tx => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`), snapshot = await tx.get(ref), session = snapshot.data();
     if (!session || session.status !== 'active') throw new HttpsError('failed-precondition','진행 중인 영단어 학습이 없습니다.');
@@ -101,7 +101,7 @@ export const syncWordStudy = onCall(options, async request => {
     update.settledSegments=update.segments;
     tx.update(ref,{...update,sequence,updatedAt:now});
     const wordSnapshot={sessionId,subjectId:session.subjectId,segments:update.segments,activeSinceMs:update.activeSinceMs,leaseUntilMs:update.leaseUntilMs,serverNowMs:now.toMillis()};
-    tx.update(db.doc(`users/${uid}`),{wordStudySessionId:sessionId,wordCameraSessionId:cameraId,wordPresenceUntilMs:counting?presenceUntilMs:null,wordAppUntilMs:presenceUntilMs,wordTracking:counting,wordSnapshot,...(delta>0?{studyRevision:FieldValue.increment(1)}:{}),updatedAt:now});
+    tx.update(db.doc(`users/${uid}`),{wordStudySessionId:sessionId,wordCameraSessionId:cameraId,wordPresenceUntilMs:counting?presenceUntilMs:null,wordAppUntilMs:presenceUntilMs,wordTracking:counting,wordSnapshot,...(delta>0?{studyRevision:FieldValue.increment(1),wordCheckpointRevision:FieldValue.increment(1)}:{}),updatedAt:now});
     tx.set(db.doc(`wordStudyLeases/${sessionId}`),{uid,sessionId,expiresAtMs:presenceUntilMs});
     return reply(ref.id,{...session,...update,sequence},now);
   });

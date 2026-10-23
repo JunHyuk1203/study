@@ -26,3 +26,11 @@ export function createReadCache({storage, now = Date.now} = {}) {
   };
 }
 export const readCache = createReadCache();
+
+// Checkpoints change period statistics, but not finish-only documents.
+// Subtraction preserves compatibility with profiles and clients predating it.
+export function statsRevision(profile, key) {
+  const revision=profile?.studyRevision||0;
+  return ['summary','focusTime','ranking','ownRanking','schoolRanking'].includes(key)
+    ? revision-(profile?.wordCheckpointRevision||0) : revision;
+}

@@ -24,6 +24,7 @@ export async function changePlan(db, uid, action, input, now = Date.now()) {
         if (profile.activeSessionId) throw new Error('학습을 종료한 뒤 과목을 삭제해 주세요.');
         if ((profile.goals || []).some(goal => goal.subjectId === input.id)) throw new Error('이 과목의 목표를 먼저 삭제해 주세요.');
         update.subjects = (profile.subjects || []).filter(row => row.id !== input.id);result = {removed:true};
+        if(update.subjects.length===(profile.subjects||[]).length)return result;
       } else if (action === 'addGoal') {
         const goal = {...goalInput(input,profile,now),id:randomUUID()};
         result = appendGoal(profile.goals || [],goal);update.goals = result.goals;
@@ -31,6 +32,7 @@ export async function changePlan(db, uid, action, input, now = Date.now()) {
       } else if (action === 'removeGoal') {
         if (typeof input?.id !== 'string') throw new Error('삭제할 목표를 선택해 주세요.');
         update.goals = (profile.goals || []).filter(row => row.id !== input.id);result = {removed:true};
+        if(update.goals.length===(profile.goals||[]).length)return result;
       } else throw new Error('지원하지 않는 요청입니다.');
     } catch (error) {throw new HttpsError('invalid-argument',error.message);}
     tx.update(ref,update);

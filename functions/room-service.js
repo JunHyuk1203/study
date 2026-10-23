@@ -156,21 +156,24 @@ function validateTitle(title) {
   if(typeof title!=='string'||!title.trim()||title.trim().length>40||/[\p{Cc}\p{Cf}]/u.test(title))fail('invalid-argument','방 이름은 1~40자로 입력해 주세요.');
   return title.trim();
 }
-export async function roomDirectory(db,uid,profile) {
-  const info=schoolRoomInfo(profile.school),now=Date.now(),rows=[];
+export async function roomDirectory(db,uid,profile,readInvites=()=>userRef(db,uid).collection('roomInvites').limit(50).get()) {
+  const info=schoolRoomInfo(profile.school),now=Date.now(),rows=[],known=new Map();
   if(info) {
     const general=(await db.doc(`studyRooms/${info.id}`).get()).data();
+    known.set(info.id,general);
     rows.push(roomPreview(general||{title:info.title,permanent:true,visibility:'public',members:{}},info.id,now,uid));
     const docs=await db.collection('studyRooms').where('schoolId','==',info.schoolId).where('status','==','open').orderBy('createdAtMs','desc').limit(50).get();
-    for(const doc of docs.docs)if(visibility(doc.data())==='public'&&canAccessPublicRoom(doc.data(),doc.id,profile)&&roomAvailable(doc.data(),doc.id,now)&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now,uid));
+    for(const doc of docs.docs){known.set(doc.id,doc.data());if(visibility(doc.data())==='public'&&canAccessPublicRoom(doc.data(),doc.id,profile)&&roomAvailable(doc.data(),doc.id,now)&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now,uid));}
   }
-  const invites=await userRef(db,uid).collection('roomInvites').limit(50).get();
+  const invites=await readInvites();
   const owned=await db.collection('studyRooms').where('hostUid','==',uid).limit(50).get();
-  for(const doc of owned.docs)if(roomAvailable(doc.data(),doc.id,now)&&(visibility(doc.data())==='private'||canAccessPublicRoom(doc.data(),doc.id,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now,uid));
+  for(const doc of owned.docs){known.set(doc.id,doc.data());if(roomAvailable(doc.data(),doc.id,now)&&(visibility(doc.data())==='private'||canAccessPublicRoom(doc.data(),doc.id,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(doc.data(),doc.id,now,uid));}
+  const missing=[...new Set(invites.docs.filter(invite=>invite.data().expiresAtMs>now&&!known.has(invite.id)).map(invite=>invite.id))];
+  if(missing.length)for(const doc of await db.getAll(...missing.map(id=>db.doc(`studyRooms/${id}`))))known.set(doc.id,doc.data());
   for(const invite of invites.docs) {
     if(invite.data().expiresAtMs<=now)continue;
-    const doc=await db.doc(`studyRooms/${invite.id}`).get(),room=doc.data();
-    if(roomAvailable(room,doc.id,now)&&room.invitedUids.includes(uid)&&(visibility(room)==='private'||canAccessPublicRoom(room,doc.id,profile))&&!rows.some(row=>row.id===doc.id))rows.push(roomPreview(room,doc.id,now,uid));
+    const room=known.get(invite.id);
+    if(roomAvailable(room,invite.id,now)&&room.invitedUids.includes(uid)&&(visibility(room)==='private'||canAccessPublicRoom(room,invite.id,profile))&&!rows.some(row=>row.id===invite.id))rows.push(roomPreview(room,invite.id,now,uid));
   }
   return rows;
 }
