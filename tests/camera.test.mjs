@@ -3,31 +3,33 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURATION_MS, paintAvatar } from '../camera-avatar.js';
+import { createFocusTracker } from '../camera-focus.js';
+const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
 test('manual pause during engine setup survives detection and visibility changes until explicit resume',async()=>{
   let now=0;
   const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;globalThis.camera={toggleCameraPause,cameraState,acceptResult,setStatus};`,context);
   const camera=context.camera;
   camera.toggleCameraPause();assert.equal(camera.cameraState().manuallyPaused,true);
-  for(now=0;now<=10000;now+=1000)camera.acceptResult({present:true});
+  for(now=0;now<=10000;now+=1000)camera.acceptResult({signals:healthySignals,time:now});
   document.hidden=true;handlers.visibilitychange();document.hidden=false;handlers.visibilitychange();
   camera.setStatus('tracking','detected',true);
   assert.equal(camera.cameraState().tracking,false);assert.equal(camera.cameraState().status,'paused');
   camera.toggleCameraPause();assert.equal(camera.cameraState().manuallyPaused,false);
-  camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,false);
-  now+=2000;camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,true);
+  camera.acceptResult({signals:healthySignals,time:now});assert.equal(camera.cameraState().tracking,false);
+  now+=2000;camera.acceptResult({signals:healthySignals,time:now});assert.equal(camera.cameraState().tracking,true);
 });
 
 test('a live SP word companion permits real background face detection and expiry restores the visibility pause',async()=>{
   let now=1000;const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;globalThis.camera={setCameraCompanion,cameraState,acceptResult,cameraVisible};`,context);
   const camera=context.camera;camera.setCameraCompanion(30000);document.hidden=true;handlers.visibilitychange();
-  camera.acceptResult({present:true});now+=2000;camera.acceptResult({present:true});assert.equal(camera.cameraState().tracking,true);
+  camera.acceptResult({signals:healthySignals,time:now});now+=2000;camera.acceptResult({signals:healthySignals,time:now});assert.equal(camera.cameraState().tracking,true);
   now+=30000;assert.equal(camera.cameraVisible(),false);camera.setCameraCompanion(0);assert.equal(camera.cameraState().tracking,false);
 });
 

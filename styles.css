@@ -177,6 +177,17 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .camera-focus .cam-viewport,.camera-focus .is-open .cam-viewport{width:100%;height:clamp(240px,48dvh,520px)}
 .camera-focus .cam-timer{margin:26px 0 20px;min-height:110px}
 .camera-focus .timer{font-variant-numeric:tabular-nums}
+.cam-debug{margin:18px 0 0;padding:14px 16px;border:1px dashed var(--line,#d8dfd4);border-radius:14px;background:var(--sage);font-size:11px;line-height:1.6;text-align:left;min-width:0}
+.cam-debug-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.cam-debug-heading span,.cam-debug-note{color:var(--muted);font-size:10px}
+.cam-debug-summary{margin:6px 0 10px;font-weight:600}
+.cam-debug dl{margin:0;font-variant-numeric:tabular-nums}
+.cam-debug dl>div{display:grid;grid-template-columns:80px minmax(0,1fr);gap:8px;padding:5px 0;border-top:1px solid #54725a12}
+.cam-debug dt{color:var(--muted)}
+.cam-debug dd{margin:0;overflow-wrap:anywhere}
+.cam-debug [data-active="true"] dd{color:#a84624;font-weight:650}
+.cam-debug-note{margin:9px 0 0}
+.camera-focus.is-morphing .cam-debug{opacity:0}
 .cam-existing{border:0;background:transparent;color:var(--green);text-decoration:underline;margin:10px auto;font:inherit;font-size:12px;cursor:pointer}
 .cam-existing[hidden]{display:none}
 .cam-morph-frame{position:fixed;z-index:202;pointer-events:none;color:var(--green);border-radius:20px;background:var(--sage);box-shadow:0 0 0 1px #54725a08;overflow:visible}
@@ -359,12 +370,13 @@ html,body{height:100%;overflow:hidden;overscroll-behavior:none}
   .timer{font-size:calc(34 * var(--gui))}
   .cam-viewport{width:calc(76 * var(--gui));height:calc(76 * var(--gui))}
   .focus-header,.focus-content{max-width:calc(1000 * var(--gui))}
-  .focus-content{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);grid-template-rows:auto auto auto auto minmax(0,1fr);gap:calc(20 * var(--gui)) calc(36 * var(--gui));align-items:start}
+  .focus-content{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);grid-template-rows:auto auto auto auto auto minmax(0,1fr);gap:calc(20 * var(--gui)) calc(36 * var(--gui));align-items:start}
   .camera-focus .cam-viewport,.camera-focus .is-open .cam-viewport{grid-column:1;grid-row:1 / 6;height:calc(520 * var(--gui))}
   .camera-focus .cam-status,.camera-focus .cam-timer,.camera-focus .cam-caption,.camera-focus .auth-status{grid-column:2;margin:0}
   .camera-focus .cam-status{grid-row:1}
   .camera-focus .cam-timer{grid-row:2}
   .camera-focus .auth-status{grid-row:3}
   .camera-focus .cam-caption{grid-row:4}
-  .camera-focus .room-focus-peers{grid-column:2;grid-row:5;min-width:0;margin:0;padding-top:16px}
+  .camera-focus .cam-debug{grid-column:2;grid-row:5;margin:0}
+  .camera-focus .room-focus-peers{grid-column:2;grid-row:6;min-width:0;margin:0;padding-top:16px}
 }
