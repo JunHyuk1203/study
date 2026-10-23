@@ -165,6 +165,8 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
         <path class="recognition-piece recognition-mouth" d="M139 179Q160 197 181 179"/>
         </g>
       </g>
+    </svg><svg class="cam-paused" viewBox="0 0 320 320" role="img" aria-label="수동 일시정지" aria-hidden="true">
+      <g fill="currentColor"><rect x="127" y="120" width="22" height="80" rx="5"/><rect x="171" y="120" width="22" height="80" rx="5"/></g>
     </svg>`;
   }
   let presentation = presentations.get(mount);
@@ -174,7 +176,7 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
     else presentation.missingSince = null;
   }
   const briefLoss = active && status === 'scanning' && presentation?.desired === 'recognized' && now - presentation.missingSince <= 3000;
-  const desired = briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  const desired = status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   if (!presentation || presentation.desired !== desired || returnedAfterLongLoss) {
     const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
@@ -197,7 +199,8 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
   mount.querySelector('.cam-recognition').setAttribute('aria-label', desired === 'recognized' ? '얼굴 인식 완료' : desired === 'error' ? '얼굴 인식 연결 대기' : '얼굴을 찾는 중');
   const avatar = mount.querySelector('.cam-avatar');
   avatar.setAttribute('aria-hidden', String(mount.dataset.avatarPhase !== 'avatar'));
-  mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle'].includes(mount.dataset.avatarPhase)));
+  mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle', 'paused'].includes(mount.dataset.avatarPhase)));
+  mount.querySelector('.cam-paused').setAttribute('aria-hidden', String(desired !== 'paused'));
   avatar.classList.toggle('is-tracked', Boolean(pose));
   avatar.classList.toggle('is-active', active);
   avatar.style.setProperty('--avatar-x', `${pose?.x || 0}px`);

@@ -194,7 +194,10 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .avatar-person{transform:translate(var(--avatar-x,0px),var(--avatar-y,0px));transition:transform .22s ease-out}
 .avatar-head{transform-origin:160px 136px;transform:rotate(var(--avatar-roll,0deg));transition:transform .22s ease-out}
 .cam-avatar:not(.is-tracked) .avatar-eyes{opacity:.35}
-.cam-video-mount .cam-avatar,.cam-recognition{position:absolute;inset:0;display:block;width:100%;height:100%;transition:opacity .22s,transform .3s}
+.cam-video-mount .cam-avatar,.cam-recognition,.cam-paused{position:absolute;inset:0;display:block;width:100%;height:100%;transition:opacity .22s,transform .3s}
+.cam-paused{color:var(--green);opacity:0;pointer-events:none}
+[data-avatar-phase="paused"] .cam-paused{opacity:1}
+[data-avatar-phase="paused"] .cam-recognition{display:none}
 .cam-video-mount .cam-avatar{opacity:0;transform:scale(.94)}
 .cam-video-mount[data-avatar-phase="avatar"] .cam-avatar{opacity:1;transform:scale(1)}
 .cam-recognition{color:var(--green);opacity:1;transform:scale(1)}

@@ -114,7 +114,7 @@ function paint() {
   root.dataset.state = status;
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
-  paintAvatar(mount, avatarPose, tracking, status);
+  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : status);
   root.querySelector('[data-camera-status]').textContent = message;
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
