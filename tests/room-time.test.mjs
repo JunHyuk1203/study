@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {roomClock,memberTime} from '../room-time.js';
-import {roomDeadline,roomPreview,ROOM_IDLE_MS} from '../functions/room-service.js';
+import {roomClock,memberTime,memberStatus} from '../room-time.js';
+import {roomDeadline,roomPreview,ROOM_IDLE_MS,syncRoom} from '../functions/room-service.js';
 
 test('room inactivity expires three hours after the last service visit of any participant',()=>{
   assert.equal(roomDeadline({createdAtMs:0,members:{a:{lastSeenMs:100},b:{lastSeenMs:500}}}),500+ROOM_IDLE_MS);
@@ -13,7 +13,8 @@ test('previews sort the host first and distinguish studying, resting and offline
   const preview=roomPreview(room,'custom',101000);
   assert.equal(preview.memberCount,3);assert.equal(preview.members[0].isHost,true);
   assert.deepEqual(preview.members.map(member=>member.status),['studying','resting','offline']);
-  assert.equal(roomPreview(room,'custom',111000).members[0].status,'resting');
+  assert.equal(roomPreview(room,'custom',111000).members[0].status,'studying');
+  assert.equal(roomPreview(room,'custom',145000).members[0].status,'offline');
   delete room.members.host;room.hostName='원래 방장';
   const left=roomPreview(room,'custom',101000);
   assert.equal(left.memberCount,2);assert.equal(left.members[0].displayName,'원래 방장');assert.equal(left.members[0].participating,false);
@@ -32,4 +33,30 @@ test('paused peers and legacy snapshots never invent study time',()=>{
   assert.equal(memberTime({seconds:60,status:'resting',sampledAtMs:1000,countUntilMs:20000},10000),60);
   assert.equal(memberTime({seconds:60,status:'studying',lastSeenMs:1000},10000),60);
   assert.equal(memberTime(null,10000),0);
+});
+
+test('lease expiry freezes time without inventing a pause between room snapshots',()=>{
+  const member={lastSeenMs:100000,status:'studying',seconds:120,sampledAtMs:100000,countUntilMs:105000};
+  assert.equal(memberStatus(member,104000),'studying');
+  assert.equal(memberStatus(member,106000),'studying');
+  assert.equal(memberTime(member,106000),125);
+  assert.equal(memberStatus({...member,status:'resting'},106000),'resting');
+  assert.equal(memberStatus(member,145000),'offline');
+});
+
+test('room sync preserves active camera status across a delayed credit heartbeat but respects explicit pauses',async()=>{
+  const now=Date.now(),session={status:'active',cameraMode:true,presenceUntilMs:now+60000,activeSinceMs:now-15000,leaseUntilMs:now-5000,accumulatedSeconds:30,startedAt:{toMillis:()=>now-60000}};
+  const records={
+    'users/alice':{activeRoomId:'group',activeSessionId:'session'},
+    'studyRooms/group':{status:'open',visibility:'private',createdAtMs:now,memberIds:['alice'],members:{alice:{lastSeenMs:now}}},
+    'users/alice/sessions/session':session,
+  };
+  const db={doc:path=>({path}),runTransaction:callback=>callback({get:async ref=>({data:()=>records[ref.path]}),update(){}})};
+  const active=await syncRoom(db,'alice','group');
+  assert.equal(active.members.alice.status,'studying');
+  assert.equal(active.members.alice.seconds,30);
+  session.activeSinceMs=null;
+  const paused=await syncRoom(db,'alice','group');
+  assert.equal(paused.members.alice.status,'resting');
+  assert.equal(paused.members.alice.seconds,30);
 });

@@ -30,6 +30,7 @@ function paintAccount() {
 }
 
 function friendlyError(error) {
+  if(error?.code?.startsWith('auth/requests-from-referer-'))return '현재 주소가 Google API 키의 허용 웹사이트에 등록되어 있지 않습니다. 관리자에게 테스트 주소 등록을 요청해 주세요.';
   const messages = {
     'auth/invalid-credential': '이메일 또는 비밀번호를 확인해 주세요.',
     'auth/user-not-found': '이메일 또는 비밀번호를 확인해 주세요.',
@@ -48,7 +49,8 @@ function friendlyError(error) {
     'auth/operation-not-allowed': '현재 로그인 방법을 사용할 수 없습니다.',
     'auth/web-storage-unsupported': '브라우저에서 사이트 저장소를 허용한 뒤 다시 시도해 주세요.',
   };
-  return messages[error?.code] || '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  const fallback='요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  return messages[error?.code] || (['localhost','127.0.0.1','[::1]'].includes(window.location.hostname)?`${fallback} (${error?.code||error?.name||'unknown'})`:fallback);
 }
 
 async function initialize() {
@@ -167,6 +169,7 @@ document.addEventListener('click', async event => {
       message('인증 메일을 보냈습니다. 메일에서 인증한 뒤 돌아오면 자동으로 확인됩니다.');
     }
   } catch (error) {
+    console.warn('Authentication action failed:', action, error?.code || error?.name || 'unknown');
     message(friendlyError(error), true);
   } finally {
     button.disabled = false;

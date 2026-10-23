@@ -3,6 +3,13 @@ export function roomClock(seconds=0) {
   return [Math.floor(value/3600),Math.floor(value%3600/60),value%60].map(part=>String(part).padStart(2,'0')).join(':');
 }
 
+// A counting lease can expire between room polls without a participant pausing.
+// Keep the last reported state until a new snapshot or the presence timeout.
+export function memberStatus(member,nowMs) {
+  if(!member||nowMs-member.lastSeenMs>=45000)return 'offline';
+  return member.status==='studying'?'studying':'resting';
+}
+
 // Extrapolate only the active interval confirmed by the server. An expired
 // camera lease, pause or lost connection must never keep the display counting.
 export function memberTime(member,nowMs) {

@@ -2,7 +2,7 @@ import {authReady,getAuthUser} from './auth.js?v=20261022-1';
 import {getStudyData} from './data.js?v=20261023-6';
 import {studyCall,serviceError,element as el,duration} from './study-api.js';
 import {showToast} from './notifications.js?v=20261022-18';
-import {roomClock,memberTime} from './room-time.js?v=20261023-8';
+import {roomClock,memberTime,memberStatus} from './room-time.js?v=20261023-15';
 import {openSocialPanel} from './social-dialog.js?v=20261023-8';
 let state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};
 let revision=-1,owner=null,requesting=false,busy=false,lastPoll=0,epoch=0,lastError='';
@@ -22,7 +22,7 @@ function peerCards(room,compact=false) {
   const grid=el('div',compact?'room-peers room-peers-compact':'room-peers');
   for(const id of room.memberIds) {
     const member=room.members[id];if(!member)continue;
-    const away=roomNow()-member.lastSeenMs>=45000,studying=!away&&member.status==='studying'&&(member.countUntilMs==null||member.countUntilMs>roomNow());
+    const statusValue=memberStatus(member,roomNow()),away=statusValue==='offline',studying=statusValue==='studying';
     const card=el('article',`room-peer${studying?' is-studying':''}`),avatar=el('div','room-avatar',studying?'◷':'☕');avatar.setAttribute('aria-hidden','true');
     const timer=el('span','room-peer-time',roomClock(memberTime(member,roomNow())));timer.dataset.roomMemberTime=id;
     const status=el('span','room-peer-status',away?'오프라인':studying?'공부중':'쉬는중');status.dataset.roomMemberStatus=id;
@@ -41,8 +41,11 @@ function tickRoomTimers() {
   }
   for(const node of document.querySelectorAll('[data-room-member-status]')) {
     const member=state.room.members[node.dataset.roomMemberStatus];if(!member)continue;
-    const away=now-member.lastSeenMs>=45000;
-    node.textContent=away?'오프라인':member.status==='studying'&&(member.countUntilMs==null||now<member.countUntilMs)?'공부중':'쉬는중';
+    const status=memberStatus(member,now),studying=status==='studying';
+    node.textContent=status==='offline'?'오프라인':studying?'공부중':'쉬는중';
+    const card=node.closest('.room-peer');
+    card?.classList.toggle('is-studying',studying);
+    const avatar=card?.querySelector('.room-avatar');if(avatar)avatar.textContent=studying?'◷':'☕';
   }
 }
 function paintRefreshButtons() {

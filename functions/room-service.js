@@ -20,7 +20,7 @@ export const roomAvailable=(room,id,now=Date.now())=>Boolean(room&&room.status==
 export const canAccessPublicRoom=(room,id,profile)=>{const info=schoolRoomInfo(profile.school);return Boolean(info&&room.schoolId===info.schoolId&&(room.grade===info.grade||!isGeneralRoom(room,id)&&room.allowOtherGrades===true));};
 const memberRecord=(uid,profile,now)=>({uid,displayName:profile.displayName||'공부 친구',joinedAtMs:now,lastSeenMs:now,status:'resting',seconds:0,subjectName:''});
 export function roomPreview(room,id,now=Date.now()) {
-  const members=Object.entries(room.members||{}).sort(([a],[b])=>Number(b===room.hostUid)-Number(a===room.hostUid)).map(([uid,member])=>({displayName:member.displayName||'공부 친구',isHost:uid===room.hostUid,online:now-member.lastSeenMs<ROOM_OFFLINE_MS,status:now-member.lastSeenMs>=ROOM_OFFLINE_MS?'offline':member.status==='studying'&&(member.countUntilMs==null||member.countUntilMs>now)?'studying':'resting',participating:true}));
+  const members=Object.entries(room.members||{}).sort(([a],[b])=>Number(b===room.hostUid)-Number(a===room.hostUid)).map(([uid,member])=>({displayName:member.displayName||'공부 친구',isHost:uid===room.hostUid,online:now-member.lastSeenMs<ROOM_OFFLINE_MS,status:now-member.lastSeenMs>=ROOM_OFFLINE_MS?'offline':member.status==='studying'?'studying':'resting',participating:true}));
   const memberCount=members.length;
   if(room.hostUid&&!members.some(member=>member.isHost))members.unshift({displayName:room.hostName||'방장',isHost:true,online:false,status:'offline',participating:false});
   return {id,title:room.title,visibility:visibility(room),allowOtherGrades:!isGeneralRoom(room,id)&&room.allowOtherGrades===true,permanent:isGeneralRoom(room,id),memberCount,members};
@@ -192,7 +192,8 @@ export async function syncRoom(db,uid,expectedId) {
     const seconds=(useWord&&camera?.cameraMode?camera.accumulatedSeconds||0:0)+(live?(session.cameraMode||session.activityMode?(session.accumulatedSeconds||0)+(tracked?Math.max(0,Math.floor((Math.min(now,session.leaseUntilMs)-session.activeSinceMs)/1000)):0):Math.max(0,Math.floor((now-session.startedAt.toMillis())/1000))):0);
     const subjectName=session?(profile.subjects||[]).find(row=>row.id===session.subjectId)?.name||'기타':'';
     const countUntilMs=tracked?Math.min(session.presenceUntilMs,session.startedAt.toMillis()+12*3600000,session.cameraMode||session.activityMode?session.leaseUntilMs:Infinity):now;
-    const members={...room.members,[uid]:{...room.members[uid],displayName:profile.displayName||'공부 친구',lastSeenMs:now,sampledAtMs:now,countUntilMs,status:tracked?'studying':'resting',seconds,subjectName}};
+    const studying=live&&(!(session.cameraMode||session.activityMode)||session.activeSinceMs!=null);
+    const members={...room.members,[uid]:{...room.members[uid],displayName:profile.displayName||'공부 친구',lastSeenMs:now,sampledAtMs:now,countUntilMs,status:studying?'studying':'resting',seconds,subjectName}};
     const patch={members,...(!isGeneralRoom(room,expectedId)?{deleteAfterMs:now+ROOM_IDLE_MS}:{})};
     tx.update(roomRef,patch);return {...room,...patch,id:expectedId};
   });

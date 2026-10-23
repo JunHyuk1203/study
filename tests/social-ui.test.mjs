@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {roomClock,memberTime} from '../room-time.js';
+import {roomClock,memberTime,memberStatus} from '../room-time.js';
 const socialSource=(await readFile(new URL('../study-social.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
 const reportSource=(await readFile(new URL('../daily-report.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
 function setup(source,{call=async()=>({revision:1,room:null}),report=false}={}) {
@@ -11,7 +11,7 @@ function setup(source,{call=async()=>({revision:1,room:null}),report=false}={}) 
     authReady:new Promise(()=>{}),user:{uid:'alice',emailVerified:true},getAuthUser:()=>context.user,
     getStudyData:()=>({ready:true,profile:{uid:context.user?.uid,studyRevision:1}}),
     studyDate:()=> '2026-10-23',studyCall:call,serviceError:error=>error.message,showToast(){},
-    element:()=>({}),el:()=>({}),duration:value=>String(value),roomClock,memberTime,openSocialPanel(){},closeSocialPanel(){},performance:{now:()=>0},setInterval(){},navigator:{},
+    element:()=>({}),el:()=>({}),duration:value=>String(value),roomClock,memberTime,memberStatus,openSocialPanel(){},closeSocialPanel(){},performance:{now:()=>0},setInterval(){},navigator:{},
     window:{addEventListener:(name,handler)=>{events[name]=handler;}},
     document:{hidden:false,addEventListener(){},querySelector:selector=>report&&selector==='[data-daily-report]'?node:null,
       querySelectorAll:selector=>report&&selector==='[data-daily-report]'?[node]:[]},
