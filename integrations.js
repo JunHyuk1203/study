@@ -67,6 +67,18 @@ function schoolHint() {
   const {ready, user, profile} = getStudyData();
   return !ready ? '로딩 중…' : !user ? '로그인 후 학교를 등록해 주세요.' : !profile?.school ? '학교·학년·반을 등록해 주세요.' : null;
 }
+function updateGradeOptions(registration, school) {
+  const select=registration.elements.grade, previous=select.value;
+  const kind=school.kind||school.name||'', maximum=/(?:중학교|고등학교)$/.test(kind)?3:6;
+  // Native select options; lightweight test fixtures may only provide a value.
+  if(select.replaceChildren) {
+    const options=Array.from({length:maximum+1},(_,grade)=>{
+      const option=document.createElement('option');option.value=grade?String(grade):'';option.textContent=grade?`${grade}학년`:'선택';return option;
+    });
+    select.replaceChildren(...options);
+  }
+  select.value=Number(previous)>=1&&Number(previous)<=maximum?previous:'';
+}
 function renderSchool() {
   const {user, profile} = getStudyData(), hint = schoolHint();
   text('[data-school-details]', profile?.school ? `${profile.school.grade}학년 ${profile.school.className}반 · ${profile.school.address}` : hint || '');
@@ -79,7 +91,8 @@ function renderSchool() {
     registration.hidden = false;
     registration.dataset.initialized = 'true';
     registration.querySelector('[data-selected-school]').textContent = profile.school.name;
-    registration.elements.grade.value = profile.school.grade;
+    updateGradeOptions(registration, profile.school);
+    registration.elements.grade.value = Number(profile.school.grade)<=((/(?:중학교|고등학교)$/.test(profile.school.kind||profile.school.name||''))?3:6)?profile.school.grade:'';
     registration.elements.className.value = profile.school.className;
   }
   for (const button of document.querySelectorAll('[data-school-refresh]')) button.disabled = !user || schoolState.status==='loading';
@@ -243,7 +256,7 @@ document.addEventListener('submit',async event=>{
       for(const school of data.schools) {
         const button=document.createElement('button');button.type='button';button.className='school-result';
         const name=document.createElement('strong'),address=document.createElement('span');name.textContent=school.name;address.textContent=school.address;button.append(name,address);
-        button.addEventListener('click',()=>{schoolSelection=school;registration.hidden=false;registration.dataset.initialized='true';registration.querySelector('[data-selected-school]').textContent=school.name;for(const item of results.children)item.setAttribute('aria-pressed',String(item===button));});results.append(button);
+        button.addEventListener('click',()=>{schoolSelection=school;updateGradeOptions(registration,school);registration.hidden=false;registration.dataset.initialized='true';registration.querySelector('[data-selected-school]').textContent=school.name;for(const item of results.children)item.setAttribute('aria-pressed',String(item===button));});results.append(button);
       }
     }catch(error){if(token===generation)results.textContent=errorMessage(error);}
     finally{searching=false;renderSchool();}

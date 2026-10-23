@@ -1,19 +1,20 @@
 import {randomBytes} from 'node:crypto';
 import {FieldValue} from 'firebase-admin/firestore';
 import {HttpsError} from 'firebase-functions/v2/https';
+import {schoolRoomInfo} from './integrations-domain.js';
+import {changeRoom,roomDirectory,syncRoom} from './room-service.js';
 
 export const ROOM_LIMIT = 12;
-const ROOM_LIFE = 12 * 3600000;
 const fail = (code, message) => {throw new HttpsError(code,message);};
 const validId = value => typeof value==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const userRef = (db,uid) => db.doc(`users/${uid}`);
 const sub = (db,uid,collection,id) => userRef(db,uid).collection(collection).doc(id);
 const bump = (tx,ref) => tx.update(ref,{socialRevision:FieldValue.increment(1)});
-const openRoom = (room,now) => room?.status==='open' && room.expiresAtMs>now;
 const name = profile => profile?.displayName || '공부 친구';
 
 export async function changeSocial(db,uid,action,data={}) {
-  if (!['code','request','accept','reject','cancel','remove','createRoom','invite','join','decline','leave','close'].includes(action)) fail('invalid-argument','지원하지 않는 요청입니다.');
+  if(['createRoom','createSchoolRoom','joinSchool','invite','join','joinCode','previewCode','previewRoom','roomCode','updateRoom','decline','leave','close'].includes(action))return changeRoom(db,uid,action,data);
+  if (!['code','request','accept','reject','cancel','remove','createRoom','createSchoolRoom','joinSchool','invite','join','decline','leave','close'].includes(action)) fail('invalid-argument','지원하지 않는 요청입니다.');
   return db.runTransaction(async tx=>{
     const ref=userRef(db,uid),profile=(await tx.get(ref)).data(),now=Date.now();
     if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
@@ -64,74 +65,16 @@ export async function changeSocial(db,uid,action,data={}) {
       }
       bump(tx,ref);bump(tx,otherRef);return {updated:true};
     }
-    if(action==='createRoom') {
-      const title=typeof data.title==='string'?data.title.trim():'';
-      if(!title||title.length>40||/[\p{Cc}\p{Cf}]/u.test(title))fail('invalid-argument','방 이름은 1~40자로 입력해 주세요.');
-      if(profile.activeRoomId) {
-        const previous=(await tx.get(db.doc(`studyRooms/${profile.activeRoomId}`))).data();
-        if(openRoom(previous,now)&&previous.memberIds.includes(uid))fail('already-exists','참여 중인 방에서 먼저 나가 주세요.');
-      }
-      const roomRef=db.collection('studyRooms').doc();
-      tx.create(roomRef,{title,hostUid:uid,status:'open',createdAtMs:now,expiresAtMs:now+ROOM_LIFE,memberIds:[uid],invitedUids:[],members:{[uid]:{uid,displayName:name(profile),joinedAtMs:now,lastSeenMs:now,status:'resting',seconds:0,subjectName:''}}});
-      tx.update(ref,{activeRoomId:roomRef.id,socialRevision:FieldValue.increment(1)});return {roomId:roomRef.id};
-    }
-    const roomId=data.roomId;
-    if(!validId(roomId))fail('invalid-argument','방 정보가 올바르지 않습니다.');
-    const roomRef=db.doc(`studyRooms/${roomId}`),room=(await tx.get(roomRef)).data();
-    if(!room)fail('not-found','방을 찾을 수 없습니다.');
-    const member=room.memberIds.includes(uid),host=room.hostUid===uid;
-    if(action==='decline') {
-      tx.delete(sub(db,uid,'roomInvites',roomId));bump(tx,ref);return {updated:true};
-    }
-    if(!openRoom(room,now))fail('failed-precondition','이미 종료되었거나 만료된 일회성 방입니다.');
-    if(action==='join') {
-      if(member)return {roomId};
-      const invitation=(await tx.get(sub(db,uid,'roomInvites',roomId))).data();
-      if(!room.invitedUids.includes(uid)||!invitation||invitation.expiresAtMs<=now)fail('permission-denied','유효한 친구 초대가 필요합니다.');
-      if(profile.activeRoomId&&profile.activeRoomId!==roomId) {
-        const previous=(await tx.get(db.doc(`studyRooms/${profile.activeRoomId}`))).data();
-        if(openRoom(previous,now)&&previous.memberIds.includes(uid))fail('already-exists','참여 중인 방에서 먼저 나가 주세요.');
-      }
-      if(room.memberIds.length>=ROOM_LIMIT)fail('resource-exhausted','방 인원이 가득 찼습니다. 최대 12명까지 참여할 수 있습니다.');
-      tx.update(roomRef,{memberIds:[...room.memberIds,uid],invitedUids:room.invitedUids.filter(id=>id!==uid),members:{...room.members,[uid]:{uid,displayName:name(profile),joinedAtMs:now,lastSeenMs:now,status:'resting',seconds:0,subjectName:''}}});
-      tx.delete(sub(db,uid,'roomInvites',roomId));tx.update(ref,{activeRoomId:roomId,socialRevision:FieldValue.increment(1)});return {roomId};
-    }
-    if(!member)fail('permission-denied','참여 중인 방에서만 사용할 수 있습니다.');
-    if(action==='invite') {
-      const ids=[...new Set(Array.isArray(data.uids)?data.uids:[])];
-      if(!ids.length||ids.length>ROOM_LIMIT-1||ids.some(id=>!validId(id)||room.memberIds.includes(id)))fail('invalid-argument','초대할 친구를 선택해 주세요.');
-      if(new Set([...room.invitedUids,...ids]).size>48)fail('resource-exhausted','대기 중인 방 초대가 너무 많습니다.');
-      const friends=await tx.getAll(...ids.map(id=>sub(db,uid,'friends',id)));
-      if(friends.some(doc=>!doc.exists))fail('permission-denied','추가한 친구에게만 초대할 수 있습니다.');
-      // Serialize invitations on recipient profiles so inbox limits cannot race.
-      const recipients=await tx.getAll(...ids.map(id=>userRef(db,id)));
-      const inboxes=await Promise.all(ids.map(id=>tx.get(userRef(db,id).collection('roomInvites').limit(50))));
-      if(inboxes.some(inbox=>inbox.size>=48))fail('resource-exhausted','친구의 초대함이 가득 찼습니다.');
-      tx.update(roomRef,{invitedUids:[...new Set([...room.invitedUids,...ids])]});
-      ids.forEach((id,index)=>{if(!recipients[index].exists)fail('not-found','친구 계정을 찾을 수 없습니다.');tx.set(sub(db,id,'roomInvites',roomId),{roomId,title:room.title,hostName:name(profile),createdAtMs:now,expiresAtMs:Math.min(room.expiresAtMs,now+30*60000)});bump(tx,userRef(db,id));});
-      return {invited:ids.length};
-    }
-    if(action==='close'&&!host)fail('permission-denied','방장만 방을 종료할 수 있습니다.');
-    if(host) {
-      const members=await tx.getAll(...room.memberIds.map(id=>userRef(db,id)));
-      const invited=room.invitedUids.length?await tx.getAll(...room.invitedUids.map(id=>userRef(db,id))):[];
-      tx.update(roomRef,{status:'closed',closedAtMs:now});
-      members.forEach(doc=>{if(doc.data()?.activeRoomId===roomId)tx.update(doc.ref,{activeRoomId:null,socialRevision:FieldValue.increment(1)});});
-      invited.forEach(doc=>{tx.delete(sub(db,doc.id,'roomInvites',roomId));if(doc.exists)bump(tx,doc.ref);});
-    } else {
-      const members={...room.members};delete members[uid];
-      tx.update(roomRef,{memberIds:room.memberIds.filter(id=>id!==uid),members});
-      if(profile.activeRoomId===roomId)tx.update(ref,{activeRoomId:null,socialRevision:FieldValue.increment(1)});
-    }
-    return {closed:host};
   });
 }
 
-export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,listScope}={}) {
+export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,listScope,includeSchoolRooms=false}={}) {
   if(listScope!=null&&!['requests','invites'].includes(listScope))fail('invalid-argument','새로고침할 목록이 올바르지 않습니다.');
   const ref=userRef(db,uid),profile=(await ref.get()).data();
   if(!profile)fail('failed-precondition','계정 설정을 먼저 완료해 주세요.');
   const result={revision:profile.socialRevision||0,code:profile.friendCode||null,room:null,serverNowMs:Date.now()};
+  result.schoolRoom=schoolRoomInfo(profile.school);
+  if(includeSchoolRooms)result.schoolRooms=await roomDirectory(db,uid,profile);
   // Listeners are unnecessary: poll only while the Play page or a room is open,
   // and reuse lists until a server-owned revision changes.
   if(includeLists&&(listScope||revision!==result.revision)) {
@@ -141,27 +84,7 @@ export async function socialSnapshot(db,uid,{revision=-1,includeLists=false,list
       result[collection]=docs.docs.map(doc=>({...doc.data(),id:doc.id}));
     }
   }
-  if(profile.activeRoomId) {
-    const roomRef=db.doc(`studyRooms/${profile.activeRoomId}`);
-    result.room=await db.runTransaction(async tx=>{
-      const currentProfile=(await tx.get(ref)).data();
-      if(currentProfile?.activeRoomId!==profile.activeRoomId)return null;
-      const room=(await tx.get(roomRef)).data(),now=Date.now();
-      if(!openRoom(room,now)||!room.memberIds.includes(uid)) {
-        tx.update(ref,{activeRoomId:null,socialRevision:FieldValue.increment(1)});return null;
-      }
-      const sessionId=currentProfile.activeSessionId;
-      const session=sessionId?(await tx.get(sub(db,uid,'sessions',sessionId))).data():null;
-      const live=session?.status==='active'&&session.presenceUntilMs>now;
-      const tracked=live&&(!(session.cameraMode||session.activityMode)||session.activeSinceMs!=null&&session.leaseUntilMs>now);
-      const seconds=live?(session.cameraMode||session.activityMode?(session.accumulatedSeconds||0)+(tracked?Math.max(0,Math.floor((Math.min(now,session.leaseUntilMs)-session.activeSinceMs)/1000)):0):Math.max(0,Math.floor((now-session.startedAt.toMillis())/1000))):0;
-      const subjectName=session?(currentProfile.subjects||[]).find(row=>row.id===session.subjectId)?.name||'기타':'';
-      const countUntilMs=tracked?Math.min(session.presenceUntilMs,session.startedAt.toMillis()+12*3600000,session.cameraMode||session.activityMode?session.leaseUntilMs:Infinity):now;
-      const members={...room.members,[uid]:{...room.members[uid],displayName:name(currentProfile),lastSeenMs:now,sampledAtMs:now,countUntilMs,status:tracked?'studying':'resting',seconds,subjectName}};
-      tx.update(roomRef,{members});
-      return {...room,id:roomRef.id,members};
-    });
-  }
+  if(profile.activeRoomId)result.room=await syncRoom(db,uid,profile.activeRoomId);
   result.serverNowMs=Date.now();
   return result;
 }

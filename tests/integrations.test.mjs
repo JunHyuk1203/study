@@ -5,6 +5,28 @@ import { chatContents, classroom, neisRows, schoolCodes, schoolDates, schoolReco
 import { schoolMonth, schoolQuery, loadSchoolData, upcomingExams, loadUpcomingExams } from '../functions/school-service.js';
 import { schoolAgent } from '../functions/school-agent.js';
 import { chatHistory, completedAnswer } from '../chat-state.js';
+import { schoolGradeLimit, schoolRoomInfo } from '../functions/integrations-domain.js';
+
+test('school grades and public room identities follow the stored school and grade',()=>{
+  const codes={officeCode:'S10',schoolCode:'9010178'};
+  for(const [kind,maximum] of [['초등학교',6],['중학교',3],['고등학교',3]]) {
+    assert.equal(schoolGradeLimit({kind}),maximum);
+    for(let grade=1;grade<=6;grade++) {
+      const school={...codes,name:`우리${kind}`,kind,grade:String(grade)};
+      if(grade<=maximum) {
+        assert.doesNotThrow(()=>classroom({grade,className:'1'},school));
+        assert.equal(schoolRoomInfo(school).id,`school_S10_9010178_${grade}`);
+      } else {
+        assert.throws(()=>classroom({grade,className:'1'},school));
+        assert.equal(schoolRoomInfo(school),null);
+      }
+    }
+  }
+  assert.equal(schoolRoomInfo(null),null);
+  assert.equal(schoolRoomInfo({...codes,kind:'고등학교',grade:'2/other'}),null);
+  assert.equal(schoolRoomInfo({...codes,kind:'특수학교',grade:'2'}),null);
+  assert.equal(schoolRoomInfo({...codes,schoolCode:'invalid',kind:'중학교',grade:'1'}),null);
+});
 
 test('empty AI replies cannot poison history or erase streamed text',()=>{
   const messages=[{role:'user',text:'다음 시험?'},{role:'model',text:''},{role:'user',text:'안녕'},{role:'model',text:'안녕하세요'}];

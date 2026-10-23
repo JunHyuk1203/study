@@ -1,6 +1,15 @@
 {
   "indexes": [
     {
+      "collectionGroup": "studyRooms",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "schoolRoomKey", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAtMs", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "sessions",
       "queryScope": "COLLECTION",
       "fields": [

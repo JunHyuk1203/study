@@ -18,6 +18,7 @@ import { cachedBriefing } from '../functions/briefing-cache.js';
 import { createDailyNeis } from '../functions/neis-cache.js';
 import {getDailyReport,getStudySocial,updateStudySocial} from '../functions/index.js';
 import {studyDate} from '../functions/report-math.js';
+import {purgeIdleRooms,ROOM_IDLE_MS} from '../functions/room-service.js';
 
 const projectId = 'demo-study';
 function mockProvider(context, generate) {
@@ -556,6 +557,131 @@ const social=(uid,action,data={})=>updateStudySocial.run({auth:socialAuth(uid),d
 const snapshot=(uid,data={})=>getStudySocial.run({auth:socialAuth(uid),data:{includeLists:true,...data}});
 async function socialUser(uid) {await ensureProfile.run({auth:socialAuth(uid),data:{displayName:uid.slice(0,20)}});return social(uid,'code');}
 
+test('school public rooms share a permanent room only with the stored school and grade',async()=>{
+  const db=getFirestore('study-data'),a='school-room-a',b='school-room-b',c='school-room-c',d='school-room-d';
+  const school={name:'테스트고등학교',kind:'고등학교',officeCode:'S10',schoolCode:'9010178',grade:'2',className:'1'};
+  for(const uid of [a,b,c,d])await socialUser(uid);
+  await db.doc(`users/${a}`).update({school});await db.doc(`users/${b}`).update({school:{...school,className:'3'}});
+  await db.doc(`users/${c}`).update({school:{...school,grade:'1'}});
+  await db.doc(`users/${d}`).update({school:{...school,schoolCode:'9010179'}});
+  const joined=await Promise.all([social(a,'joinSchool'),social(b,'joinSchool')]);
+  assert.equal(joined[0].roomId,joined[1].roomId);
+  const roomId=joined[0].roomId,room=(await snapshot(a)).room;
+  assert.equal(room.type,'school');assert.equal(room.hostUid,null);assert.equal(room.memberIds.length,2);
+  await assert.rejects(()=>social(c,'joinSchool',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(d,'joinSchool',{roomId}),error=>error.code==='permission-denied');
+  assert.notEqual((await social(c,'joinSchool')).roomId,roomId);
+  assert.notEqual((await social(d,'joinSchool')).roomId,roomId);
+  await assert.rejects(()=>social(c,'join',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(a,'close',{roomId}),error=>error.code==='permission-denied');
+  await assert.rejects(()=>social(a,'invite',{roomId,uids:[c]}),error=>error.code==='permission-denied');
+  await social(a,'leave',{roomId});assert.equal((await snapshot(b)).room.id,roomId);
+  await social(a,'joinSchool');
+  await db.doc(`users/${a}`).update({school:{...school,grade:'3'}});
+  assert.equal((await snapshot(a)).room,null);
+  assert.ok(!(await snapshot(b)).room.memberIds.includes(a));
+  await social(b,'leave',{roomId});assert.equal((await db.doc(`studyRooms/${roomId}`).get()).data().status,'open');
+  await db.doc(`users/${a}`).update({school:{...school,grade:'6'}});
+  await assert.rejects(()=>social(a,'joinSchool'),error=>error.code==='failed-precondition');
+});
+
+test('school public custom rooms are discoverable and joinable only within the same stored school and grade',async()=>{
+  const db=getFirestore('study-data'),host='public-custom-host',guest='public-custom-guest',outsider='public-custom-outsider';
+  const school={name:'공개중학교',kind:'중학교',officeCode:'S10',schoolCode:'9010123',grade:'3',className:'1'};
+  for(const uid of [host,guest,outsider]){await socialUser(uid);await db.doc(`users/${uid}`).update({school:{...school,grade:uid===outsider?'2':'3'}});}
+  const {roomId}=await social(host,'createSchoolRoom',{title:'수학 함께 해요',schoolId:'spoof',grade:'2'});
+  const own=await snapshot(guest,{includeSchoolRooms:true});
+  assert.equal(own.schoolRooms.find(row=>row.id===roomId).title,'수학 함께 해요');
+  assert.ok(!(await snapshot(outsider,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
+  await assert.rejects(()=>social(outsider,'joinSchool',{roomId}),error=>error.code==='permission-denied');
+  await social(guest,'joinSchool',{roomId});assert.equal((await snapshot(guest)).room.memberIds.length,2);
+  await assert.rejects(()=>social(guest,'createSchoolRoom',{title:'중복'}),error=>error.code==='already-exists');
+  await social(guest,'leave',{roomId});await social(host,'close',{roomId});
+  assert.ok(!(await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.some(row=>row.id===roomId));
+  await assert.rejects(()=>social(guest,'joinSchool',{roomId}),error=>error.code==='not-found');
+  const general=await social(guest,'joinSchool');assert.notEqual(general.roomId,roomId);
+});
+
+test('unified rooms support private code previews, code rotation and public/private settings',async()=>{
+  const db=getFirestore('study-data'),host='unified-host',guest='unified-guest',other='unified-other';
+  const school={name:'통합고등학교',kind:'고등학교',officeCode:'S10',schoolCode:'9010998',grade:'2',className:'1'};
+  for(const uid of [host,guest,other]){await socialUser(uid);await db.doc(`users/${uid}`).update({school:{...school,grade:uid===other?'1':'2'}});}
+  const {roomId}=await social(host,'createRoom',{title:'비공개 공부',visibility:'private'});
+  const code=await social(host,'roomCode',{roomId});
+  const preview=await social(guest,'previewCode',{code:code.code});
+  assert.equal(preview.preview.memberCount,1);assert.equal(preview.preview.members[0].isHost,true);
+  assert.equal((await db.doc(`users/${guest}`).get()).data().activeRoomId??null,null);
+  await assert.rejects(()=>social(guest,'previewRoom',{roomId}),error=>error.code==='permission-denied');
+  await social(guest,'joinCode',{code:code.code});
+  await assert.rejects(()=>social(guest,'updateRoom',{roomId,title:'위조',visibility:'public'}),error=>error.code==='permission-denied');
+  const rotated=await social(host,'roomCode',{roomId});
+  assert.equal((await db.doc(`roomCodes/${code.code}`).get()).exists,false);
+  await assert.rejects(()=>social(other,'joinCode',{code:code.code}),error=>error.code==='not-found');
+  await social(other,'joinCode',{code:rotated.code});
+  await assert.rejects(()=>social(host,'updateRoom',{roomId,title:'공개 공부',visibility:'public'}),error=>error.code==='failed-precondition');
+  await social(other,'leave',{roomId});
+  await social(host,'updateRoom',{roomId,title:'공개 공부',visibility:'public'});
+  assert.equal((await db.doc(`roomCodes/${rotated.code}`).get()).exists,false);
+  assert.ok((await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.some(room=>room.id===roomId));
+  assert.ok(!(await snapshot(other,{includeSchoolRooms:true})).schoolRooms.some(room=>room.id===roomId));
+  await social(host,'updateRoom',{roomId,title:'다시 비공개',visibility:'private'});
+  assert.ok(!(await snapshot(guest,{includeSchoolRooms:true})).schoolRooms.some(room=>room.id===roomId));
+  await social(host,'leave',{roomId});assert.equal((await snapshot(guest)).room.hostUid,host);
+});
+
+test('room cleanup deletes codes, invitations and all memberships after three hours without service visits',async()=>{
+  const db=getFirestore('study-data'),host='cleanup-host',guest='cleanup-guest',invited='cleanup-invited';
+  for(const uid of [host,guest,invited])await socialUser(uid);
+  const {roomId}=await social(host,'createRoom',{title:'정리 대상'});
+  const {code}=await social(host,'roomCode',{roomId});await social(guest,'joinCode',{code});
+  await db.doc(`users/${host}/friends/${invited}`).set({uid:invited});await social(host,'invite',{roomId,uids:[invited]});
+  const ref=db.doc(`studyRooms/${roomId}`),now=Date.now(),room=(await ref.get()).data();
+  const members=Object.fromEntries(Object.entries(room.members).map(([id,value])=>[id,{...value,lastSeenMs:now-ROOM_IDLE_MS+1000}]));
+  await ref.update({members,deleteAfterMs:now-1});
+  await purgeIdleRooms(db,now);assert.equal((await ref.get()).exists,true);
+  await purgeIdleRooms(db,now+1000);assert.equal((await ref.get()).exists,false);
+  for(const uid of [host,guest])assert.equal((await db.doc(`users/${uid}`).get()).data().activeRoomId,null);
+  assert.equal((await db.doc(`roomCodes/${code}`).get()).exists,false);
+  assert.equal((await db.doc(`users/${invited}/roomInvites/${roomId}`).get()).exists,false);
+  await assert.rejects(()=>social(invited,'previewCode',{code}),error=>error.code==='not-found');
+  const school={name:'기본중학교',kind:'중학교',officeCode:'S10',schoolCode:'9010999',grade:'1',className:'1'};
+  await db.doc(`users/${host}`).update({school});const general=await social(host,'joinSchool');
+  await purgeIdleRooms(db,now+4*3600000);assert.equal((await db.doc(`studyRooms/${general.roomId}`).get()).exists,true);
+});
+
+test('rooms disappear immediately when their last participant leaves, except permanent school rooms',async()=>{
+  const db=getFirestore('study-data'),host='last-leave-host',guest='last-leave-guest';
+  await socialUser(host);await socialUser(guest);
+  const {roomId}=await social(host,'createRoom',{title:'빈 방 정리'}),{code}=await social(host,'roomCode',{roomId});
+  await social(guest,'joinCode',{code});await social(host,'leave',{roomId});
+  assert.equal((await db.doc(`studyRooms/${roomId}`).get()).data().hostUid,host);
+  await social(guest,'leave',{roomId});
+  assert.equal((await db.doc(`studyRooms/${roomId}`).get()).exists,false);
+  assert.equal((await db.doc(`roomCodes/${code}`).get()).exists,false);
+  assert.equal((await db.doc(`users/${guest}`).get()).data().activeRoomId,null);
+});
+
+test('word activity updates room study state and service presence without an open study page',async()=>{
+  const db=getFirestore('study-data'),uid='room-word-activity';await socialUser(uid);
+  const {roomId}=await social(uid,'createRoom',{title:'단어 함께'}),auth=socialAuth(uid),controllerId='12345678-1234-1234-1234-123456789abc';
+  const camera=await startStudySession.run({auth,data:{subjectId:'other',cameraMode:true,controllerId}});
+  const cameraTime=Date.now();
+  await db.doc(`users/${uid}/sessions/${camera.sessionId}`).update({segments:splitStudyInterval(cameraTime-12000,cameraTime-2000),accumulatedSeconds:10,activeSinceMs:cameraTime-2000,leaseUntilMs:cameraTime+10000,presenceUntilMs:cameraTime+60000,startedAt:Timestamp.fromMillis(cameraTime-60000)});
+  const started=await startWordStudy.run({auth,data:{controllerId,tracking:true}});
+  let room=(await db.doc(`studyRooms/${roomId}`).get()).data();
+  assert.equal(room.members[uid].status,'studying');assert.equal(room.members[uid].subjectName,'영단어');
+  const now=Date.now(),sessionRef=db.doc(`users/${uid}/sessions/${started.sessionId}`);
+  await sessionRef.update({startedAt:Timestamp.fromMillis(now-60000),activeSinceMs:now-5000,leaseUntilMs:now+10000,presenceUntilMs:now+10000});
+  await db.doc(`studyRooms/${roomId}`).update({members:{[uid]:{...room.members[uid],lastSeenMs:now-ROOM_IDLE_MS+1000}},deleteAfterMs:now+1000});
+  await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:1,tracking:true,present:true}});
+  room=(await db.doc(`studyRooms/${roomId}`).get()).data();
+  assert.equal(room.members[uid].status,'studying');assert.ok(room.members[uid].seconds>=5);assert.ok(room.deleteAfterMs>=now+ROOM_IDLE_MS);
+  const combined=(await snapshot(uid)).room.members[uid];assert.equal(combined.status,'studying');assert.equal(combined.subjectName,'영단어');assert.ok(combined.seconds>=16);
+  await purgeIdleRooms(db,now+2000);assert.equal((await db.doc(`studyRooms/${roomId}`).get()).exists,true);
+  await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:2,tracking:false,present:true}});
+  assert.equal((await db.doc(`studyRooms/${roomId}`).get()).data().members[uid].status,'resting');
+});
+
 test('social callables require authentication and verified email; private social data stays server-only',async()=>{
   for(const callable of [getDailyReport,getStudySocial,updateStudySocial])await assert.rejects(()=>callable.run({data:{}}),error=>error.code==='unauthenticated');
   await assert.rejects(()=>getStudySocial.run({auth:{uid:'unverified',token:{}},data:{}}),error=>error.code==='failed-precondition');
@@ -581,7 +707,7 @@ test('friend codes support request, cancel, reject, accept, duplicate protection
   await social(a,'remove',{uid:b});assert.equal((await snapshot(b)).friends.length,0);
 });
 
-test('rooms require friend invitations, allow multiple guests and permanently close when host leaves',async()=>{
+test('rooms require invitations and retain the original host when the host leaves',async()=>{
   const host='room-host',guest='room-guest',outsider='room-outsider';
   const [,guestCode]=await Promise.all([socialUser(host),socialUser(guest),socialUser(outsider)]);
   await social(host,'request',{code:guestCode.code});await social(guest,'accept',{uid:host});
@@ -593,9 +719,9 @@ test('rooms require friend invitations, allow multiple guests and permanently cl
   assert.equal((await snapshot(host)).room.memberIds.length,2);
   await assert.rejects(()=>social(guest,'close',{roomId}),error=>error.code==='permission-denied');
   await assert.rejects(()=>social(guest,'createRoom',{title:'두 번째 방'}),error=>error.code==='already-exists');
-  await social(host,'leave',{roomId});assert.equal((await snapshot(guest)).room,null);
-  await assert.rejects(()=>social(guest,'join',{roomId}),error=>error.code==='failed-precondition');
-  assert.equal((await getFirestore('study-data').doc(`users/${guest}`).get()).data().activeRoomId,null);
+  await social(host,'leave',{roomId});assert.equal((await snapshot(guest)).room.hostUid,host);
+  assert.equal((await getFirestore('study-data').doc(`users/${guest}`).get()).data().activeRoomId,roomId);
+  await social(host,'join',{roomId});assert.equal((await snapshot(host)).room.memberIds.length,2);
 });
 
 test('room capacity serializes simultaneous joins and expired invitations cannot enter',async()=>{
@@ -612,7 +738,8 @@ test('room capacity serializes simultaneous joins and expired invitations cannot
   const waiting=guests.slice(10)[results.findIndex(row=>row.status==='rejected')];
   await db.doc(`users/${waiting}/roomInvites/${roomId}`).update({expiresAtMs:Date.now()-1});
   await assert.rejects(()=>social(waiting,'join',{roomId}),error=>error.code==='permission-denied');
-  await db.doc(`studyRooms/${roomId}`).update({expiresAtMs:Date.now()-1});assert.equal((await snapshot(host)).room,null);
+  const old=Date.now()-ROOM_IDLE_MS-1,room=(await db.doc(`studyRooms/${roomId}`).get()).data();
+  await db.doc(`studyRooms/${roomId}`).update({members:Object.fromEntries(Object.entries(room.members).map(([id,value])=>[id,{...value,lastSeenMs:old}]))});assert.equal((await snapshot(host)).room,null);
 });
 
 test('room snapshot derives status and seconds from server session, not submitted values',async()=>{

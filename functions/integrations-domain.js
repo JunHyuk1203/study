@@ -2,9 +2,22 @@ export function schoolCodes(data) {
   if (!/^[A-Z]\d{2}$/.test(data?.officeCode || '') || !/^\d{7}$/.test(data?.schoolCode || '')) throw new Error('invalid-school');
   return { officeCode: data.officeCode, schoolCode: data.schoolCode };
 }
-export function classroom(data) {
+export function schoolGradeLimit(school) {
+  const kind = school?.kind || school?.name || '';
+  return /초등학교$/.test(kind) ? 6 : /(?:중학교|고등학교)$/.test(kind) ? 3 : 0;
+}
+export function schoolRoomInfo(school) {
+  const limit = schoolGradeLimit(school), grade = String(school?.grade ?? '');
+  if (!limit || !/^[1-6]$/.test(grade) || Number(grade) > limit) return null;
+  try {
+    const codes = schoolCodes(school);
+    return {id:`school_${codes.officeCode}_${codes.schoolCode}_${grade}`, schoolId:`${codes.officeCode}_${codes.schoolCode}`, grade, title:`${school.name} ${grade}학년 스터디룸`};
+  } catch { return null; }
+}
+export function classroom(data, school) {
   const grade = String(data?.grade ?? ''), className = String(data?.className ?? '');
   if (!/^[1-6]$/.test(grade) || !/^[1-9]\d?$/.test(className)) throw new Error('invalid-class');
+  if (school && schoolGradeLimit(school) && Number(grade) > schoolGradeLimit(school)) throw new Error('invalid-class');
   return { grade, className };
 }
 export function neisRows(body, endpoint) {

@@ -24,6 +24,21 @@ function schoolUi() {
 }
 const overview=month=>({calendarRange:{start:`${month}-01`},date:'2026-10-21',meals:[],timetable:[],events:[],errors:{}});
 
+test('grade options shrink for middle/high schools and clear an invalid previous grade',()=>{
+  const {context}=schoolUi();
+  context.document.createElement=()=>({});
+  const select={value:'6',replaceChildren(...options){this.options=options;}};
+  context.registration={elements:{grade:select}};
+  vm.runInContext("updateGradeOptions(registration,{kind:'중학교'})",context);
+  assert.equal(select.options.length,4);assert.equal(select.value,'');
+  select.value='3';vm.runInContext("updateGradeOptions(registration,{kind:'고등학교'})",context);
+  assert.equal(select.options.length,4);assert.equal(select.value,'3');
+  vm.runInContext("updateGradeOptions(registration,{kind:'초등학교'})",context);
+  assert.equal(select.options.length,7);
+  select.value='5';vm.runInContext("updateGradeOptions(registration,{name:'중앙고등학교'})",context);
+  assert.equal(select.options.length,4);assert.equal(select.value,'');
+});
+
 test('calendar selection filters the schedule list, reset restores it, and cached Saturday closures stay hidden',async()=>{
   const {context,ui,requests,handlers}=schoolUi();
   const node=tag=>({tag,children:[],append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},hasAttribute:name=>name==='data-school-events'});

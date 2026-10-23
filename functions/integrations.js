@@ -55,7 +55,9 @@ export const saveSchool = onCall({...options, secrets:[neisKey]}, async request 
   await rateLimit(user, 'school', 20);
   const rows = await neis('schoolInfo', {ATPT_OFCDC_SC_CODE:codes.officeCode, SD_SCHUL_CODE:codes.schoolCode});
   if (!rows.length) throw new HttpsError('not-found', '학교를 찾을 수 없습니다. 다시 검색해 주세요.');
-  const school = {...schoolRecord(rows[0]), ...room}, schoolId = `${codes.officeCode}_${codes.schoolCode}`;
+  const record = schoolRecord(rows[0]);
+  input(() => classroom(room, record));
+  const school = {...record, ...room}, schoolId = `${codes.officeCode}_${codes.schoolCode}`;
   const profileRef = db.doc(`users/${user}`), week = schoolDates().days[0];
   await db.runTransaction(async tx => {
     const profile = await tx.get(profileRef);

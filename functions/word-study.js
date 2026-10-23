@@ -5,6 +5,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkpointCamera, WORD_LEASE_MS } from './domain.js';
 import {settleWordStats} from './word-stats.js';
 import {expireUserSessions} from './session-lifecycle.js';
+import {readActivityRoom,publishWordRoom} from './room-service.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
 const options = {region:'asia-northeast3',maxInstances:2,minInstances:0,memory:'256MiB',cpu:'gcf_gen1',concurrency:1,timeoutSeconds:30};
@@ -60,9 +61,11 @@ export const startWordStudy = onCall(options, async request => {
       if (subjects.length >= 30) throw new HttpsError('failed-precondition','과목이 30개입니다. 영단어 과목을 추가할 공간을 마련해 주세요.');
       subject = {id:`s_${randomUUID()}`,name:'영단어'};
     }
+    const activityRoom=await readActivityRoom(tx,db,uid,profile);
     const cameraId=cameraRef?interruptCamera(tx,cameraRef,camera,sessionRef.id,now,true):null;
     const session = {uid,subjectId:subject.id,source:'superword',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraId,presenceUntilMs:now.toMillis()+WORD_LEASE_MS};
     if(counting)Object.assign(session,checkpointCamera({...session,startedAtMs:now.toMillis()},now.toMillis(),true,WORD_LEASE_MS));
+    publishWordRoom(tx,activityRoom,uid,profile,session,now.toMillis(),true,camera);
     tx.create(sessionRef,session);
     tx.create(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:session.presenceUntilMs});
     const wordSnapshot={sessionId:sessionRef.id,subjectId:subject.id,segments:session.segments,activeSinceMs:session.activeSinceMs,leaseUntilMs:session.leaseUntilMs,serverNowMs:now.toMillis()};
@@ -88,10 +91,12 @@ export const syncWordStudy = onCall(options, async request => {
     const camera=cameraRef?(await tx.get(cameraRef)).data():null;
     const linkedCamera=profile?.activeSessionId===session.cameraSessionId && profile?.wordStudySessionId===sessionId && profile?.wordCameraSessionId===session.cameraSessionId && camera?.status==='active' && camera.cameraMode;
     if(tracking&&present&&profile?.activeSessionId!==sessionId&&!linkedCamera)throw new HttpsError('failed-precondition','얼굴인식 일시정지 확인을 먼저 완료해 주세요.');
+    const activityRoom=await readActivityRoom(tx,db,uid,profile);
     const counting=tracking&&present;
     const cameraId=cameraRef?interruptCamera(tx,cameraRef,camera,sessionId,now,counting):null;
     const presenceUntilMs=present?now.toMillis()+WORD_LEASE_MS:now.toMillis();
     const update = {...checkpointCamera({...session,startedAtMs:session.startedAt.toMillis()},now.toMillis(),tracking&&present,WORD_LEASE_MS),presenceUntilMs};
+    publishWordRoom(tx,activityRoom,uid,profile,{...session,...update},now.toMillis(),present,camera);
     const delta=settleWordStats(tx,db,uid,sessionId,session.subjectId,update.segments,session.settledSegments||[],now);
     update.settledSegments=update.segments;
     tx.update(ref,{...update,sequence,updatedAt:now});

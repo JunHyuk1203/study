@@ -10,6 +10,30 @@
 .social-launcher-badge { position:absolute;right:16px;top:12px;padding:0 6px;min-width:20px;border-radius:10px;background:var(--green);color:white;font-size:11px;text-align:center; }
 .social-dialog { width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;border:1px solid var(--border);border-radius:26px;margin:auto;background:var(--bg);color:var(--text);overflow-y:auto;overscroll-behavior:contain;box-shadow:0 24px 100px #26382133;transform-origin:center; }
 .social-dialog.report-dialog { width:min(900px,calc(100vw - 32px)); }
+.social-dialog.room-browser-dialog { width:min(560px,calc(100vw - 32px)); }
+.room-preview-card { padding:14px 0;border-bottom:1px solid var(--border); }
+.room-preview-card:last-child { border-bottom:0; }
+.room-preview-members { margin-top:8px;font-size:12px; }
+.room-preview-members summary { display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;color:var(--green); }
+.room-preview-members summary::-webkit-details-marker { display:none; }
+.room-preview-members summary::after { content:'⌄';font-size:18px;transition:transform .2s; }
+.room-preview-members[open] summary::after { transform:rotate(180deg); }
+.room-preview-list { list-style:none;padding:8px 12px;margin:8px 0 0;border-radius:12px;background:var(--sage); }
+.room-preview-list li { padding:4px 0;overflow-wrap:anywhere; }
+.room-preview-host { font-weight:700;color:var(--green); }
+.room-code-value { font-family:monospace;font-size:16px;letter-spacing:1px;user-select:all;overflow-wrap:anywhere; }
+.room-code-tools,[data-room-settings] { margin-top:18px;padding-top:14px;border-top:1px solid var(--border); }
+.social-dialog.school-join-dialog { width:min(360px,calc(100vw - 40px));border-radius:22px; }
+.school-join-dialog .social-dialog-heading { padding:16px 18px;border-bottom:0; }
+.school-join-dialog .social-dialog-heading h2 { font-size:18px; }
+.school-join-dialog .social-dialog-body { padding:0 18px 18px; }
+.school-room-destination { font-weight:600;margin-bottom:6px;overflow-wrap:anywhere; }
+.school-join-dialog .social-actions { justify-content:flex-end;margin-top:18px;gap:8px; }
+.school-join-dialog .primary-button { margin-top:0;width:auto;padding:10px 16px; }
+.school-room-directory { margin-top:20px;padding-top:16px;border-top:1px solid var(--border); }
+.school-room-directory form { margin-top:16px; }
+.school-room-directory form .primary-button { margin-top:12px;width:100%; }
+.school-room-directory .social-person { padding:10px 0; }
 .social-dialog[open] { animation:social-panel-open .36s cubic-bezier(.22,.7,.24,1) both; }
 .social-dialog.is-closing { animation:social-panel-close .22s ease-in both; }
 .social-dialog::backdrop { background:#24301e55;backdrop-filter:blur(5px);animation:social-backdrop-open .28s ease both; }

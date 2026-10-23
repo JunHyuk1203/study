@@ -6,6 +6,7 @@ import { checkpointCamera, WORD_LEASE_MS, validDisplayName, weekKey } from './do
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
 import {changeSocial, socialSnapshot} from './social-service.js';
+import {purgeIdleRooms} from './room-service.js';
 import {dailyReport} from './report-service.js';
 import {finishSession as finishSessionRecord, expireUserSessions} from './session-lifecycle.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
@@ -23,8 +24,9 @@ function userId(request, verified = false) {
 }
 
 export const getDailyReport = onCall(options, request => dailyReport(db,userId(request)));
+export const cleanupIdleStudyRooms=onSchedule({...options,schedule:'every 1 minutes',timeZone:'Asia/Seoul',timeoutSeconds:120},()=>purgeIdleRooms(db));
 export const updateStudySocial = onCall(options, request => changeSocial(db,userId(request,true),request.data?.action,request.data));
-export const getStudySocial = onCall(options, request => socialSnapshot(db,userId(request,true),{revision:request.data?.revision,includeLists:request.data?.includeLists===true,listScope:request.data?.listScope}));
+export const getStudySocial = onCall(options, request => socialSnapshot(db,userId(request,true),{revision:request.data?.revision,includeLists:request.data?.includeLists===true,listScope:request.data?.listScope,includeSchoolRooms:request.data?.includeSchoolRooms===true}));
 
 export const ensureProfile = onCall(options, async (request) => {
   const uid = userId(request);
