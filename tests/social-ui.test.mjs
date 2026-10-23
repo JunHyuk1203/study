@@ -29,6 +29,36 @@ test('unified room previews show counts, collapsible people and the three presen
   vm.runInContext("expandedRooms.add('preview-room')",context);assert.equal(vm.runInContext('previewCard(row)',context).children[1].open,true);
 });
 
+test('full and focus participant lists put self first and show self room time',()=>{
+  const {context}=setup(socialSource);
+  context.el=(tag,classes,textContent)=>({tag,classes,textContent,dataset:{},children:[],setAttribute(){},append(...children){this.children.push(...children);}});
+  const now=Date.now();context.room={hostUid:'host',memberIds:['host','guest','alice'],members:Object.fromEntries(['host','guest','alice'].map(uid=>[uid,{displayName:uid,lastSeenMs:now,status:'resting',seconds:42}]))};
+  for(const compact of [true,false]) {
+    const cards=vm.runInContext(`peerCards(room,${compact})`,context).children;
+    assert.equal(cards[0].children.find(child=>child.tag==='strong').textContent,'alice (나)');
+    assert.equal(cards[0].children.find(child=>child.classes==='room-peer-time').textContent,'00:00:42');
+    assert.equal(cards[1].children.find(child=>child.tag==='strong').textContent,'host · 방장');
+  }
+});
+test('late room polls cannot rewind a more recent confirmed resume',()=>{
+  const {context}=setup(socialSource);
+  context.previous={id:'room',memberIds:['alice'],members:{alice:{sampledAtMs:200,status:'studying'}}};
+  context.next={id:'room',memberIds:['alice'],members:{alice:{sampledAtMs:100,status:'resting'}}};
+  assert.equal(vm.runInContext('mergeRoomSnapshot(previous,next).members.alice.status',context),'studying');
+  context.next.memberIds=[];context.next.members={};
+  assert.equal(vm.runInContext('Object.keys(mergeRoomSnapshot(previous,next).members).length',context),0);
+});
+
+test('confirmed camera room acknowledgements update self and reject an older reply',()=>{
+  const {context,events}=setup(socialSource);
+  vm.runInContext("paint=()=>{};state.room={id:'room',memberIds:['alice','peer'],members:{alice:{sampledAtMs:10,status:'resting'},peer:{sampledAtMs:10,status:'studying'}}}",context);
+  events['study:room-activity']({detail:{roomId:'room',member:{sampledAtMs:20,status:'studying',seconds:50}}});
+  assert.equal(vm.runInContext('state.room.members.alice.status',context),'studying');
+  events['study:room-activity']({detail:{roomId:'room',member:{sampledAtMs:15,status:'resting',seconds:0}}});
+  assert.equal(vm.runInContext('state.room.members.alice.seconds',context),50);
+  assert.equal(vm.runInContext('state.room.members.peer.status',context),'studying');
+});
+
 test('room browser shows participation and creation only until joined, then restores them after leaving',()=>{
   const {context}=setup(socialSource),current={hidden:true},join={hidden:false},create={hidden:false};
   context.document.querySelectorAll=selector=>selector==='[data-room-current]'?[current]:selector==='[data-room-browse]'?[join,create]:[];

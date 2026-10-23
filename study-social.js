@@ -1,8 +1,8 @@
 import {authReady,getAuthUser} from './auth.js?v=20261022-1';
-import {getStudyData} from './data.js?v=20261023-6';
+import {getStudyData} from './data.js?v=20261023-7';
 import {studyCall,serviceError,element as el,duration} from './study-api.js';
 import {showToast} from './notifications.js?v=20261022-18';
-import {roomClock,memberTime,memberStatus} from './room-time.js?v=20261023-15';
+import {roomClock,memberTime,memberStatus} from './room-time.js?v=20261023-16';
 import {openSocialPanel} from './social-dialog.js?v=20261023-8';
 let state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};
 let revision=-1,owner=null,requesting=false,busy=false,lastPoll=0,epoch=0,lastError='';
@@ -20,17 +20,33 @@ function list(selector,rows,fallback,render) {
 }
 function peerCards(room,compact=false) {
   const grid=el('div',compact?'room-peers room-peers-compact':'room-peers');
-  for(const id of room.memberIds) {
+  const ownUid=getAuthUser()?.uid;
+  for(const id of [...room.memberIds].sort((a,b)=>Number(b===ownUid)-Number(a===ownUid))) {
     const member=room.members[id];if(!member)continue;
     const statusValue=memberStatus(member,roomNow()),away=statusValue==='offline',studying=statusValue==='studying';
     const card=el('article',`room-peer${studying?' is-studying':''}`),avatar=el('div','room-avatar',studying?'◷':'☕');avatar.setAttribute('aria-hidden','true');
     const timer=el('span','room-peer-time',roomClock(memberTime(member,roomNow())));timer.dataset.roomMemberTime=id;
     const status=el('span','room-peer-status',away?'오프라인':studying?'공부중':'쉬는중');status.dataset.roomMemberStatus=id;
     card.append(avatar,el('strong','',`${member.displayName}${id===getAuthUser()?.uid?' (나)':''}${id===room.hostUid?' · 방장':''}`),status,el('span','tiny muted',member.subjectName||'시작 전'));
-    if(!compact||id!==getAuthUser()?.uid)card.append(timer);
+    card.append(el('span','tiny muted','오늘 이 방에서 공부한 시간'),timer);
     grid.append(card);
   }
   return grid;
+}
+function roomLeaders(room) {
+  const root=el('section','room-leaders');root.setAttribute('aria-label','이 방의 공부시간 1위');
+  for(const [period,label] of [['today','오늘 1위'],['week','이번 주 1위'],['month','이번 달 1위']]) {
+    const rank=room.rankings?.[period],card=el('div','room-leader');
+    card.append(el('span','tiny muted',label),el('strong','',rank?.winners?.length?rank.winners.map(row=>`${row.displayName}${row.uid===getAuthUser()?.uid?' (나)':''}`).join(' · '):'아직 기록이 없어요'),el('span','room-peer-time',roomClock(rank?.seconds||0)));
+    root.append(card);
+  }
+  return root;
+}
+function mergeRoomSnapshot(previous,next) {
+  if(!previous||!next||previous.id!==next.id)return next;
+  const members={...next.members};let newer=false;
+  for(const uid of next.memberIds||[])if(previous.members?.[uid]?.sampledAtMs>(members[uid]?.sampledAtMs??0)){members[uid]=previous.members[uid];newer=true;}
+  return {...next,members,...(newer?{rankings:previous.rankings}:{})};
 }
 function tickRoomTimers() {
   if(document.hidden||!state.room)return;
@@ -63,7 +79,7 @@ function previewCard(row,action='join') {
   const details=el('details','room-preview-members');details.dataset.roomPreviewId=row.id;details.open=expandedRooms.has(row.id);
   const summary=el('summary','',`참여자 ${row.memberCount}명 보기`),people=el('ul','room-preview-list');
   if(row.permanent)people.append(el('li','muted','기본방 · 방장 없음'));
-  for(const person of row.members||[])people.append(el('li',person.isHost?'room-preview-host':'',`${person.isHost?'방장 · ':''}${person.displayName} · ${person.status==='offline'||!person.online?'오프라인':person.status==='studying'?'공부중':'쉬는중'}${person.participating===false?' · 미참여':''}`));
+  for(const person of row.members||[])people.append(el('li',person.isHost?'room-preview-host':'',`${person.isHost?'방장 · ':''}${person.displayName}${person.isSelf?' (나)':''} · ${person.status==='offline'||!person.online?'오프라인':person.status==='studying'?'공부중':'쉬는중'}${person.participating===false?' · 미참여':''}`));
   if(!row.memberCount)people.append(el('li','muted','아직 참여자가 없어요.'));
   details.append(summary,people);card.append(details);return card;
 }
@@ -121,10 +137,10 @@ function paint() {
       invite.hidden=(room.visibility||(room.type==='school'?'public':'private'))!=='private';
       invite.append(el('h4','','친구 여러 명 초대하기'));const choices=el('div','room-invite-choices');choices.dataset.inviteChoices='';
       const send=el('button','secondary-button','선택한 친구 초대');send.type='submit';invite.append(choices,send);
-      root.append(heading,count,peers,link,el('p','tiny muted','공부시간은 매초 표시되며 서버와 주기적으로 동기화됩니다. 휴식·연결 만료 시에는 멈춥니다.'),invite);
+      root.append(heading,count,peers,link,el('p','tiny muted','이 방에서 공부한 시간만 별도로 누적합니다. 같은 방 재입장 시 이어지며, 오늘 시간은 자정에 초기화됩니다. 이번 주는 월요일부터 집계합니다.'),invite);
     }
     root.querySelector('[data-room-count]').textContent=`${room.memberIds.length}${room.permanent||!room.hostUid&&room.type==='school'?'':'/12'}명 참여 중 · 영상·음성 전송 없이 상태 공유`;
-    root.querySelector('[data-room-peers]').replaceChildren(peerCards(room));
+    root.querySelector('[data-room-peers]').replaceChildren(roomLeaders(room),peerCards(room));
     const choices=root.querySelector('[data-invite-choices]'),friends=state.friends.filter(row=>!room.memberIds.includes(row.uid));
     const signature=JSON.stringify(friends.map(row=>[row.uid,row.displayName,room.invitedUids.includes(row.uid)]));
     if(choices.dataset.signature!==signature) {
@@ -144,7 +160,7 @@ function paintDock() {
   const focus=document.querySelector('.camera-focus .focus-content');
   if(focus) {
     if(!dock||!focus.contains(dock)){dock?.remove();dock=el('section','room-focus-peers');dock.dataset.roomDock='';focus.append(dock);}
-    dock.replaceChildren(el('h3','',`${state.room.title} · ${state.room.memberIds.length}명`),peerCards(state.room,true));
+    dock.replaceChildren(el('h3','',`${state.room.title} · ${state.room.memberIds.length}명`),roomLeaders(state.room),peerCards(state.room,true));
   } else if(!document.querySelector('[data-room-panel]')) {
     if(!dock||dock.tagName!=='A'){dock?.remove();dock=el('a','room-dock');dock.dataset.roomDock='';dock.href='study.html#study-room';document.body.append(dock);}
     dock.textContent=`◷ ${state.room.title} · ${state.room.memberIds.length}명 함께 공부 중`;
@@ -156,7 +172,7 @@ async function poll(force=false,listScope) {
   if(requesting){if(force){refreshQueue.add(listScope||'all');if(listScope){refreshing.add(listScope);paintRefreshButtons();}}return;}
   const data=getStudyData();if(!data.ready||!data.profile)return;
   if(!play&&!state.room&&!data.profile.activeRoomId)return;
-  const period=state.room?10000:20000;
+  const period=state.room?5000:20000;
   if(!force&&Date.now()-lastPoll<period)return;
   requesting=true;lastPoll=Date.now();const token=epoch,uid=user.uid;
   if(listScope){refreshing.add(listScope);paintRefreshButtons();}
@@ -164,7 +180,7 @@ async function poll(force=false,listScope) {
     const next=await studyCall('getStudySocial',{revision,includeLists:play,...(document.querySelector('[data-social-panel="rooms"][open]')?{includeSchoolRooms:true}:{}),...(listScope?{listScope}:{})});
     if(token!==epoch||getAuthUser()?.uid!==uid)return;
     const previousRoom=state.room;
-    state={...state,...next};if(play&&!listScope)revision=next.revision;
+    state={...state,...next,room:mergeRoomSnapshot(previousRoom,next.room)};if(play&&!listScope)revision=next.revision;
     if(Number.isFinite(next.serverNowMs))roomClockAnchor={serverMs:next.serverNowMs,localMs:performance.now()};
     if(previousRoom&&!state.room)showToast('스터디룸이 종료되었거나 만료되었습니다.');
     lastError='';paint();
@@ -230,6 +246,14 @@ window.addEventListener('study:navigated',navigate);
 window.addEventListener('study:panel-opened',event=>{if(event.detail?.kind==='rooms')void poll(true);});
 window.addEventListener('study:data-changed',()=>{paintSchoolEntry();paintDock();void poll();});
 window.addEventListener('study:camera-changed',paintDock);
+window.addEventListener('study:room-activity',event=>{
+  const update=event.detail,uid=getAuthUser()?.uid;
+  if(!uid||!state.room||update?.roomId!==state.room.id||!state.room.memberIds.includes(uid)||!update.member)return;
+  if((state.room.members[uid]?.sampledAtMs??0)>update.member.sampledAtMs)return;
+  state.room={...state.room,members:{...state.room.members,[uid]:update.member},rankings:update.rankings||state.room.rankings};
+  if(Number.isFinite(update.serverNowMs))roomClockAnchor={serverMs:update.serverNowMs,localMs:performance.now()};
+  paint();
+});
 window.addEventListener('study:auth-changed',()=>{
   const uid=getAuthUser()?.uid||null;if(uid===owner)return;owner=uid;epoch++;revision=-1;lastPoll=0;lastError='';roomClockAnchor=null;refreshQueue.clear();refreshing.clear();for(const dialog of document.querySelectorAll('[data-social-panel][open]'))dialog.close();expandedRooms.clear();state={friends:[],friendRequests:[],sentRequests:[],roomInvites:[],room:null,code:null};paint();void poll(true);
 });

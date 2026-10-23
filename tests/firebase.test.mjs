@@ -718,11 +718,11 @@ test('word activity updates room study state and service presence without an ope
   assert.equal(room.members[uid].status,'studying');assert.equal(room.members[uid].subjectName,'영단어');
   const now=Date.now(),sessionRef=db.doc(`users/${uid}/sessions/${started.sessionId}`);
   await sessionRef.update({startedAt:Timestamp.fromMillis(now-60000),activeSinceMs:now-5000,leaseUntilMs:now+10000,presenceUntilMs:now+10000});
-  await db.doc(`studyRooms/${roomId}`).update({members:{[uid]:{...room.members[uid],lastSeenMs:now-ROOM_IDLE_MS+1000}},deleteAfterMs:now+1000});
+  await db.doc(`studyRooms/${roomId}`).update({members:{[uid]:{...room.members[uid],joinedAtMs:now-60000,sampledAtMs:now-5000,lastSeenMs:now-ROOM_IDLE_MS+1000}},deleteAfterMs:now+1000});
   await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:1,tracking:true,present:true}});
   room=(await db.doc(`studyRooms/${roomId}`).get()).data();
   assert.equal(room.members[uid].status,'studying');assert.ok(room.members[uid].seconds>=5);assert.ok(room.deleteAfterMs>=now+ROOM_IDLE_MS);
-  const combined=(await snapshot(uid)).room.members[uid];assert.equal(combined.status,'studying');assert.equal(combined.subjectName,'영단어');assert.ok(combined.seconds>=16);
+  const combined=(await snapshot(uid)).room.members[uid];assert.equal(combined.status,'studying');assert.equal(combined.subjectName,'영단어');assert.ok(combined.seconds>=5&&combined.seconds<10); // Excludes the camera session's pre-room total.
   await purgeIdleRooms(db,now+2000);assert.equal((await db.doc(`studyRooms/${roomId}`).get()).exists,true);
   await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:2,tracking:false,present:true}});
   assert.equal((await db.doc(`studyRooms/${roomId}`).get()).data().members[uid].status,'resting');
@@ -791,14 +791,14 @@ test('room capacity serializes simultaneous joins and expired invitations cannot
   await db.doc(`studyRooms/${roomId}`).update({members:Object.fromEntries(Object.entries(room.members).map(([id,value])=>[id,{...value,lastSeenMs:old}]))});assert.equal((await snapshot(host)).room,null);
 });
 
-test('room snapshot derives status and seconds from server session, not submitted values',async()=>{
+test('room snapshot derives status from the server and excludes session time before room tracking',async()=>{
   const db=getFirestore('study-data'),uid='room-presence';await socialUser(uid);
   const {roomId}=await social(uid,'createRoom',{title:'실제 기록'}),now=Date.now();
   const ref=db.doc(`users/${uid}/sessions/room-server-session-123`);
   await ref.set({uid,status:'active',subjectId:'other',cameraMode:true,startedAt:Timestamp.fromMillis(now-60000),presenceUntilMs:now+60000,accumulatedSeconds:15,activeSinceMs:now-2000,leaseUntilMs:now+10000});
   await db.doc(`users/${uid}`).update({activeSessionId:ref.id});
   const result=await snapshot(uid,{seconds:99999,status:'studying'}),member=result.room.members[uid];
-  assert.equal(member.status,'studying');assert.ok(member.seconds>=17&&member.seconds<25);
+  assert.equal(member.status,'studying');assert.equal(member.seconds,0);assert.equal(member.roomTimer,true);
   assert.equal(member.sampledAtMs,member.lastSeenMs);assert.equal(member.countUntilMs,now+10000);
   assert.ok(result.serverNowMs>=member.sampledAtMs);
   await ref.update({activeSinceMs:null});assert.equal((await snapshot(uid)).room.members[uid].status,'resting');

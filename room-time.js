@@ -7,12 +7,19 @@ export function roomClock(seconds=0) {
 // Keep the last reported state until a new snapshot or the presence timeout.
 export function memberStatus(member,nowMs) {
   if(!member||nowMs-member.lastSeenMs>=45000)return 'offline';
+  if(member.status==='studying'&&member.statusUntilMs!=null&&nowMs>=member.statusUntilMs)return 'offline';
   return member.status==='studying'?'studying':'resting';
 }
 
 // Extrapolate only the active interval confirmed by the server. An expired
 // camera lease, pause or lost connection must never keep the display counting.
 export function memberTime(member,nowMs) {
+  if(member?.roomTimer) {
+    const date=new Date(nowMs+9*3600000).toISOString().slice(0,10),start=Date.parse(`${date}T00:00:00+09:00`);
+    const saved=member.studyDate===date?Math.max(0,Number(member.studyMs)||0):0;
+    const pending=member.status==='studying'?Math.max(0,Math.min(nowMs,member.countUntilMs??nowMs)-Math.max(member.sampledAtMs??nowMs,start)):0;
+    return Math.floor((saved+pending)/1000);
+  }
   const saved=Math.max(0,Number(member?.seconds)||0);
   if(!member||member.status!=='studying')return saved;
   const sampledAt=Number(member.sampledAtMs??member.lastSeenMs);

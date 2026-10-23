@@ -3,6 +3,7 @@ import {HttpsError} from 'firebase-functions/v2/https';
 import {advanceStreak, checkpointCamera, MAX_SESSION_MS, WORD_LEASE_MS, splitStudyInterval} from './domain.js';
 import {creditFocusTime} from './focus-time.js';
 import {settleWordStats} from './word-stats.js';
+import {readActivityRoom,publishRoomActivity} from './room-service.js';
 
 export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId)) throw new HttpsError('invalid-argument', '학습 기록 ID가 올바르지 않습니다.');
@@ -25,7 +26,9 @@ export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) 
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     const startedMs = session.startedAt.toMillis();
     const endedMs = Math.max(startedMs,Math.min(now.toMillis(), startedMs + MAX_SESSION_MS, session.presenceUntilMs??Infinity));
+    const activity=await readActivityRoom(transaction,db,uid,profile);
     const checkpoint = session.cameraMode || session.activityMode ? checkpointCamera({ ...session, startedAtMs: startedMs }, endedMs, false) : null;
+    if(activity&&(!activity.room.members[uid]?.activitySource||activity.room.members[uid].activitySource===(wordSession?'word':'camera')))publishRoomActivity(transaction,activity,uid,profile,null,now.toMillis(),'',wordSession?'word':'camera');
     if(camera?.status==='active' && camera.wordSessionId===sessionId)transaction.update(cameraRef,{...checkpointCamera({...camera,startedAtMs:camera.startedAt.toMillis()},now.toMillis(),false),wordSessionId:null,wordLeaseUntilMs:null,wordPaused:false,sequence:(camera.sequence||0)+1,updatedAt:now});
     const segments = checkpoint ? checkpoint.segments : splitStudyInterval(startedMs, endedMs);
     const creditedSeconds = segments.reduce((sum, segment) => sum + segment.seconds, 0);

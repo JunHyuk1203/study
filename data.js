@@ -386,6 +386,7 @@ async function syncCamera(force = false, wordChanged = false) {
     const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')({ sessionId, controllerId: cameraController, tracking, sequence });
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
+    if(result?.data?.roomActivity)window.dispatchEvent(new CustomEvent('study:room-activity',{detail:result.data.roomActivity}));
     if(result?.data?.ignored)cameraResumeSequence=Math.max(cameraResumeSequence||0,(state.active?.sequence||sequence)+1);
     cameraLastTracking = tracking;
     cameraLastWordPaused = wordPaused;

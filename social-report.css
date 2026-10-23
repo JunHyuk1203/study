@@ -90,6 +90,10 @@ form:has(select[name="visibility"] option[value="private"]:checked) .room-grade-
 .room-avatar { width:42px;height:42px;display:grid;place-items:center;border-radius:50%;background:var(--paper);font-size:24px; }
 .room-peer-status { color:var(--green);font-size:11px; }
 .room-peer-time { font-variant-numeric:tabular-nums;font-size:14px;font-weight:700; }
+.room-leaders { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px; }
+.room-leader { display:flex;flex-direction:column;gap:5px;min-width:0;padding:12px 8px;border:1px solid var(--border);border-radius:12px;background:var(--sage); }
+.room-leader strong { font-size:11px;overflow-wrap:anywhere; }
+.room-leader .room-peer-time { font-size:12px; }
 .room-invite-form { margin-top:24px;padding-top:18px;border-top:1px solid var(--border); }
 .room-invite-form h4 { margin:0 0 10px; }
 .room-invite-choices { max-height:240px;overflow-y:auto; }

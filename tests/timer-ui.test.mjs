@@ -116,14 +116,14 @@ test('camera startup errors keep the focus exit enabled and close without saving
 
 function timerUi(skew) {
   let now=100000,monotonic=0;
-  const handlers={},display={textContent:''},focusDisplay={textContent:''},focusState={textContent:''},camera={tracking:true,enabled:true};
+  const handlers={},events=[],display={textContent:''},focusDisplay={textContent:''},focusState={textContent:''},camera={tracking:true,enabled:true};
   let stopped=0,closed=0,holdClose=false,releaseClose,navigation;
   const context=vm.createContext({
-    Date:class extends Date {static now(){return now+skew;}},performance:{now:()=>monotonic},
+    Date:class extends Date {static now(){return now+skew;}},performance:{now:()=>monotonic},CustomEvent:class {constructor(type,{detail}){this.type=type;this.detail=detail;}},
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>null,
     stopCamera:()=>{stopped++;camera.enabled=false;},closeCameraFocus:()=>{closed++;return holdClose?new Promise(resolve=>{releaseClose=resolve;}):Promise.resolve();},
     document:{hidden:false,querySelectorAll:selector=>selector==='[data-active-timer]'?[display,focusDisplay]:selector==='.camera-focus [data-active-timer]'?[focusDisplay]:selector==='.camera-focus [data-timer-state]'?[focusState]:[],addEventListener(){}},
-    window:{location:{pathname:'/study.html',assign:path=>{navigation=path;}},addEventListener:(name,handler)=>{handlers[name]=handler;},setInterval(){}},
+    window:{location:{pathname:'/study.html',assign:path=>{navigation=path;}},addEventListener:(name,handler)=>{handlers[name]=handler;},dispatchEvent:event=>events.push(event),setInterval(){}},
   });
   vm.runInContext(`${source}\nglobalThis.ui={observeSession,observeCameraReply,observeActiveSnapshot,paintTimer,syncCamera,stopReplacedCamera,message:cameraTimerMessage,setProfile:value=>{state.profile=value;},setActiveId:value=>{activeId=value;},syncState:()=>({busy:cameraSyncBusy,failed:cameraSyncFailed})};`,context);
   const configure = (send, sessionId = 'session') => {
@@ -131,11 +131,18 @@ function timerUi(skew) {
     context.sessionId = sessionId;
     vm.runInContext('call=()=>send;state.profile={activeSessionId:sessionId};', context);
   };
-  return {display,focusDisplay,focusState,camera,handlers,ui:context.ui,configure,navigation:()=>navigation,stops:()=>({stopped,closed}),holdClose:()=>{holdClose=true;},releaseClose:()=>releaseClose?.(),shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
+  return {display,focusDisplay,focusState,camera,handlers,events,ui:context.ui,configure,navigation:()=>navigation,stops:()=>({stopped,closed}),holdClose:()=>{holdClose=true;},releaseClose:()=>releaseClose?.(),shiftClock:ms=>{now+=ms;},tick:ms=>{now+=ms;monotonic+=ms;},snapshot:(seconds,active=true,sequence=1)=>({
     cameraMode:true,controllerId:'controller',sequence,accumulatedSeconds:seconds,
     updatedAt:{toMillis:()=>now},activeSinceMs:active?now:null,leaseUntilMs:active?now+30000:null,
   })};
 }
+
+test('camera acknowledgements publish the confirmed room state immediately',async()=>{
+  const t=timerUi(0),roomActivity={roomId:'room',member:{status:'studying',seconds:5}};
+  t.configure(async()=>({data:{roomActivity}}));t.ui.observeSession(t.snapshot(0));
+  await t.ui.syncCamera();
+  assert.equal(t.events.length,1);assert.equal(t.events[0].type,'study:room-activity');assert.equal(t.events[0].detail,roomActivity);
+});
 
 test('failed camera session creation displays the error inside the focus screen',async()=>{
   const clicks=[],camera={enabled:true,tracking:true,status:'tracking'};

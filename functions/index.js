@@ -2,11 +2,12 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { checkpointCamera, WORD_LEASE_MS, validDisplayName, weekKey } from './domain.js';
+import { checkpointCamera, WORD_LEASE_MS, CAMERA_PRESENCE_MS, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
 import {changeSocial, socialSnapshot} from './social-service.js';
-import {purgeIdleRooms} from './room-service.js';
+import {purgeIdleRooms,readActivityRoom,publishRoomActivity} from './room-service.js';
+import {roomRankings} from './room-study.js';
 import {dailyReport} from './report-service.js';
 import {finishSession as finishSessionRecord, expireUserSessions} from './session-lifecycle.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
@@ -81,7 +82,7 @@ export const startStudySession = onCall(options, async (request) => {
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     if(profile.data().wordHandoffUntilMs>Date.now())throw new HttpsError('failed-precondition','단어앱 학습으로 전환 중입니다. 잠시 후 다시 시작해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
-    session = { uid, subjectId, status: 'active', presenceUntilMs:now.toMillis()+WORD_LEASE_MS,...(controllerId?{controllerId}:{}),
+    session = { uid, subjectId, status: 'active', presenceUntilMs:now.toMillis()+(cameraMode?CAMERA_PRESENCE_MS:WORD_LEASE_MS),...(controllerId?{controllerId}:{}),
       ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) };
     transaction.create(sessionRef, { ...session, startedAt: now, createdAt: now });
     transaction.set(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:session.presenceUntilMs});
@@ -100,17 +101,21 @@ export const syncStudyCamera = onCall(options, async request => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`);
     const record = await transaction.get(ref);
     const session = record.data();
-    // Session finish and checkpoints serialize on this same document. Reading
-    // the profile again on every heartbeat adds no protection to that invariant.
     if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
     if (sequence <= session.sequence) return { ignored: true, session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()} };
+    const profile=(await transaction.get(db.doc(`users/${uid}`))).data();
+    const activity=await readActivityRoom(transaction,db,uid,profile);
     const wordPaused=Boolean(session.wordSessionId && session.wordLeaseUntilMs>Date.now());
     const update = {...checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking&&!wordPaused),wordPaused,...(!wordPaused?{wordSessionId:null,wordLeaseUntilMs:null}:{wordSessionId:session.wordSessionId,wordLeaseUntilMs:session.wordLeaseUntilMs})};
     const updatedAt = Timestamp.now();
-    transaction.update(ref, { ...update, sequence, presenceUntilMs:updatedAt.toMillis()+WORD_LEASE_MS, updatedAt });
-    transaction.set(db.doc(`wordStudyLeases/${sessionId}`),{uid,sessionId,expiresAtMs:updatedAt.toMillis()+WORD_LEASE_MS});
-    return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, presenceUntilMs:updatedAt.toMillis()+WORD_LEASE_MS, sequence, serverNowMs: updatedAt.toMillis() } };
+    const presenceUntilMs=updatedAt.toMillis()+CAMERA_PRESENCE_MS;
+    // Publish the confirmed state in the SAME transaction as the camera checkpoint.
+    // Waiting for the owner's separate room poll left resumed peers resting for ~20s.
+    const roomPatch=!wordPaused?publishRoomActivity(transaction,activity,uid,profile,{...session,...update,presenceUntilMs},updatedAt.toMillis(),(profile?.subjects||[]).find(row=>row.id===session.subjectId)?.name||'기타'):null;
+    transaction.update(ref, { ...update, sequence, presenceUntilMs, updatedAt });
+    transaction.set(db.doc(`wordStudyLeases/${sessionId}`),{uid,sessionId,expiresAtMs:presenceUntilMs});
+    return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, presenceUntilMs, sequence, serverNowMs: updatedAt.toMillis() },...(roomPatch?{roomActivity:{roomId:activity.ref.id,member:roomPatch.members[uid],rankings:roomRankings({...activity.room,...roomPatch},updatedAt.toMillis()),serverNowMs:updatedAt.toMillis()}}:{}) };
   });
 });
 
