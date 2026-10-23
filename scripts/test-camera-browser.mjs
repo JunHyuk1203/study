@@ -103,7 +103,7 @@ try {
     else assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
   }
   const controllerResult = await page.evaluate(async () => {
-    const camera = await import('/camera.js?v=20261023-4');
+    const camera = await import('/camera.js?v=20261023-5');
     camera.openCameraFocus(document.querySelector('[data-camera-toggle]'));
     if (!await camera.startCamera()) throw new Error(camera.cameraState().message);
     try {
@@ -145,7 +145,7 @@ try {
   for(const width of [390,1280]){
     await page.setViewportSize({width,height:900});
     const layout=await page.evaluate(async()=>{
-      const {createFocusTracker}=await import('/camera-focus.js?v=20261023-4');
+      const {createFocusTracker}=await import('/camera-focus.js?v=20261023-5');
       const {paintCameraDebug}=await import('/camera-debug.js?v=20261023-3');
       const tracker=createFocusTracker();
       for(let t=0;t<=10000;t+=500)tracker.update({reliable:true,face:true,body:false,activityVector:[.5,.5,.5,.5,0,.4,0,0,0]},t);

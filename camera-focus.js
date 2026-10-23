@@ -1,6 +1,6 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261023-2';
-export const FOCUS_LIMITS = Object.freeze({ sleep: 750, phone: 750, away: 1000, idle: 22500, resume: 2000, gap: 3000 });
+export const FOCUS_LIMITS = Object.freeze({ sleep: 750, phone: 750, away: 3000, idle: 22500, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',
@@ -13,11 +13,13 @@ export function createFocusTracker() {
   const idle = createIdleTracker(FOCUS_LIMITS.idle);
   let trackingNow = false;
   let lastSignals = null;
+  let missingSince = null;
   function reset() {
     lastTime = candidate = since = healthySince = warning = null;
     idle.reset();
     trackingNow = false;
     lastSignals = null;
+    missingSince = null;
   }
   function update(signals, now) {
     if (!Number.isFinite(now)) throw new TypeError('A monotonic timestamp is required');
@@ -26,9 +28,10 @@ export function createFocusTracker() {
     lastSignals = signals;
     const valid = signals?.reliable === true;
     const visible = valid && signals.face;
-    if (!visible || signals.phoneUse) idle.reset();
+    missingSince = valid && !signals.face ? missingSince ?? now : null;
+    if (!valid || signals.phoneUse || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
     const idleState = visible && !signals.eyesClosed && !signals.phoneUse ? idle.update(signals, now) : idle.state(now);
-    const reason = !valid ? 'unknown' : signals.phoneUse ? 'phone' : !signals.face && !signals.body ? 'away' :
+    const reason = !valid ? 'unknown' : signals.phoneUse ? 'phone' : !signals.face ? 'away' :
       signals.eyesClosed && signals.face ? 'sleep' :
       !visible ? 'unknown' : idleState.confirmed ? 'idle' : null;
     if (reason) {

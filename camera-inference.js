@@ -15,8 +15,9 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   const face = faceResult.faceLandmarks?.[0];
   const pose = poseResult.landmarks?.[0];
   const body = Boolean(pose && [11, 12].every(i => visiblePoint(pose[i])));
-  const faceValid = Boolean(face && [1, 33, 133, 159, 145, 263, 362, 386, 374, 468, 473,
-    160, 158, 153, 144, 385, 387, 373, 380].every(i => finitePoint(face[i])));
+  const faceValid = Boolean(face && [1, 33, 263].every(i => finitePoint(face[i])) && distance(face[33],face[263]) > .01);
+  const eyesValid = faceValid && [133,362,160,158,153,144,385,387,373,380].every(i => finitePoint(face[i]));
+  const irisValid = faceValid && [133,362,159,145,386,374,468,473].every(i => finitePoint(face[i]));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
   const wrists = pose ? [15, 16].map(i => pose[i]).filter(visiblePoint) : [];
   const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
@@ -40,24 +41,39 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
     (o.class === 'book' && hands.some(p => nearBox(p, o.box))));
   const blends = Object.fromEntries((faceResult.faceBlendshapes?.[0]?.categories || []).map(c => [c.categoryName, c.score]));
-  const eyesClosed = faceValid && ((eyeAspect(face, 33, 160, 158, 133, 153, 144) < .16 &&
+  const eyesClosed = faceValid && ((eyesValid && eyeAspect(face, 33, 160, 158, 133, 153, 144) < .16 &&
     eyeAspect(face, 362, 385, 387, 263, 373, 380) < .16) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
-  const gaze = faceValid ? [
+  const gaze = irisValid ? [
     (face[468].x - face[33].x) / Math.max(.001, Math.abs(face[133].x - face[33].x)),
     (face[473].x - face[362].x) / Math.max(.001, Math.abs(face[263].x - face[362].x)),
-  ] : [];
+  ] : [.5,.5];
   const eyeWidth = faceValid ? Math.max(.01, distance(face[33], face[263])) : 1;
   const headDirection = faceValid ? [(head.x - eyeMid.x) / eyeWidth, (head.y - eyeMid.y) / eyeWidth,
     Math.atan2(face[263].y - face[33].y, face[263].x - face[33].x)] : [];
-  const verticalGaze = faceValid ? [
+  const verticalGaze = irisValid ? [
     (face[468].y - (face[159].y + face[145].y) / 2) / Math.max(.01, distance(face[33], face[133])),
     (face[473].y - (face[386].y + face[374].y) / 2) / Math.max(.01, distance(face[362], face[263])),
-  ] : [];
+  ] : [0,0];
   const activityVector = faceValid ? [head.x, head.y, ...gaze, ...headDirection, ...verticalGaze] : null;
   const studyPoints = [pose?.[15], pose?.[16], ...(handResult.landmarks || []).map(hand => hand[8])].map(p =>
     visiblePoint(p) ? { x: p.x, y: p.y } : null);
   return { reliable: true, face: faceValid, body, eyesClosed, phoneUse, phoneEvidence,
     studyActivity: false, studyContext, studyPoints, activityVector };
+}
+
+export function createFaceContinuity(holdMs = 3000) {
+  let points = null, missingSince = null, lastUpdate = null;
+  return {
+    update(result, time) {
+      const face=result.faceLandmarks?.[0];
+      if (lastUpdate !== null && (time<lastUpdate || time-lastUpdate>holdMs)) points=null;
+      lastUpdate=time;
+      if (face && [1,33,263].every(i=>finitePoint(face[i])) && distance(face[33],face[263])>.01) {
+        points=[face[1],face[33],face[263]].map(p=>({x:p.x,y:p.y,z:p.z}));missingSince=null;
+      } else missingSince??=time;
+      return missingSince === null || time-missingSince<holdMs ? points : null;
+    },
+  };
 }
 
 export function createStudyMotionTracker() {
@@ -93,6 +109,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const options = path => ({ ...(canvas ? { canvas } : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
     const face = await vision.FaceLandmarker.createFromOptions(files, {
       ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 1,
+      minFaceDetectionConfidence: .35, minFacePresenceConfidence: .35, minTrackingConfidence: .35,
       outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
     });
     resources.push(face);
@@ -116,6 +133,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, phones = [], phoneTime = -Infinity;
     const studyMotion = createStudyMotionTracker();
+    const faceContinuity = createFaceContinuity();
     return {
       async detect(source, time) {
         const startedAt = performance.now();
@@ -143,12 +161,11 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           else if (time-phoneTime < 1500) cachedObjects.push(...phones);
           objectTime = time;
         }
-        const points = faceResult.faceLandmarks[0];
         const signals = extractFocusSignals(faceResult, poseResult, handResult, cachedObjects, width, height);
         signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);
         delete signals.studyPoints;
         return { type: 'result', time, signals, backend: tf.getBackend(), mode: light ? 'light' : 'standard', inferenceMs: performance.now()-startedAt,
-          landmarks: points ? [points[1], points[33], points[263]] : null };
+          landmarks: faceContinuity.update(faceResult,time) };
       },
       close() { for (const model of resources) (model.close || model.dispose).call(model); },
     };

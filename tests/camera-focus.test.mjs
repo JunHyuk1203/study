@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createFocusTracker } from '../camera-focus.js';
-import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion } from '../camera-inference.js';
+import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
 
 const healthy = { reliable: true, face: true, body: true, eyesClosed: false, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
@@ -49,7 +49,7 @@ test('idle debug countdown ignores brief movement and resets after sustained mot
 for (const [reason, signals, delay] of [
   ['sleep', { ...healthy, eyesClosed: true }, 750],
   ['phone', { ...healthy, phoneUse: true }, 750],
-  ['away', { ...healthy, face: false, body: false }, 1000],
+  ['away', { ...healthy, face: false, body: false }, 3000],
 ]) test(`${reason}: stops credit, warns after persistence and automatically recovers`, () => {
   const tracker = createFocusTracker();
   assert.equal(advance(tracker, healthy, 0, 2000).tracking, true);
@@ -61,8 +61,9 @@ for (const [reason, signals, delay] of [
   const warned = tracker.update(signals,2500+delay);
   assert.equal(warned.reason, reason);
   assert.equal(warned.status, 'paused');
-  assert.equal(tracker.update(healthy, 5000).tracking, false);
-  assert.equal(advance(tracker, healthy, 5500, 7000).tracking, true);
+  const recoverAt=2500+delay+500;
+  assert.equal(tracker.update(healthy, recoverAt).tracking, false);
+  assert.equal(advance(tracker, healthy, recoverAt+500, recoverAt+2000).tracking, true);
 });
 test('a blink or brief occlusion never becomes a persistent behavior warning', () => {
   const tracker = createFocusTracker();
@@ -133,7 +134,7 @@ test('phone confirmation takes priority when the phone covers the face', () => {
   assert.equal(state.reason,'phone');assert.equal(state.tracking,false);assert.equal(state.status,'paused');
 });
 test('missing/partial observations and long gaps cannot keep crediting time', () => {
-  for (const signals of [null, {}, { ...healthy, reliable: false }, { ...healthy, face: false }]) {
+  for (const signals of [null, {}, { ...healthy, reliable: false }]) {
     const tracker = createFocusTracker(); advance(tracker, healthy, 0, 2000);
     assert.equal(tracker.update(signals, 2500).tracking, false);
   }
@@ -141,6 +142,22 @@ test('missing/partial observations and long gaps cannot keep crediting time', ()
   assert.equal(tracker.update(healthy, 9000).tracking, false);
   assert.equal(advance(tracker, healthy, 9500, 11000).tracking, true);
   tracker.reset(); assert.equal(tracker.update(healthy, 12000).tracking, false);
+});
+test('face loss with visible shoulders uses the same uninterrupted three-second grace', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  assert.equal(tracker.update({...healthy,face:false,body:true},2500).tracking,true);
+  assert.equal(advance(tracker,{...healthy,face:false,body:false},3000,5000).tracking,true);
+  const paused=tracker.update({...healthy,face:false,body:true},5500);
+  assert.equal(paused.reason,'away');assert.equal(paused.status,'paused');assert.equal(paused.tracking,false);
+});
+test('brief face losses neither stop tracking nor reset the idle observation clock', () => {
+  const tracker=createFocusTracker();let state;
+  for(let t=0;t<=23000;t+=500){
+    const missing=t===10000||t===15000;
+    state=tracker.update({...healthy,face:!missing,body:true},t);
+    if(t>=2000&&t<22500)assert.equal(state.tracking,true);
+  }
+  assert.equal(state.reason,'idle');
 });
 function scene() {
   const face = Array.from({ length: 478 }, () => ({ x: .5, y: .4 }));
@@ -151,6 +168,22 @@ function scene() {
   pose[15] = { x:.1,y:.8,visibility:1 }; pose[16] = { x:.9,y:.8,visibility:1 };
   return { face: { faceLandmarks: [face] }, pose: { landmarks: [pose] }, hands: { landmarks: [] } };
 }
+test('missing iris or eyelid detail does not discard an otherwise valid face', () => {
+  const s=scene();delete s.face.faceLandmarks[0][468];delete s.face.faceLandmarks[0][160];
+  const signals=extractFocusSignals(s.face,{landmarks:[]},s.hands,[],100,100);
+  assert.equal(signals.face,true);assert.equal(signals.eyesClosed,false);assert.ok(signals.activityVector.every(Number.isFinite));
+});
+test('avatar face points bridge short misses, expire at three seconds, and update on reacquisition', () => {
+  const tracker=createFaceContinuity(),s=scene();
+  const initial=tracker.update(s.face,0);
+  assert.equal(initial.length,3);
+  assert.deepEqual(tracker.update({faceLandmarks:[]},100),initial);
+  assert.deepEqual(tracker.update({faceLandmarks:[]},3000),initial);
+  assert.equal(tracker.update({faceLandmarks:[]},3100),null);
+  s.face.faceLandmarks[0][1].x=.6;
+  assert.equal(tracker.update(s.face,3200)[0].x,.6);
+  assert.equal(tracker.update({faceLandmarks:[]},10000),null);
+});
 const phone = { class: 'cell phone', score: .9, bbox: [40,50,20,25] };
 test('a raised phone is usable without hands or a downward head, while a desk phone alone is ignored', () => {
   const s = scene();
