@@ -11,6 +11,12 @@ function nearBox(point, box, margin = .04) {
 function eyeAspect(face, a, b, c, d, e, f) {
   return (distance(face[b], face[f]) + distance(face[c], face[e])) / Math.max(.001, 2 * distance(face[a], face[d]));
 }
+function eyeGaze(face, left, right, iris) {
+  const dx=face[right].x-face[left].x, dy=face[right].y-face[left].y;
+  const size=Math.max(.000001,dx*dx+dy*dy);
+  const x=face[iris].x-face[left].x, y=face[iris].y-face[left].y;
+  return [(x*dx+y*dy)/size,(y*dx-x*dy)/size];
+}
 export function extractFocusSignals(faceResult, poseResult, handResult, objects, width, height) {
   const face = faceResult.faceLandmarks?.[0];
   const aspect = width > 0 && height > 0 ? width/height : 1;
@@ -19,7 +25,7 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   const body = Boolean(pose && [11, 12].every(i => visiblePoint(pose[i])));
   const faceValid = Boolean(face && [1, 33, 263].every(i => finitePoint(face[i])) && distance(face[33],face[263]) > .01);
   const eyesValid = faceValid && [133,362,160,158,153,144,385,387,373,380].every(i => finitePoint(face[i]));
-  const irisValid = faceValid && [133,362,159,145,386,374,468,473].every(i => finitePoint(face[i]));
+  const irisValid = faceValid && [133,362,468,473].every(i => finitePoint(face[i]));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
   const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
@@ -39,21 +45,20 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   // more complete squint. Strong bilateral blink blendshapes still catch closure.
   const eyesClosed = faceValid && ((eyesValid && eyeAspect(geometry, 33, 160, 158, 133, 153, 144) < .12 &&
     eyeAspect(geometry, 362, 385, 387, 263, 373, 380) < .12) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
-  const gaze = irisValid ? [
-    (face[468].x - face[33].x) / Math.max(.001, Math.abs(face[133].x - face[33].x)),
-    (face[473].x - face[362].x) / Math.max(.001, Math.abs(face[263].x - face[362].x)),
-  ] : [.5,.5];
+  // Project each iris onto its own eye axis so head roll is not eye movement.
+  const leftGaze=irisValid?eyeGaze(geometry,33,133,468):[.5,0];
+  const rightGaze=irisValid?eyeGaze(geometry,362,263,473):[.5,0];
+  const gaze=[leftGaze[0],rightGaze[0]];
+  const gazeValid=Boolean(irisValid && eyesValid && !eyesClosed &&
+    [leftGaze,rightGaze].every(([x,y])=>x>=-.2 && x<=1.2 && Math.abs(y)<=.5));
   const eyeWidth = faceValid ? Math.max(.01, distance(geometry[33], geometry[263])) : 1;
   const headDirection = faceValid ? [(head.x - eyeMid.x)*aspect / eyeWidth, (head.y - eyeMid.y) / eyeWidth,
     Math.atan2(face[263].y - face[33].y, (face[263].x - face[33].x)*aspect)] : [];
-  const verticalGaze = irisValid ? [
-    (face[468].y - (face[159].y + face[145].y) / 2) / Math.max(.01, distance(geometry[33], geometry[133])),
-    (face[473].y - (face[386].y + face[374].y) / 2) / Math.max(.01, distance(geometry[362], geometry[263])),
-  ] : [0,0];
+  const verticalGaze = [leftGaze[1],rightGaze[1]];
   const activityVector = faceValid ? [head.x, head.y, ...gaze, ...headDirection, ...verticalGaze] : null;
   const studyPoints = [pose?.[15], pose?.[16], ...(handResult.landmarks || []).map(hand => hand[8])].map(p =>
     visiblePoint(p) ? { x: p.x, y: p.y } : null);
-  return { reliable: true, face: faceValid, body, eyesClosed, phoneUse, phoneEvidence,
+  return { reliable: true, face: faceValid, body, eyesClosed, gazeValid, phoneUse, phoneEvidence,
     studyActivity: false, studyContext, studyPoints, activityVector };
 }
 

@@ -11,7 +11,7 @@ self.onmessage = async ({ data }) => {
         self.tf.wasm.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
       } catch { /* CPU remains available inside this worker. */ }
       const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs');
-      const { createCameraInference } = await import('./camera-inference.js?v=20261024-7');
+      const { createCameraInference } = await import('./camera-inference.js?v=20261024-8');
       detector = await createCameraInference(vision, self.cocoSsd, self.tf, undefined, { light: data.light });
       self.postMessage({ type: 'ready' });
     } else if (data.type === 'frame') {

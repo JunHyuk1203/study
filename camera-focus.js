@@ -1,5 +1,5 @@
 // Temporal policy: no images, networking, storage, or user calibration.
-import { createIdleTracker } from './camera-idle.js?v=20261024-1';
+import { createIdleTracker } from './camera-idle.js?v=20261024-8';
 export const FOCUS_LIMITS = Object.freeze({ sleep: 4500, phone: 750, away: 3000, idle: 22500, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
@@ -38,7 +38,9 @@ export function createFocusTracker() {
     const visible = valid && signals.face;
     missingSince = valid && !signals.face ? missingSince ?? now : null;
     if (!valid || signals.phoneUse || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
-    const idleState = visible && !signals.eyesClosed && !signals.phoneUse ? idle.update(signals, now) : idle.state(now);
+    const observeIdle=visible && !signals.eyesClosed && !signals.phoneUse;
+    if(!observeIdle)idle.pauseGaze();
+    const idleState = observeIdle ? idle.update(signals, now) : idle.state(now);
     const reason = !valid ? 'unknown' : signals.phoneUse ? 'phone' : !signals.face ? 'away' :
       signals.eyesClosed && signals.face ? 'sleep' :
       !visible ? 'unknown' : idleState.confirmed ? 'idle' : null;
@@ -78,7 +80,7 @@ export function createFocusTracker() {
         warningAfterMs: FOCUS_LIMITS[key], warningRemainingMs: Math.max(0, FOCUS_LIMITS[key] - elapsedMs),
         blocked: key === 'idle' ? idleBlocked : null };
     });
-    return { rows, warning, phoneEvidence: lastSignals?.phoneEvidence,
+    return { rows, warning, phoneEvidence: lastSignals?.phoneEvidence, gaze: idleState.gaze,
       resumeRemainingMs: healthySince === null ? null : Math.max(0, FOCUS_LIMITS.resume - (lastTime - healthySince)) };
   }
   return { update, reset, getDebug };

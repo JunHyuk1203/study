@@ -6,7 +6,7 @@ import { createFocusTracker } from '../camera-focus.js';
 import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
 
-const healthy = { reliable: true, face: true, body: true, eyesClosed: false, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
+const healthy = { reliable: true, face: true, body: true, eyesClosed: false, gazeValid: true, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
 test('cached phone evidence cannot confirm use and a new negative resets the candidate',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const signal=(id,at,positive,age=0)=>({...healthy,phoneUse:positive,phoneObservation:{id,observedAt:at,ageMs:age,fresh:age===0,positive}});
@@ -53,6 +53,20 @@ function advance(tracker, signals, from, to, step = 500) {
   for (let t = from; t <= to; t += step) state = tracker.update(signals, t);
   return state;
 }
+test('iris tracking uses the eye axis and remains stable when the head rolls', () => {
+  const s=scene();
+  for(const index of [468,473]){s.face.faceLandmarks[0][index].x+=.01;s.face.faceLandmarks[0][index].y+=.005;}
+  const initial=extractFocusSignals(s.face,s.pose,s.hands,[],100,100);
+  const angle=.4;
+  const rotated=s.face.faceLandmarks[0].map(({x,y,...rest})=>({...rest,
+    x:.5+(x-.5)*Math.cos(angle)-(y-.5)*Math.sin(angle),
+    y:.5+(x-.5)*Math.sin(angle)+(y-.5)*Math.cos(angle)}));
+  const after=extractFocusSignals({...s.face,faceLandmarks:[rotated]},s.pose,s.hands,[],100,100);
+  assert.equal(initial.gazeValid,true);assert.equal(after.gazeValid,true);
+  for(const index of [2,3,7,8])assert.ok(Math.abs(initial.activityVector[index]-after.activityVector[index])<1e-8);
+  delete rotated[468];
+  assert.equal(extractFocusSignals({...s.face,faceLandmarks:[rotated]},s.pose,s.hands,[],100,100).gazeValid,false);
+});
 test('debug timers show identical warning and pause deadlines and clear on reset', () => {
   const tracker=createFocusTracker();
   advance(tracker,healthy,0,2000);
@@ -147,7 +161,7 @@ test('face alone can trigger idle without shoulders, wrists or hands, despite mi
   const tracker=createFocusTracker(); let state;
   for(let t=0;t<=60000;t+=200){
     const vector=[...healthy.activityVector];
-    vector[0]+=.02*Math.sin(t/500);vector[2]+=.15*Math.sin(t/300);vector[3]+=.15*Math.sin(t/300);
+    vector[0]+=.02*Math.sin(t/500);vector[2]+=.015*Math.sin(t/300);vector[3]+=.015*Math.sin(t/300);
     state=tracker.update({...healthy,body:false,activityVector:vector},t);
     if(t>=22600)assert.equal(state.reason,'idle');
   }
@@ -160,6 +174,52 @@ test('a one-frame head landmark spike does not restart the idle countdown', () =
     state=tracker.update({...healthy,activityVector:vector},t);
   }
   assert.equal(state.reason,'idle');
+});
+test('reading with short bilateral horizontal or vertical gaze shifts keeps timing with a still head', () => {
+  for(const [left,right,step] of [[2,3,.06],[7,8,.04]]) {
+    const tracker=createFocusTracker();
+    for(let t=0;t<=45000;t+=100){
+      const activityVector=[...healthy.activityVector];
+      const offset=Math.floor(t%1600/400)*step;
+      activityVector[left]+=offset;activityVector[right]+=offset;
+      const state=tracker.update({...healthy,activityVector},t);
+      if(t>=2000)assert.equal(state.tracking,true,`${left}:${t}`);
+    }
+  }
+});
+test('gaze shifts alone release idle while a single-eye change or one-frame jump does not', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+  for(let t=22700;t<=27000;t+=100){
+    const activityVector=[...healthy.activityVector],offset=Math.floor((t-22700)%1600/400)*.06;
+    activityVector[2]+=offset;activityVector[3]+=offset;
+    tracker.update({...healthy,activityVector},t);
+  }
+  assert.equal(tracker.update(healthy,27100).tracking,true);
+  for(const bilateral of [false,true]) {
+    const paused=createFocusTracker();advance(paused,healthy,0,22500);
+    for(let t=22700;t<=27000;t+=100){
+      const activityVector=[...healthy.activityVector];
+      if(!bilateral || t===23000){activityVector[2]+=.4;if(bilateral)activityVector[3]+=.4;}
+      paused.update({...healthy,activityVector},t);
+    }
+    assert.equal(paused.update(healthy,27100).reason,'idle');
+  }
+});
+test('iris loss and reacquisition do not count as gaze movement', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+  for(let t=22700;t<=27000;t+=100){
+    const activityVector=[...healthy.activityVector];activityVector[2]=activityVector[3]=.9;
+    assert.equal(tracker.update({...healthy,gazeValid:t>=24000,activityVector},t).reason,'idle');
+  }
+});
+test('development panel shows whether iris tracking is available and moving', () => {
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  const label=()=>focusDebugRows(tracker.getDebug()).find(row=>row.key==='idle').text;
+  assert.match(label(),/시선 추적 중/);
+  tracker.update({...healthy,activityVector:[.5,.5,.62,.62,0,.4,0,0,0]},2200);
+  assert.match(label(),/시선 변화 감지/);
+  tracker.update({...healthy,gazeValid:false},2400);
+  assert.match(label(),/시선 확인 불가/);
 });
 test('moderate sustained movement releases idle sooner, while a brief phone appearance never pauses time', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,22500);

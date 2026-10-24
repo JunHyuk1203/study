@@ -7,14 +7,15 @@ export function focusDebugRows(debug) {
     if (!row) return { key, label, text: '분석 대기', active: false };
     if (row.blocked) return { key, label, text: row.blocked, active: false };
     const evidence = key === 'phone' ? debug?.phoneEvidence : null;
+    const gazeNote=key==='idle' && debug?.gaze ? ` · ${!debug.gaze.tracking?'시선 확인 불가':debug.gaze.moving?'시선 변화 감지':'시선 추적 중'}` : '';
     const score = evidence ? `휴대폰 ${(evidence.score * 100).toFixed(1)}%` : '';
     if (!row.active) {
       const text = evidence?.stage === 'using' ? `${score} · 20% 기준 충족` : evidence?.stage === 'not-found' ? '휴대폰 후보 미검출 · 점수 없음' : evidence?.stage === 'weak' ?
         `${score} · 20% 미만` : '미감지';
-      return { key, label, text, active: false };
+      return { key, label, text: text+gazeNote, active: false };
     }
     const action = row.pauseRemainingMs > 0 ? `경고·정지까지 ${seconds(row.pauseRemainingMs)}` : '경고·정지 기준 도달';
-    return { key, label, text: `${seconds(row.elapsedMs)} 감지 · ${action}${evidence ? ` · ${score}` : ''}`, active: true };
+    return { key, label, text: `${seconds(row.elapsedMs)} 감지 · ${action}${evidence ? ` · ${score}` : ''}${gazeNote}`, active: true };
   });
 }
 
