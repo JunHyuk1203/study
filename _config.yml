@@ -1,7 +1,9 @@
 # GitHub Pages remains the frontend host. Private server artifacts are excluded.
 # Browser-shared pure modules in functions/ remain available.
+include:
+  - server-client.js
 exclude:
-  - server
+  - server/
   - node_modules
   - functions/node_modules
   - tests
