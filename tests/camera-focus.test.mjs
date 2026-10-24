@@ -227,6 +227,15 @@ test('missing iris or eyelid detail does not discard an otherwise valid face', (
   const signals=extractFocusSignals(s.face,{landmarks:[]},s.hands,[],100,100);
   assert.equal(signals.face,true);assert.equal(signals.eyesClosed,false);assert.ok(signals.activityVector.every(Number.isFinite));
 });
+test('a mild bilateral eye squint from smiling is not treated as sleep', () => {
+  const s=scene(), face=s.face.faceLandmarks[0];
+  for (const i of [160,158,385,387]) face[i].y=.293;
+  for (const i of [153,144,373,380]) face[i].y=.307;
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[],100,100).eyesClosed,false);
+  for (const i of [160,158,385,387]) face[i].y=.296;
+  for (const i of [153,144,373,380]) face[i].y=.304;
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[],100,100).eyesClosed,true);
+});
 test('avatar face points bridge short misses, expire at three seconds, and update on reacquisition', () => {
   const tracker=createFaceContinuity(),s=scene();
   const initial=tracker.update(s.face,0);

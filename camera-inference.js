@@ -43,8 +43,10 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
     (o.class === 'book' && hands.some(p => nearBox(p, o.box))));
   const blends = Object.fromEntries((faceResult.faceBlendshapes?.[0]?.categories || []).map(c => [c.categoryName, c.score]));
-  const eyesClosed = faceValid && ((eyesValid && eyeAspect(geometry, 33, 160, 158, 133, 153, 144) < .16 &&
-    eyeAspect(geometry, 362, 385, 387, 263, 373, 380) < .16) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
+  // A light smile can narrow both eyes; reserve geometry-based closure for a
+  // more complete squint. Strong bilateral blink blendshapes still catch closure.
+  const eyesClosed = faceValid && ((eyesValid && eyeAspect(geometry, 33, 160, 158, 133, 153, 144) < .12 &&
+    eyeAspect(geometry, 362, 385, 387, 263, 373, 380) < .12) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
   const gaze = irisValid ? [
     (face[468].x - face[33].x) / Math.max(.001, Math.abs(face[133].x - face[33].x)),
     (face[473].x - face[362].x) / Math.max(.001, Math.abs(face[263].x - face[362].x)),
