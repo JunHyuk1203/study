@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
 import { createFocusTracker } from './camera-focus.js?v=20261024-14';
-import { paintCameraDebug } from './camera-debug.js?v=20261024-8';
+import { paintCameraDebug } from './camera-debug.js?v=20261024-15';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let reason = null;

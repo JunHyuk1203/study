@@ -1,8 +1,15 @@
-const LABELS = { sleep: '수면·졸음', phone: '휴대폰', away: '자리 이탈', idle: '멍때림 추정' };
+const LABELS = { sleep: '수면·졸음', phone: '휴대폰', away: '자리 이탈', idle: '멍때림 추정', identity: '본인 얼굴 유사도' };
 const seconds = ms => `${(Math.max(0, ms) / 1000).toFixed(ms > 0 && ms < 1000 ? 2 : 1)}초`;
 
 export function focusDebugRows(debug) {
   return Object.entries(LABELS).map(([key, label]) => {
+    if(key==='identity'){
+      const identity=debug?.identity;
+      const text=Number.isFinite(identity?.score)?`${(identity.score*100).toFixed(1)}% · 본인 기준 82.0% · ${identity.matched?'일치':'확인 중'}`:
+        !identity?'분석 대기':identity.enrolled===false||identity.status==='enrolling'?'얼굴 등록 중 · 점수 대기':
+        identity.status==='missing'?'얼굴 미감지 · 점수 없음':identity.status==='multiple'?'여러 얼굴 감지 · 점수 없음':'얼굴 비교 중 · 점수 대기';
+      return {key,label,text,active:Number.isFinite(identity?.score)};
+    }
     const row = debug?.rows.find(row => row.key === key);
     if (!row) return { key, label, text: '분석 대기', active: false };
     if (row.blocked) return { key, label, text: row.blocked, active: false };
