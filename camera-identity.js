@@ -45,19 +45,20 @@ export async function createLocalFaceGuard(tf,session){
   const model=await tf.loadGraphModel(MODEL);
   const canvas=new OffscreenCanvas(224,224),context=canvas.getContext('2d',{willReadFrequently:true});
   let lastCheck=-Infinity,current={matched:false,status:matcher.enrolled?'checking':'enrolling'},persisted=matcher.enrolled;
+  const state=()=>({...current,enrolled:matcher.enrolled});
   return {
     async check(source,result,time){
       const faces=result.faceLandmarks||[],face=faces[0];
       if(faces.length!==1||!face?.[473]){
-        lastCheck=-Infinity;return current={matched:false,status:faces.length>1?'multiple':'missing'};
+        lastCheck=-Infinity;current={matched:false,status:faces.length>1?'multiple':'missing'};return state();
       }
-      if(time-lastCheck<600)return current;
+      if(time-lastCheck<600)return state();
       lastCheck=time;
       const width=source.videoWidth||source.width,height=source.videoHeight||source.height;
       const eye=(a,b)=>({x:(face[a].x+face[b].x)*width/2,y:(face[a].y+face[b].y)*height/2});
       const left=eye(33,133),right=eye(362,263),dx=right.x-left.x,dy=right.y-left.y;
       const size=Math.hypot(dx,dy),angle=Math.atan2(dy,dx);
-      if(size<24||!Number.isFinite(angle)||Math.abs(angle)>.55){return current={matched:false,status:'checking'};}
+      if(size<24||!Number.isFinite(angle)||Math.abs(angle)>.55){current={matched:false,status:'checking'};return state();}
       const scale=224/(size*3),cos=Math.cos(angle)*scale,sin=Math.sin(angle)*scale;
       const midX=(left.x+right.x)/2,midY=(left.y+right.y)/2;
       context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
@@ -71,7 +72,7 @@ export async function createLocalFaceGuard(tf,session){
         if(matcher.enrolled&&!persisted){
           await profileStore('readwrite',{version:1,session,samples:matcher.samples});persisted=true;
         }
-        return current;
+        return state();
       }finally{input.dispose();descriptor?.dispose();}
     },
     close(){model.dispose();},

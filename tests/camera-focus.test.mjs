@@ -26,6 +26,29 @@ test('enrolled local face descriptors reject another face without replacing the 
   assert.equal(matcher.observe(owner).matched,true);
   assert.deepEqual(createIdentityMatcher(matcher.samples).observe(other).matched,false);
 });
+test('identity warnings start only after five continuous seconds and never during enrollment',()=>{
+  const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
+  for(let t=0;t<5000;t+=200){
+    const result=tracker.update(wrong,t);assert.equal(result.status,'scanning');assert.equal(result.identityWarning,false);assert.equal(result.message,'인식 중…');
+  }
+  assert.equal(tracker.update(wrong,4999).identityWarning,false);
+  assert.equal(tracker.update(wrong,5000).identityWarning,true);
+  const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},5200);
+  assert.equal(restored.status,'scanning');assert.equal(restored.identityWarning,false);
+  for(const status of ['enrolling','checking','missing','multiple']){
+    const enrollment=createFocusTracker();
+    const signals={...healthy,face:status!=='missing',identity:{matched:false,status,enrolled:false}};
+    const result=advance(enrollment,signals,0,12000,200);
+    assert.equal(result.status,'scanning');assert.equal(result.identityWarning,false);assert.equal(result.message,'인식 중…');
+  }
+});
+test('a break in mismatches restarts the five-second identity warning timer',()=>{
+  const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
+  advance(tracker,wrong,0,4800,200);
+  tracker.update({...healthy,identity:{matched:false,status:'checking',enrolled:true}},4900);
+  assert.equal(advance(tracker,wrong,5000,9800,200).identityWarning,false);
+  assert.equal(tracker.update(wrong,10000).identityWarning,true);
+});
 test('away clears only for the enrolled owner after movement and the normal recovery wait',()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched'}};
   advance(tracker,owner,0,2000);
