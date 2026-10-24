@@ -21,23 +21,15 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   const eyesValid = faceValid && [133,362,160,158,153,144,385,387,373,380].every(i => finitePoint(face[i]));
   const irisValid = faceValid && [133,362,159,145,386,374,468,473].every(i => finitePoint(face[i]));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
-  const wrists = pose ? [15, 16].map(i => pose[i]).filter(visiblePoint) : [];
   const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
   const eyeMid = faceValid ? { x: (face[33].x + face[263].x) / 2, y: (face[33].y + face[263].y) / 2 } : null;
   const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(geometry[33], geometry[263])) > .65;
-  const phones = boxes.filter(o => o.class === 'cell phone').map(o => {
-    const center = { x: o.box[0] + o.box[2] / 2, y: o.box[1] + o.box[3] / 2 };
-    const touching = hands.some(p => nearBox(p, o.box, .08)) || wrists.some(p => nearBox(p, o.box, .1));
-    const upright = o.box[3] >= .18 && o.box[3] > o.box[2]*1.15 && center.x > .1 && center.x < .9;
-    const raised = upright || (head ? center.y < Math.min(.8, head.y + .28) && Math.abs(center.x - head.x) < .45 :
-      center.y < .7 && center.x > .1 && center.x < .9);
-    const used = o.score >= .3 && (touching || raised);
-    return { score: o.score, touching, raised, used };
-  });
+  const phones = objects.filter(o => o.class === 'cell phone' && Number.isFinite(o.score))
+    .map(o => ({ score: o.score, used: o.score >= .2 }));
   const phoneUse = phones.some(o => o.used);
   const bestPhone = phones.filter(o => o.used).sort((a,b) => b.score-a.score)[0] || phones.sort((a,b) => b.score-a.score)[0];
-  const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : bestPhone.score < .3 ? 'weak' : 'desk' } :
+  const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : 'weak' } :
     { score: 0, stage: 'not-found' };
   const studyContext = boxes.some(o => (o.class === 'book' && headDown) ||
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
@@ -163,10 +155,15 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed)return;
             let found=await objects.detect(full,30,.2);
-            // A desk phone must not suppress the close-up search for a held phone.
             if(!extractFocusSignals(faceResult,poseResult,handResult,found,width,height).phoneUse) {
               const zoomed=await objects.detect(crop,30,.2);
               found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));
+            }
+            if(!found.some(o=>o.class==='cell phone'&&o.score>=.2)) {
+              // COCO-SSD also uses minScore as its overlap threshold. Preserve
+              // normal detection, then collect low-score diagnostic candidates.
+              const candidates=await objects.detect(full,30,0);
+              found=found.concat(candidates.filter(o=>o.class==='cell phone'));
             }
             if(!closed){cachedObjects=found;objectWidth=width;objectHeight=height;observedAt=time;observationId++;}
           }).catch(()=>{if(!closed){cachedObjects=[];observedAt=-Infinity;observationId++;}}).finally(()=>{modelMs.objects=performance.now()-objectStarted;objectPending=null;});

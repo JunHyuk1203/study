@@ -260,28 +260,29 @@ test('avatar face points bridge short misses, expire at three seconds, and updat
   assert.equal(tracker.update({faceLandmarks:[]},10000),null);
 });
 const phone = { class: 'cell phone', score: .9, bbox: [40,50,20,25] };
-test('a raised phone is usable without hands or a downward head, while a desk phone alone is ignored', () => {
+test('phone use depends only on a confidence of at least twenty percent', () => {
   const s = scene();
   const extract = () => extractFocusSignals(s.face,s.pose,s.hands,[phone],100,100);
   assert.equal(extract().phoneUse, true);
   assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[phone],100,100).phoneUse,true);
   assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[{...phone,score:.35}],100,100).phoneUse,true);
-  assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[{...phone,score:.35,bbox:[40,80,20,20]}],100,100).phoneUse,false);
-  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{...phone,bbox:[40,80,20,20]}],100,100).phoneUse,false);
+  assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[{...phone,score:.2,bbox:[40,80,20,20]}],100,100).phoneUse,true);
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{...phone,bbox:[40,80,20,20]}],100,100).phoneUse,true);
   s.hands.landmarks = [[{ x:.5,y:.6 }]];
   assert.equal(extract().phoneUse, true);
   s.hands.landmarks = []; s.pose.landmarks[0][15] = { x:.5,y:.6,visibility:.9 };
   assert.equal(extract().phoneUse, true);
-  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.25 }],100,100).phoneUse,false);
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.199 }],100,100).phoneUse,false);
+  assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.25 }],100,100).phoneUse,true);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.4 }],100,100).phoneUse,true);
 });
-test('a desk phone does not prevent close-up detection of a held phone', async () => {
+test('a below-threshold phone does not prevent close-up detection', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
   const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
   let calls=0;
   const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model({landmarks:[]})},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
-    {load:async()=>({detect:async()=>++calls===1?[{...phone,bbox:[40,85,20,10]}]:[{...phone,score:.35,bbox:[10,20,15,25]}],dispose(){}})},
+    {load:async()=>({detect:async()=>++calls===1?[{...phone,score:.19,bbox:[40,85,20,10]}]:[{...phone,score:.2,bbox:[10,20,15,25]}],dispose(){}})},
     {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
   try {
     await engine.detect({width:100,height:100},0);
@@ -290,6 +291,22 @@ test('a desk phone does not prevent close-up detection of a held phone', async (
     assert.equal(calls,2);
     assert.equal(result.signals.phoneUse,true);
     assert.equal(result.signals.phoneObservation.positive,true);
+  } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
+});
+test('low-confidence diagnostic candidates reach the display without triggering phone use', async () => {
+  const previous=globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
+  const s=scene(),model=result=>({detectForVideo:()=>result,close(){}}),thresholds=[];
+  const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model(s.pose)},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
+    {load:async()=>({detect:async(source,count,threshold)=>{thresholds.push(threshold);return threshold===0?[{...phone,score:.057}]:[];},dispose(){}})},
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+  try {
+    await engine.detect({width:100,height:100},0);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const result=await engine.detect({width:100,height:100},100);
+    assert.deepEqual(thresholds,[.2,.2,0]);
+    assert.equal(result.signals.phoneUse,false);
+    assert.equal(result.signals.phoneEvidence.score,.057);
   } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
 });
 test('eye closure, reading context, absence and wrist visibility are extracted independently', () => {
@@ -313,13 +330,16 @@ test('static books and laptops are context, only actual hand motion is study act
   assert.equal(tracker.update(true,[{x:.4,y:.6},null],2500),false);
   assert.equal(tracker.update(false,still,3000),false);
 });
-test('phone diagnostics distinguish no object, weak predictions, desk placement and use', () => {
+test('phone diagnostics show confidence below twenty percent and distinguish missing candidates', () => {
   const s=scene();
-  for(const [objects,stage]of [[[],'not-found'],[[{...phone,score:.25}],'weak'],[[{...phone,bbox:[40,80,20,20]}],'desk'],[[phone],'using']]){
+  for(const [objects,stage]of [[[],'not-found'],[[{...phone,score:.057}],'weak'],[[{...phone,score:.2}],'using'],[[phone],'using']]){
     const evidence=extractFocusSignals(s.face,s.pose,s.hands,objects,100,100).phoneEvidence;
     const tracker=createFocusTracker();tracker.update({...healthy,phoneEvidence:evidence},0);
     assert.equal(evidence.stage,stage);
     assert.notEqual(focusDebugRows(tracker.getDebug()).find(row=>row.key==='phone').text,'미감지');
+    const text=focusDebugRows(tracker.getDebug()).find(row=>row.key==='phone').text;
+    if(stage==='weak')assert.match(text,/5\.7% · 20% 미만/);
+    if(stage==='not-found')assert.match(text,/점수 없음/);
   }
 });
 test('phone search crop follows visible hands and stays inside the frame without shoulders', () => {
