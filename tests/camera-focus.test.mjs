@@ -59,7 +59,7 @@ test('debug timers show identical warning and pause deadlines and clear on reset
   tracker.update({...healthy,eyesClosed:true},2200);
   tracker.update({...healthy,eyesClosed:true},2400);
   let row=tracker.getDebug().rows.find(row=>row.key==='sleep');
-  assert.equal(row.elapsedMs,200); assert.equal(row.pauseRemainingMs,550); assert.equal(row.warningRemainingMs,550);
+  assert.equal(row.elapsedMs,200); assert.equal(row.pauseRemainingMs,4300); assert.equal(row.warningRemainingMs,4300);
   tracker.update({...healthy,phoneUse:true},2800);
   row=tracker.getDebug().rows.find(row=>row.key==='phone');
   assert.equal(row.pauseRemainingMs,750); assert.equal(row.warningRemainingMs,750);
@@ -88,7 +88,7 @@ test('idle debug countdown ignores brief movement and resets after sustained mot
   assert.equal(tracker.getDebug().rows.find(row=>row.key==='idle').blocked,'얼굴 방향 확인 필요');
 });
 for (const [reason, signals, delay] of [
-  ['sleep', { ...healthy, eyesClosed: true }, 750],
+  ['sleep', { ...healthy, eyesClosed: true }, 4500],
   ['phone', { ...healthy, phoneUse: true }, 750],
   ['away', { ...healthy, face: false, body: false }, 3000],
 ]) test(`${reason}: stops credit, warns after persistence and automatically recovers`, () => {
@@ -119,7 +119,8 @@ test('eye closure continues timing before confirmation and warns exactly when it
   assert.equal(tracker.update({...healthy,eyesClosed:true},2200).tracking,true);
   const state=tracker.update({...healthy,eyesClosed:true},2600);
   assert.equal(state.tracking,true); assert.equal(state.status,'tracking');
-  const confirmed=tracker.update({...healthy,eyesClosed:true},2950);
+  assert.equal(advance(tracker,{...healthy,eyesClosed:true},2800,6600,200).tracking,true);
+  const confirmed=tracker.update({...healthy,eyesClosed:true},6700);
   assert.equal(confirmed.tracking,false);assert.equal(confirmed.status,'paused');assert.equal(confirmed.reason,'sleep');
 });
 test('idle requires 22.5 seconds of stillness and exits on observed movement', () => {
