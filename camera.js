@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
-import { createFocusTracker } from './camera-focus.js?v=20261024-13';
+import { createFocusTracker } from './camera-focus.js?v=20261024-14';
 import { paintCameraDebug } from './camera-debug.js?v=20261024-8';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -178,7 +178,7 @@ function acceptResult(data) {
   const decision = focusTracker.update(stale ? null : data.signals, now);
   identityStatus=decision.identityWarning?'mismatch':null;
   if(data.signals?.identity?.enrolled===false)identityPhase='enrolling';
-  else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':decision.reason==='identity'?'checking':'verified';
+  else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':!data.signals.identity.matched?'checking':'verified';
   diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
