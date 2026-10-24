@@ -1,5 +1,5 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261022-9';
-import { createFocusTracker } from './camera-focus.js?v=20261024-10';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
+import { createFocusTracker } from './camera-focus.js?v=20261024-11';
 import { paintCameraDebug } from './camera-debug.js?v=20261024-8';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -15,6 +15,7 @@ let avatarPose = null;
 let fallbackAttempted = false;
 let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
+let identityStatus=null;
 let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
@@ -30,7 +31,7 @@ export function cameraState() { return { enabled, tracking, status, message, rea
 export function toggleCameraPause() {
   if (!enabled) return;
   manuallyPaused = !manuallyPaused;
-  focusTracker.reset(); diagnostics = null;
+  focusTracker.reset(true); diagnostics = null;
   setStatus('scanning', '얼굴을 다시 확인하는 중…');
 }
 export function openCameraFocus(origin) {
@@ -120,8 +121,10 @@ function paint() {
   root.dataset.reason = reason || '';
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
-  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : status);
+  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status);
   root.querySelector('[data-camera-status]').textContent = message;
+  const caption=root.querySelector('.cam-caption');
+  if(caption)caption.textContent='시작한 얼굴의 특징값은 이 기기에만 저장됩니다.';
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
   root.querySelector('[data-camera-resolution]').textContent = enabled && video.videoWidth ? 'AVATAR · 기기 내 인식' : '';
@@ -146,7 +149,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   video.srcObject = null;
   video.remove(); avatarPose = null;
   fallbackAttempted = false;
-  focusTracker.reset(); diagnostics = null; reason = null;
+  focusTracker.reset(); diagnostics = null; reason = null;identityStatus=null;
   setStatus(error ? 'error' : 'off', text);
 }
 function recognitionError(detail = '') {
@@ -167,13 +170,14 @@ function acceptResult(data) {
   const points = data.landmarks;
   avatarPose = points ? facePose({ 1: points[0], 33: points[1], 263: points[2] }) : null;
   const stale = !Number.isFinite(data.time) || now - data.time > 3000;
+  identityStatus=stale?null:data.signals?.identity?.status||null;
   const decision = focusTracker.update(stale ? null : data.signals, now);
   diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261024-8', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261024-11', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -184,7 +188,7 @@ function startRecognitionWorker(token, light = false) {
     if (data.type === 'result') acceptResult(data);
   };
   loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
-  target.postMessage({ type: 'init', light });
+  target.postMessage({ type: 'init', light, identityKey:`${cameraController}:${token}` });
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
@@ -194,7 +198,7 @@ function recoverRecognition(token, detail) {
   }
   if (fallbackAttempted) { recognitionError(detail); return; }
   fallbackAttempted = true; ready = false; inFlight = false; avatarPose = null;
-  focusTracker.reset(); diagnostics = null; reason = 'unknown';
+  focusTracker.reset(true); diagnostics = null; reason = 'unknown';
   worker?.terminate(); worker = null; clearTimeout(loadingDeadline);
   console.warn('Study camera worker fallback:', detail);
   setStatus('scanning', '경량 Worker로 행동 인식을 준비하는 중…');
@@ -224,7 +228,7 @@ function startCameraWatchdog(token) {
     // Background throttling and camera suspension must not kill the recognition loop.
     if (token !== revision || !enabled || document.hidden) return;
     if (ready && performance.now() - lastResult > 3000) {
-      focusTracker.reset(); diagnostics = null;
+      focusTracker.reset(true); diagnostics = null;
       setStatus('paused', '카메라 인식 응답 없음 · 일시정지');
       if (!fallbackAttempted) recoverRecognition(token, 'Worker stopped responding');
       else if (performance.now() - lastResult > 6000) recognitionError('Light worker stopped responding');
@@ -235,7 +239,7 @@ function resumeCameraRecognition() {
   if (!enabled || document.hidden || !stream) return;
   const token = revision;
   frameEpoch++; clearTimeout(loop); inFlight = false; lastVideoTime = -1; lastResult = performance.now();
-  focusTracker.reset(); diagnostics = null;
+  focusTracker.reset(true); diagnostics = null;
   setStatus('scanning', '얼굴을 다시 확인하는 중…');
   if (!worker) {
     fallbackAttempted = true;
@@ -259,7 +263,7 @@ export async function startCamera() {
     document.body.append(video);
     for (const track of stream.getVideoTracks()) {
       track.addEventListener('ended', () => { if (token === revision) stopCamera('카메라 연결이 끊겼습니다. 다시 켜 주세요.', true); });
-      track.addEventListener('mute', () => { if (token === revision) { focusTracker.reset(); diagnostics = null; setStatus('paused', '카메라 영상 중단 · 일시정지'); } });
+      track.addEventListener('mute', () => { if (token === revision) { focusTracker.reset(true); diagnostics = null; setStatus('paused', '카메라 영상 중단 · 일시정지'); } });
       track.addEventListener('unmute', () => { if (token === revision) resumeCameraRecognition(); });
     }
     await video.play();
@@ -286,7 +290,7 @@ document.addEventListener('visibilitychange', () => {
   frameEpoch++;
   if (stream) { clearTimeout(loop); inFlight = false; }
   lastVideoTime = -1;
-  focusTracker.reset(); diagnostics = null;
+  focusTracker.reset(true); diagnostics = null;
   setStatus(document.hidden ? 'paused' : 'scanning', document.hidden ? '화면을 벗어났습니다 · 일시정지' : '얼굴을 다시 확인하는 중…');
   if (!document.hidden) resumeCameraRecognition();
 });
@@ -308,7 +312,7 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('pagehide', event => {
   if (!event.persisted) { stopCamera(); return; }
-  frameEpoch++; clearTimeout(loop); inFlight = false; focusTracker.reset(); diagnostics = null;
+  frameEpoch++; clearTimeout(loop); inFlight = false; focusTracker.reset(true); diagnostics = null;
   setStatus('paused', '화면을 벗어났습니다 · 일시정지');
 });
 paint();

@@ -103,13 +103,13 @@ export function phoneSearchRegion(poseResult, handResult) {
   return { x: Math.max(0, Math.min(1-width, (minX+maxX-width)/2)),
     y: Math.max(0, Math.min(1-height, (minY+maxY-height)/2)), width, height };
 }
-export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false } = {}) {
+export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory } = {}) {
   const resources = [];
   try {
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
     const options = path => ({ ...(canvas ? { canvas } : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
     const face = await vision.FaceLandmarker.createFromOptions(files, {
-      ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 1,
+      ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 2,
       minFaceDetectionConfidence: .35, minFacePresenceConfidence: .35, minTrackingConfidence: .35,
       outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
     });
@@ -130,6 +130,8 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     await tf.ready();
     const objects = await cocoSsd.load({ base: light ? 'lite_mobilenet_v2' : 'mobilenet_v2' });
     resources.push(objects);
+    const identity=identityFactory?await identityFactory():null;
+    if(identity)resources.push(identity);
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0;
@@ -143,6 +145,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
         let began=performance.now();
         const faceResult = face.detectForVideo(source, time);modelMs.face=performance.now()-began;
+        const identityState=identity?await identity.check(source,faceResult,time):null;
         if(time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
         if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
@@ -164,18 +167,13 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
               const zoomed=await objects.detect(crop,30,.2);
               found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));
             }
-            if(!found.some(o=>o.class==='cell phone'&&o.score>=.2)) {
-              // COCO-SSD also uses minScore as its overlap threshold. Preserve
-              // normal detection, then collect low-score diagnostic candidates.
-              const candidates=await objects.detect(full,30,0);
-              found=found.concat(candidates.filter(o=>o.class==='cell phone'));
-            }
             if(!closed){cachedObjects=found;objectWidth=width;objectHeight=height;observedAt=time;observationId++;}
           }).catch(()=>{if(!closed){cachedObjects=[];observedAt=-Infinity;observationId++;}}).finally(()=>{modelMs.objects=performance.now()-objectStarted;objectPending=null;});
         }
         const ageMs=time-observedAt;
         const currentObjects=ageMs<=1500?cachedObjects.map(o=>({...o,bbox:[o.bbox[0]*width/objectWidth,o.bbox[1]*height/objectHeight,o.bbox[2]*width/objectWidth,o.bbox[3]*height/objectHeight]})):[];
         const signals = extractFocusSignals(faceResult, poseResult, handResult, currentObjects, width, height);
+        if(identityState)signals.identity=identityState;
         signals.phoneObservation={id:observationId,observedAt,ageMs,fresh:observationId!==deliveredId,positive:signals.phoneUse,confidence:signals.phoneEvidence.score};
         deliveredId=observationId;
         signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);

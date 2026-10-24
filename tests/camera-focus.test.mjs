@@ -5,9 +5,52 @@ import { readFile } from 'node:fs/promises';
 import { createFocusTracker, FOCUS_LIMITS } from '../camera-focus.js';
 import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
+import { createIdentityMatcher } from '../camera-identity.js';
+import { decodeStudyObjects } from '../camera-objects.js';
 
 const healthy = { reliable: true, face: true, body: true, eyesClosed: false, gazeValid: true, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
 const IDLE_AT=FOCUS_LIMITS.idle;
+test('phone class survives a higher person score and retains sub-threshold diagnostics',()=>{
+  const scores=new Float32Array(180),boxes=new Float32Array([.1,.1,.4,.4,.5,.5,.7,.7]);
+  scores[0]=.99;scores[76]=.35;scores[90+76]=.057;
+  const result=decodeStudyObjects(scores,boxes,640,480);
+  assert.equal(result.filter(item=>item.class==='cell phone').length,2);
+  assert.ok(result[0].score>.34);assert.ok(result[1].score<.06);
+});
+test('enrolled local face descriptors reject another face without replacing the owner',()=>{
+  const owner=Array(1024).fill(0),other=[...owner];owner[0]=1;other[1]=1;
+  const matcher=createIdentityMatcher();
+  assert.equal(matcher.observe(owner).status,'enrolling');matcher.observe(owner);
+  assert.equal(matcher.observe(owner).matched,true);
+  assert.equal(matcher.observe(other).status,'mismatch');
+  assert.equal(matcher.observe(owner).matched,true);
+  assert.deepEqual(createIdentityMatcher(matcher.samples).observe(other).matched,false);
+});
+test('away clears only for the enrolled owner after movement and the normal recovery wait',()=>{
+  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched'}};
+  advance(tracker,owner,0,2000);
+  advance(tracker,{...owner,face:false,identity:{matched:false,status:'missing'}},2500,5500);
+  assert.equal(tracker.update({...owner,identity:{matched:false,status:'mismatch'}},5700).tracking,false);
+  assert.equal(advance(tracker,owner,5900,8500,200).tracking,false);
+  const moving={...owner,activityVector:[.56,.5,.5,.5,0,.4,0,0,0]};
+  assert.equal(advance(tracker,moving,8700,9100,200).tracking,false);
+  assert.equal(tracker.update(moving,11099).tracking,false);
+  assert.equal(tracker.update(moving,11100).tracking,true);
+});
+test('sleep and phone counters remain visible together with the idle timer',()=>{
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  const both={...healthy,eyesClosed:true,phoneUse:true};tracker.update(both,2200);tracker.update(both,3000);
+  const debug=tracker.getDebug(),rows=focusDebugRows(debug);
+  for(const key of ['sleep','phone','idle'])assert.equal(debug.rows.find(row=>row.key===key).active,true);
+  assert.equal(debug.rows.find(row=>row.key==='sleep').elapsedMs,800);
+  assert.ok(rows.every(row=>!row.text.includes('다른 행동')));
+});
+test('an unconfirmed phone candidate cannot mask an already confirmed sleep pause',()=>{
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  advance(tracker,{...healthy,eyesClosed:true},2200,6600,200);
+  const result=tracker.update({...healthy,eyesClosed:true,phoneUse:true,phoneObservation:{id:1,positive:true,observedAt:6700,ageMs:0}},6700);
+  assert.equal(result.reason,'sleep');assert.equal(result.tracking,false);
+});
 test('cached phone evidence cannot confirm use and a new negative resets the candidate',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const signal=(id,at,positive,age=0)=>({...healthy,phoneUse:positive,phoneObservation:{id,observedAt:at,ageMs:age,fresh:age===0,positive}});
@@ -369,13 +412,13 @@ test('low-confidence diagnostic candidates reach the display without triggering 
   globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
   const s=scene(),model=result=>({detectForVideo:()=>result,close(){}}),thresholds=[];
   const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model(s.pose)},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
-    {load:async()=>({detect:async(source,count,threshold)=>{thresholds.push(threshold);return threshold===0?[{...phone,score:.057}]:[];},dispose(){}})},
+    {load:async()=>({detect:async(source,count,threshold)=>{thresholds.push(threshold);return [{...phone,score:.057}];},dispose(){}})},
     {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
   try {
     await engine.detect({width:100,height:100},0);
     await new Promise(resolve=>setTimeout(resolve,0));
     const result=await engine.detect({width:100,height:100},100);
-    assert.deepEqual(thresholds,[.2,.2,0]);
+    assert.deepEqual(thresholds,[.2,.2]);
     assert.equal(result.signals.phoneUse,false);
     assert.equal(result.signals.phoneEvidence.score,.057);
   } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}

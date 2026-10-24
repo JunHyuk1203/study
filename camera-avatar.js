@@ -176,7 +176,7 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
     else presentation.missingSince = null;
   }
   const briefLoss = active && status === 'scanning' && presentation?.desired === 'recognized' && now - presentation.missingSince <= 3000;
-  const desired = status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  const desired = status === 'identity-failed' ? 'rejected' : status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   if (!presentation || presentation.desired !== desired || returnedAfterLongLoss) {
     const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
@@ -196,7 +196,7 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
       }, 700);
     });
   }
-  mount.querySelector('.cam-recognition').setAttribute('aria-label', desired === 'recognized' ? '얼굴 인식 완료' : desired === 'error' ? '얼굴 인식 연결 대기' : '얼굴을 찾는 중');
+  mount.querySelector('.cam-recognition').setAttribute('aria-label', desired === 'rejected' ? '본인 확인 실패' : desired === 'recognized' ? '얼굴 인식 완료' : desired === 'error' ? '얼굴 인식 연결 대기' : '얼굴을 찾는 중');
   const avatar = mount.querySelector('.cam-avatar');
   avatar.setAttribute('aria-hidden', String(mount.dataset.avatarPhase !== 'avatar'));
   mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle', 'paused'].includes(mount.dataset.avatarPhase)));
