@@ -137,6 +137,20 @@ function timerUi(skew) {
   })};
 }
 
+test('camera queue preserves pause-resume-pause boundaries and retries the same lost event',async()=>{
+  const t=timerUi(0),requests=[],releases=[];
+  t.configure(request=>{requests.push({...request});return new Promise((resolve,reject)=>releases.push({resolve:()=>resolve({data:{session:{sequence:request.sequence,lastEventId:request.eventId,serverNowMs:100000,activeSinceMs:request.tracking?100000:null,leaseUntilMs:130000}}}),reject}));});
+  t.ui.observeSession(t.snapshot(0));const first=t.ui.syncCamera();
+  for(const tracking of [false,true,false]){t.tick(1000);t.camera.tracking=tracking;t.handlers['study:camera-changed']();}
+  releases.shift().reject(Error('lost response'));await first;
+  t.tick(5000);const retry=t.ui.syncCamera();
+  assert.equal(requests[0].eventId,requests[1].eventId);assert.equal(requests[0].sequence,requests[1].sequence);
+  releases.shift().resolve();await retry;
+  for(let i=0;i<3;i++){releases.shift().resolve();await new Promise(resolve=>setImmediate(resolve));}
+  assert.deepEqual(requests.map(row=>row.tracking),[true,true,false,true,false]);
+  assert.equal(t.ui.syncState().busy,false);
+});
+
 test('camera acknowledgements publish the confirmed room state immediately',async()=>{
   const t=timerUi(0),roomActivity={roomId:'room',member:{status:'studying',seconds:5}};
   t.configure(async()=>({data:{roomActivity}}));t.ui.observeSession(t.snapshot(0));
@@ -304,18 +318,18 @@ test('camera display stops extrapolating when its server lease expires',()=>{
   t.tick(40000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:30');
 });
 
-test('delayed checkpoints never add paused gaps or rewind the displayed time',()=>{
+test('delayed checkpoints reconcile the display with confirmed server credit',()=>{
   const t=timerUi(0);
   t.ui.observeSession(t.snapshot(0));
   t.tick(3500);t.camera.tracking=false;t.handlers['study:camera-changed']();
   assert.equal(t.display.textContent,'00:00:03');
   t.tick(8000);t.ui.observeSession(t.snapshot(11,false,2));t.ui.paintTimer();
-  assert.equal(t.display.textContent,'00:00:03');
+  assert.equal(t.display.textContent,'00:00:11');
   t.camera.tracking=true;t.handlers['study:camera-changed']();
   t.tick(2000);t.ui.observeSession(t.snapshot(11,true,3));
-  t.tick(2000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
+  t.tick(2000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:13');
   t.ui.observeSession(t.snapshot(4,true,4));t.ui.paintTimer();
-  assert.equal(t.display.textContent,'00:00:05');
+  assert.equal(t.display.textContent,'00:00:04');
 });
 
 test('wall clock changes and duplicate snapshots cannot shift an active display',()=>{
@@ -345,7 +359,9 @@ test('recognition bouncing during a heartbeat schedules a fresh resume acknowled
   t.camera.tracking=false;t.handlers['study:camera-changed']();
   t.camera.tracking=true;t.handlers['study:camera-changed']();
   acknowledge();await pending;
-  assert.equal(requests.length,2);assert.equal(requests[1].tracking,true);
+  assert.equal(requests.length,2);assert.equal(requests[1].tracking,false);
+  acknowledge();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests.length,3);assert.equal(requests[2].tracking,true);
   acknowledge();await new Promise(resolve=>setImmediate(resolve));t.tick(2000);t.ui.paintTimer();
   assert.equal(t.display.textContent,'00:00:02');
 });
@@ -430,7 +446,8 @@ test('connection failures back off instead of retrying every second',async()=>{
   t.tick(1000);await t.ui.syncCamera();assert.equal(calls,2);
   t.tick(9000);await t.ui.syncCamera();assert.equal(calls,2);
   t.tick(1000);await t.ui.syncCamera();assert.equal(calls,3);
-  t.camera.tracking=false;await t.ui.syncCamera();assert.equal(calls,4);
+  t.camera.tracking=false;await t.ui.syncCamera();assert.equal(calls,3);
+  t.tick(20000);await t.ui.syncCamera();assert.equal(calls,4);
 });
 
 function dataUi() {

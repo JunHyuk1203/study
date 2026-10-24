@@ -13,6 +13,8 @@ function eyeAspect(face, a, b, c, d, e, f) {
 }
 export function extractFocusSignals(faceResult, poseResult, handResult, objects, width, height) {
   const face = faceResult.faceLandmarks?.[0];
+  const aspect = width > 0 && height > 0 ? width/height : 1;
+  const geometry = face?.map(p=>finitePoint(p)?{...p,x:p.x*aspect}:p);
   const pose = poseResult.landmarks?.[0];
   const body = Boolean(pose && [11, 12].every(i => visiblePoint(pose[i])));
   const faceValid = Boolean(face && [1, 33, 263].every(i => finitePoint(face[i])) && distance(face[33],face[263]) > .01);
@@ -23,7 +25,7 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
   const eyeMid = faceValid ? { x: (face[33].x + face[263].x) / 2, y: (face[33].y + face[263].y) / 2 } : null;
-  const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(face[33], face[263])) > .65;
+  const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(geometry[33], geometry[263])) > .65;
   const phones = boxes.filter(o => o.class === 'cell phone').map(o => {
     const center = { x: o.box[0] + o.box[2] / 2, y: o.box[1] + o.box[3] / 2 };
     const touching = hands.some(p => nearBox(p, o.box, .08)) || wrists.some(p => nearBox(p, o.box, .1));
@@ -41,18 +43,18 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     (o.class === 'laptop' && faceValid && !headDown && Math.abs(head.x - eyeMid.x) < .1) ||
     (o.class === 'book' && hands.some(p => nearBox(p, o.box))));
   const blends = Object.fromEntries((faceResult.faceBlendshapes?.[0]?.categories || []).map(c => [c.categoryName, c.score]));
-  const eyesClosed = faceValid && ((eyesValid && eyeAspect(face, 33, 160, 158, 133, 153, 144) < .16 &&
-    eyeAspect(face, 362, 385, 387, 263, 373, 380) < .16) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
+  const eyesClosed = faceValid && ((eyesValid && eyeAspect(geometry, 33, 160, 158, 133, 153, 144) < .16 &&
+    eyeAspect(geometry, 362, 385, 387, 263, 373, 380) < .16) || (blends.eyeBlinkLeft > .7 && blends.eyeBlinkRight > .7));
   const gaze = irisValid ? [
     (face[468].x - face[33].x) / Math.max(.001, Math.abs(face[133].x - face[33].x)),
     (face[473].x - face[362].x) / Math.max(.001, Math.abs(face[263].x - face[362].x)),
   ] : [.5,.5];
-  const eyeWidth = faceValid ? Math.max(.01, distance(face[33], face[263])) : 1;
-  const headDirection = faceValid ? [(head.x - eyeMid.x) / eyeWidth, (head.y - eyeMid.y) / eyeWidth,
-    Math.atan2(face[263].y - face[33].y, face[263].x - face[33].x)] : [];
+  const eyeWidth = faceValid ? Math.max(.01, distance(geometry[33], geometry[263])) : 1;
+  const headDirection = faceValid ? [(head.x - eyeMid.x)*aspect / eyeWidth, (head.y - eyeMid.y) / eyeWidth,
+    Math.atan2(face[263].y - face[33].y, (face[263].x - face[33].x)*aspect)] : [];
   const verticalGaze = irisValid ? [
-    (face[468].y - (face[159].y + face[145].y) / 2) / Math.max(.01, distance(face[33], face[133])),
-    (face[473].y - (face[386].y + face[374].y) / 2) / Math.max(.01, distance(face[362], face[263])),
+    (face[468].y - (face[159].y + face[145].y) / 2) / Math.max(.01, distance(geometry[33], geometry[133])),
+    (face[473].y - (face[386].y + face[374].y) / 2) / Math.max(.01, distance(geometry[362], geometry[263])),
   ] : [0,0];
   const activityVector = faceValid ? [head.x, head.y, ...gaze, ...headDirection, ...verticalGaze] : null;
   const studyPoints = [pose?.[15], pose?.[16], ...(handResult.landmarks || []).map(hand => hand[8])].map(p =>
@@ -131,43 +133,52 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     resources.push(objects);
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
-    let cachedObjects = [], objectTime = -Infinity, phones = [], phoneTime = -Infinity;
+    let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0;
+    let objectPending=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
+    const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
     const faceContinuity = createFaceContinuity();
     return {
       async detect(source, time) {
         const startedAt = performance.now();
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
-        const faceResult = face.detectForVideo(source, time);
-        const poseResult = pose.detectForVideo(source, time);
-        const handResult = hand.detectForVideo(source, time);
+        let began=performance.now();
+        const faceResult = face.detectForVideo(source, time);modelMs.face=performance.now()-began;
+        if(time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
+        if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
-        if (time - objectTime >= 800) {
+        if (!objectPending && time - objectTime >= 800) {
+          objectTime=time;
           input.width = width; input.height = height;
           context.drawImage(source, 0, 0, width, height);
-          cachedObjects = await objects.detect(context.getImageData(0, 0, width, height), 30, .2);
-          if (!cachedObjects.some(o => o.class === 'cell phone' && o.score >= .3)) {
-            const region = phoneSearchRegion(poseResult, handResult);
-            input.width = Math.max(1, Math.round(region.width*width)); input.height = Math.max(1, Math.round(region.height*height));
-            context.drawImage(source, region.x*width, region.y*height, region.width*width, region.height*height, 0, 0, input.width, input.height);
-            const zoomed = await objects.detect(context.getImageData(0, 0, input.width, input.height), 30, .2);
-            cachedObjects.push(...zoomed.filter(o => o.class === 'cell phone').map(o => ({...o,
-              bbox: [region.x*width + o.bbox[0]*region.width*width/input.width,
-                region.y*height + o.bbox[1]*region.height*height/input.height,
-                o.bbox[2]*region.width*width/input.width, o.bbox[3]*region.height*height/input.height]})));
-          }
-          const foundPhones = cachedObjects.filter(o => o.class === 'cell phone' && o.score >= .3);
-          if (foundPhones.length) { phones = foundPhones; phoneTime = time; }
-          else if (time-phoneTime < 1500) cachedObjects.push(...phones);
-          objectTime = time;
+          const full=context.getImageData(0,0,width,height),region=phoneSearchRegion(poseResult,handResult);
+          const cropWidth=Math.max(1,Math.round(region.width*width)),cropHeight=Math.max(1,Math.round(region.height*height));
+          input.width=cropWidth;input.height=cropHeight;
+          context.drawImage(source,region.x*width,region.y*height,region.width*width,region.height*height,0,0,cropWidth,cropHeight);
+          const crop=context.getImageData(0,0,cropWidth,cropHeight),objectStarted=performance.now();
+          // Copy pixels before returning: the worker may close the input bitmap.
+          // A new task lets the Worker post this face result before TF CPU work.
+          objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
+            if(closed)return;
+            let found=await objects.detect(full,30,.2);
+            if(!found.some(o=>o.class==='cell phone'&&o.score>=.3)) {
+              const zoomed=await objects.detect(crop,30,.2);
+              found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));
+            }
+            if(!closed){cachedObjects=found;objectWidth=width;objectHeight=height;observedAt=time;observationId++;}
+          }).catch(()=>{if(!closed){cachedObjects=[];observedAt=-Infinity;observationId++;}}).finally(()=>{modelMs.objects=performance.now()-objectStarted;objectPending=null;});
         }
-        const signals = extractFocusSignals(faceResult, poseResult, handResult, cachedObjects, width, height);
+        const ageMs=time-observedAt;
+        const currentObjects=ageMs<=1500?cachedObjects.map(o=>({...o,bbox:[o.bbox[0]*width/objectWidth,o.bbox[1]*height/objectHeight,o.bbox[2]*width/objectWidth,o.bbox[3]*height/objectHeight]})):[];
+        const signals = extractFocusSignals(faceResult, poseResult, handResult, currentObjects, width, height);
+        signals.phoneObservation={id:observationId,observedAt,ageMs,fresh:observationId!==deliveredId,positive:signals.phoneUse,confidence:signals.phoneEvidence.score};
+        deliveredId=observationId;
         signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);
         delete signals.studyPoints;
         return { type: 'result', time, signals, backend: tf.getBackend(), mode: light ? 'light' : 'standard', inferenceMs: performance.now()-startedAt,
-          landmarks: faceContinuity.update(faceResult,time) };
+          modelMs:{...modelMs},objectAgeMs:ageMs,landmarks: faceContinuity.update(faceResult,time) };
       },
-      close() { for (const model of resources) (model.close || model.dispose).call(model); },
+      close() { closed=true;const dispose=()=>{for(const model of resources)(model.close||model.dispose).call(model);};if(objectPending)void objectPending.finally(dispose);else dispose(); },
     };
   } catch (error) {
     for (const model of resources) (model.close || model.dispose).call(model);

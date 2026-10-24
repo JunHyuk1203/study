@@ -2,7 +2,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { checkpointCamera, WORD_LEASE_MS, CAMERA_PRESENCE_MS, validDisplayName, weekKey } from './domain.js';
+import { checkpointCamera, WORD_LEASE_MS, CAMERA_PRESENCE_MS, STUDY_CONTRACT_VERSION, MAX_SESSION_MS, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
 import {changeSocial, socialSnapshot} from './social-service.js';
@@ -10,6 +10,7 @@ import {purgeIdleRooms,readActivityRoom,publishRoomActivity} from './room-servic
 import {roomRankings} from './room-study.js';
 import {dailyReport} from './report-service.js';
 import {finishSession as finishSessionRecord, expireUserSessions} from './session-lifecycle.js';
+import {cleanupExpiredSessions} from './session-cleanup.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 export { startWordStudy, syncWordStudy } from './word-study.js';
 export {saveWordStudyLink,restoreWordStudyLink,removeWordStudyLink} from './word-link.js';
@@ -82,7 +83,7 @@ export const startStudySession = onCall(options, async (request) => {
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     if(profile.data().wordHandoffUntilMs>Date.now())throw new HttpsError('failed-precondition','단어앱 학습으로 전환 중입니다. 잠시 후 다시 시작해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
-    session = { uid, subjectId, status: 'active', presenceUntilMs:now.toMillis()+(cameraMode?CAMERA_PRESENCE_MS:WORD_LEASE_MS),...(controllerId?{controllerId}:{}),
+    session = { uid, subjectId, status: 'active', contractVersion:STUDY_CONTRACT_VERSION,canResume:true,terminalReason:null,presenceUntilMs:now.toMillis()+(cameraMode?CAMERA_PRESENCE_MS:WORD_LEASE_MS),...(controllerId?{controllerId}:{}),
       ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) };
     transaction.create(sessionRef, { ...session, startedAt: now, createdAt: now });
     transaction.set(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:session.presenceUntilMs});
@@ -94,15 +95,17 @@ export const startStudySession = onCall(options, async (request) => {
 
 export const syncStudyCamera = onCall(options, async request => {
   const uid = userId(request, true);
-  const { sessionId, controllerId, sequence, tracking } = request.data || {};
+  const { sessionId, controllerId, sequence, tracking, eventId, clientEpoch } = request.data || {};
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean') throw new HttpsError('invalid-argument', '카메라 상태가 올바르지 않습니다.');
-  await expireUserSessions(db,uid);
+  if(eventId!=null && (typeof eventId!=='string'||eventId.length>100||!Number.isSafeInteger(clientEpoch)||clientEpoch<0))throw new HttpsError('invalid-argument','카메라 이벤트가 올바르지 않습니다.');
   return db.runTransaction(async transaction => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`);
     const record = await transaction.get(ref);
     const session = record.data();
-    if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.');
+    if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.',{terminalReason:'finished',canResume:false});
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
+    if((session.presenceUntilMs??Infinity)<=Date.now())throw new HttpsError('failed-precondition','카메라 연결이 만료되었습니다.',{terminalReason:'presence-expired',canResume:false});
+    if(eventId && session.lastEventId===eventId)return {ignored:true,session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()}};
     if (sequence <= session.sequence) return { ignored: true, session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()} };
     const profile=(await transaction.get(db.doc(`users/${uid}`))).data();
     const activity=await readActivityRoom(transaction,db,uid,profile);
@@ -113,9 +116,10 @@ export const syncStudyCamera = onCall(options, async request => {
     // Publish the confirmed state in the SAME transaction as the camera checkpoint.
     // Waiting for the owner's separate room poll left resumed peers resting for ~20s.
     const roomPatch=!wordPaused?publishRoomActivity(transaction,activity,uid,profile,{...session,...update,presenceUntilMs},updatedAt.toMillis(),(profile?.subjects||[]).find(row=>row.id===session.subjectId)?.name||'기타'):null;
-    transaction.update(ref, { ...update, sequence, presenceUntilMs, updatedAt });
+    const event=eventId?{lastEventId:eventId,clientEpoch}:{};
+    transaction.update(ref, { ...update, ...event, sequence, presenceUntilMs, updatedAt });
     transaction.set(db.doc(`wordStudyLeases/${sessionId}`),{uid,sessionId,expiresAtMs:presenceUntilMs});
-    return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, presenceUntilMs, sequence, serverNowMs: updatedAt.toMillis() },...(roomPatch?{roomActivity:{roomId:activity.ref.id,member:roomPatch.members[uid],rankings:roomRankings({...activity.room,...roomPatch},updatedAt.toMillis()),serverNowMs:updatedAt.toMillis()}}:{}) };
+    return { ignored: false, cameraStatus: update.cameraStatus, session: { ...update, ...event, presenceUntilMs, sequence, serverNowMs: updatedAt.toMillis() },...(roomPatch?{roomActivity:{roomId:activity.ref.id,member:roomPatch.members[uid],rankings:roomRankings({...activity.room,...roomPatch},updatedAt.toMillis()),serverNowMs:updatedAt.toMillis()}}:{}) };
   });
 });
 
@@ -132,7 +136,8 @@ export const heartbeatStudySession = onCall(options, async request => {
     const now=Timestamp.now(),presenceUntilMs=now.toMillis()+WORD_LEASE_MS;
     tx.update(ref,{presenceUntilMs,updatedAt:now});
     tx.set(db.doc(`wordStudyLeases/${sessionId}`),{uid,sessionId,expiresAtMs:presenceUntilMs});
-    return {session:{...session,presenceUntilMs,serverNowMs:now.toMillis()}};
+    const canResume=now.toMillis()<session.startedAt.toMillis()+MAX_SESSION_MS;
+    return {session:{...session,contractVersion:STUDY_CONTRACT_VERSION,canResume,terminalReason:canResume?null:'max-duration',presenceUntilMs,serverNowMs:now.toMillis()}};
   });
 });
 
@@ -166,10 +171,5 @@ const finishSession=(uid,...args)=>finishSessionRecord(db,uid,...args);
 // A browser can be killed before pagehide or its keepalive request runs.
 // Expired word leases credit at most the final 10-second server-observed window.
 export const closeExpiredWordStudies = onSchedule({...options,schedule:'every 1 minutes',timeZone:'Asia/Seoul'}, async () => {
-  const cutoff = Date.now();
-  const leases = await db.collection('wordStudyLeases').where('expiresAtMs','<=',cutoff).limit(100).get();
-  for (const lease of leases.docs) {
-    const {uid,sessionId} = lease.data();
-    await finishSession(uid,sessionId,cutoff);
-  }
+  return cleanupExpiredSessions(db,finishSession,{log:(message,details)=>console.log(message,details)});
 });

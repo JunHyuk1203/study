@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261022-9';
-import { createFocusTracker } from './camera-focus.js?v=20261023-6';
+import { createFocusTracker } from './camera-focus.js?v=20261024-2';
 import { paintCameraDebug } from './camera-debug.js?v=20261023-3';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -168,12 +168,12 @@ function acceptResult(data) {
   avatarPose = points ? facePose({ 1: points[0], 33: points[1], 263: points[2] }) : null;
   const stale = !Number.isFinite(data.time) || now - data.time > 3000;
   const decision = focusTracker.update(stale ? null : data.signals, now);
-  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs } };
+  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261023-4', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261024-2', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {

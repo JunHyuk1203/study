@@ -14,18 +14,26 @@ export function createFocusTracker() {
   let trackingNow = false;
   let lastSignals = null;
   let missingSince = null;
+  let phoneObservationId=null,phonePositives=0;
   function reset() {
     lastTime = candidate = since = healthySince = warning = null;
     idle.reset();
     trackingNow = false;
     lastSignals = null;
     missingSince = null;
+    phoneObservationId=null;phonePositives=0;
   }
   function update(signals, now) {
     if (!Number.isFinite(now)) throw new TypeError('A monotonic timestamp is required');
     if (lastTime !== null && (now <= lastTime || now - lastTime > FOCUS_LIMITS.gap)) reset();
     lastTime = now;
     lastSignals = signals;
+    const observation=signals?.phoneObservation;
+    if(observation && observation.id!==phoneObservationId) {
+      phoneObservationId=observation.id;
+      phonePositives=observation.positive && observation.ageMs<=1500 ? phonePositives+1 : 0;
+    }
+    if(observation && observation.ageMs>1500)phonePositives=0;
     const valid = signals?.reliable === true;
     const visible = valid && signals.face;
     missingSince = valid && !signals.face ? missingSince ?? now : null;
@@ -37,7 +45,7 @@ export function createFocusTracker() {
     if (reason) {
       if (candidate !== reason) { candidate = reason; since = now; }
       // Confirm the behavior first; the warning and pause must always happen together.
-      const confirmed = reason === 'idle' || reason === 'unknown' || now - since >= FOCUS_LIMITS[reason];
+      const confirmed = (reason === 'idle' || reason === 'unknown' || now - since >= FOCUS_LIMITS[reason]) && (reason!=='phone' || !observation || phonePositives>=2);
       if (!confirmed) {
         return { tracking: trackingNow && !warning, status: warning ? 'paused' : trackingNow ? 'tracking' : 'scanning',
           reason: warning, message: warning ? FOCUS_MESSAGES[warning] : trackingNow ? '학습 행동 인식 중 · 집중 시간 측정' : '학습 행동 확인 중 · 자동 시작 준비' };

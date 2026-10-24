@@ -7,6 +7,47 @@ import { extractFocusSignals, createCameraInference, createStudyMotionTracker, p
 import { focusDebugRows } from '../camera-debug.js';
 
 const healthy = { reliable: true, face: true, body: true, eyesClosed: false, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
+test('cached phone evidence cannot confirm use and a new negative resets the candidate',()=>{
+  const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
+  const signal=(id,at,positive,age=0)=>({...healthy,phoneUse:positive,phoneObservation:{id,observedAt:at,ageMs:age,fresh:age===0,positive}});
+  tracker.update(signal(1,2200,true),2200);
+  assert.equal(tracker.update(signal(1,2200,true,800),3000).tracking,true);
+  assert.equal(tracker.update(signal(2,3200,false),3200).reason,null);
+  tracker.update(signal(3,3400,true),3400);
+  assert.equal(tracker.update(signal(3,3400,true,800),4200).tracking,true);
+  assert.equal(tracker.update(signal(4,4400,true),4400).reason,'phone');
+});
+
+test('slow or failed object inference does not hold face results or reuse stale phone evidence',async()=>{
+  const previous=globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
+  const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
+  let reject,objectCalls=0;
+  const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model(s.pose)},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
+    {load:async()=>({detect:()=>{objectCalls++;return new Promise((resolve,no)=>{reject=no;});},dispose(){}})},
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+  try {
+    const first=await engine.detect({width:100,height:100},0);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const next=await engine.detect({width:100,height:100},1000);
+    assert.equal(first.signals.face,true);assert.equal(next.signals.face,true);assert.equal(objectCalls,1);
+    reject(Error('object model failed'));await new Promise(resolve=>setImmediate(resolve));
+    const after=await engine.detect({width:100,height:100},1200);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(after.signals.face,true);assert.equal(after.signals.phoneUse,false);
+    assert.ok(after.modelMs.face>=0);reject(Error('shutdown'));await new Promise(resolve=>setImmediate(resolve));
+  } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
+});
+
+test('eye geometry preserves pixel proportions across portrait and landscape normalization',()=>{
+  const s=scene();
+  const measure=(width,height)=>{
+    const points=s.face.faceLandmarks[0].map(p=>({...p,x:p.x*100/width,y:p.y*100/height}));
+    return extractFocusSignals({...s.face,faceLandmarks:[points]},s.pose,s.hands,[],width,height);
+  };
+  assert.equal(measure(200,100).eyesClosed,measure(100,200).eyesClosed);
+  assert.deepEqual(measure(200,100).activityVector.slice(4),measure(100,200).activityVector.slice(4));
+});
 function advance(tracker, signals, from, to, step = 500) {
   let state;
   for (let t = from; t <= to; t += step) state = tracker.update(signals, t);
@@ -333,7 +374,10 @@ test('WASM inference preserves 800ms object cadence in standard and light mode',
       const engine=await createCameraInference(vision,coco,tf,undefined,{light});
       try{
         const first=await engine.detect({width:100,height:100},0);
+        await new Promise(resolve=>setTimeout(resolve,0));
+        await new Promise(resolve=>setImmediate(resolve));
         await engine.detect({width:100,height:100},200);await engine.detect({width:100,height:100},800);
+        await new Promise(resolve=>setTimeout(resolve,0));
         assert.equal(first.backend,'wasm');assert.equal(calls.length,2);assert.equal(calls[0][2],.2);
         assert.equal(base,light?'lite_mobilenet_v2':'mobilenet_v2');
       }finally{engine.close();}

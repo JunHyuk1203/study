@@ -6,6 +6,9 @@ export const CAMERA_LEASE_MS = 10000;
 // Presence tolerates slow/cold requests; credited time still stops at 10 seconds.
 export const CAMERA_PRESENCE_MS = 45000;
 export const WORD_LEASE_MS = 10000;
+export const WORD_PRESENCE_MS = 45000;
+export const STUDY_CONTRACT_VERSION = '2026-10-24';
+export const HEARTBEAT_MS = 5000;
 
 // Aggregate only server-observed active windows. An expired lease never credits the gap.
 export function checkpointCamera(session, nowMs, tracking, leaseMs = CAMERA_LEASE_MS) {
@@ -23,7 +26,7 @@ export function checkpointCamera(session, nowMs, tracking, leaseMs = CAMERA_LEAS
   }
   const active = tracking && now < deadline;
   const segments = [...buckets.values()];
-  return { segments, hourlySeconds, accumulatedSeconds: segments.reduce((sum, row) => sum + row.seconds, 0), activeSinceMs: active ? now : null, leaseUntilMs: active ? Math.min(now + leaseMs, deadline) : null, cameraStatus: active ? 'tracking' : 'paused' };
+  return { segments, hourlySeconds, accumulatedSeconds: segments.reduce((sum, row) => sum + row.seconds, 0), activeSinceMs: active ? now : null, leaseUntilMs: active ? Math.min(now + leaseMs, deadline) : null, cameraStatus: active ? 'tracking' : 'paused', contractVersion: STUDY_CONTRACT_VERSION, canResume: now < deadline, terminalReason: now >= deadline ? 'max-duration' : null };
 }
 
 export function validDisplayName(value) {

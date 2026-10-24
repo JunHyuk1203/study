@@ -17,7 +17,10 @@ export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) 
     // Recheck inside the transaction: a heartbeat may have renewed this lease
     // after the cleanup query selected it.
     if (expiredBeforeMs != null && (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+WORD_LEASE_MS) > expiredBeforeMs) return {notExpired:true};
-    if (session.status === 'finished') return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
+    if (session.status === 'finished') {
+      transaction.delete(db.doc(`wordStudyLeases/${sessionId}`));
+      return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
+    }
     const profile = profileDoc.data();
     const wordSession=session.source==='superword';
     if (profile.activeSessionId !== sessionId && !(wordSession && profile.wordStudySessionId===sessionId)) throw new HttpsError('failed-precondition', '진행 중인 학습 기록이 일치하지 않습니다.');

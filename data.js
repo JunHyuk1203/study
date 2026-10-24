@@ -3,7 +3,7 @@ import { firebaseConfig } from './firebase-config.js';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache, statsRevision } from './client-cache.js?v=20261024-1';
 import { showToast } from './notifications.js?v=20261022-18';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261023-6';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261024-2';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }
@@ -46,11 +46,12 @@ let cameraPauseAt = null;
 let cameraResumeSequence = null;
 let cameraSyncSequence = 0;
 let cameraSyncEpoch=0,cameraHandoffDisplay=null;
+let cameraTransitions = [], cameraEventCounter = 0;
 let cameraLastWordPaused=null;
 let sessionClock = null;
 let wordClock=null;
 let cameraDisplay = null;
-// Keep a monotonic display across delayed checkpoints and recognition changes.
+// Confirmed server credit plus a lease-bounded, monotonic local estimate.
 function updateCameraDisplay() {
   if (!cameraDisplay && (!state.active?.cameraMode || state.active.controllerId !== cameraController)) return;
   const localMs = performance.now();
@@ -61,7 +62,12 @@ function updateCameraDisplay() {
   const session = state.active;
   if (!session?.cameraMode || session.controllerId !== cameraController) {cameraDisplay=null;return;}
   const now = sessionNow();
-  cameraDisplay ??= {totalMs:(session.accumulatedSeconds || 0)*1000 + (session.activeSinceMs != null ? Math.max(0, Math.min(now, session.leaseUntilMs) - session.activeSinceMs) : 0), localMs};
+  const confirmedMs = (session.accumulatedSeconds || 0)*1000;
+  if (!cameraDisplay || cameraDisplay.session !== session) {
+    const provisionalMs = session.activeSinceMs != null ? Math.max(0, Math.min(now, session.leaseUntilMs) - session.activeSinceMs) : 0;
+    cameraDisplay = {session, confirmedMs, provisionalMs, totalMs:confirmedMs + provisionalMs, localMs};
+  }
+  cameraDisplay.provisionalMs = Math.max(0, cameraDisplay.totalMs-cameraDisplay.confirmedMs);
   const camera = cameraState();
   cameraDisplay.running = session.activeSinceMs != null && camera.tracking && !camera.manuallyPaused && !cameraPageHidden() && !cameraSyncFailed && cameraResumeSequence == null && !wordAppInUse();
   cameraDisplay.untilMs = localMs + Math.max(0, (session.leaseUntilMs || 0) - now);
@@ -84,6 +90,7 @@ function resetCameraSync() {
   cameraLastSync=0;cameraLastTracking=null;cameraSyncFailed=false;cameraSyncFailures=0;
   cameraRetryAt=0;cameraLastAttemptTracking=null;cameraPauseAt=null;cameraResumeSequence=null;
   cameraLastWordPaused=null;
+  cameraTransitions=[];
 }
 function observeActiveSnapshot(session,sessionId,watchGeneration=generation) {
   if(watchGeneration!==generation||activeId!==sessionId||state.profile?.activeSessionId!==sessionId)return;
@@ -366,32 +373,46 @@ function paintTimer() {
 
 async function syncCamera(force = false, wordChanged = false) {
   const session = state.active;
-  if (!session || session.activityMode || session.controllerId !== cameraController || !call || cameraSyncBusy || busy) return;
+  if (!session || session.activityMode || session.controllerId !== cameraController || !call || busy) return;
   if(session.cameraMode&&!cameraState().enabled)return;
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
-  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null; }
+  if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null;cameraTransitions=[]; }
   const wordPaused=wordAppInUse();
   wordChanged ||= wordPaused!==cameraLastWordPaused;
-  const tracking = !session.cameraMode || cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
-  if (cameraSyncFailed && tracking === cameraLastAttemptTracking && Date.now() < cameraRetryAt) return;
+  const desired = !session.cameraMode || cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
+  const tail=cameraTransitions.at(-1);
+  if (tail ? tail.tracking!==desired || tail.wordPaused!==wordPaused : desired!==cameraLastTracking || wordChanged) {
+    cameraTransitions.push({sessionId,controllerId:cameraController,clientEpoch:cameraSyncEpoch,eventId:`${cameraSyncEpoch}:${++cameraEventCounter}`,tracking:desired,wordPaused});
+  }
+  if (cameraSyncBusy) return;
+  if (cameraSyncFailed && Date.now() < cameraRetryAt) return;
   // Status/pose changes with the same presence must not trigger extra writes.
-  if (!wordChanged && tracking === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 5000) return;
+  if (!cameraTransitions.length && !wordChanged && desired === cameraLastTracking && !cameraSyncFailed && cameraResumeSequence == null && Date.now() - cameraLastSync < 5000) return;
+  if(!cameraTransitions.length)cameraTransitions.push({sessionId,controllerId:cameraController,clientEpoch:cameraSyncEpoch,eventId:`${cameraSyncEpoch}:${++cameraEventCounter}`,tracking:desired,wordPaused});
+  const transition=cameraTransitions[0],tracking=transition.tracking;
   cameraSyncBusy = true;
   const requestEpoch=cameraSyncEpoch;
   cameraLastAttemptTracking=tracking;
   // Detection can change before Firestore delivers the previous sync.
-  const sequence = cameraSyncSequence = Math.max(cameraSyncSequence, session.sequence || 0) + 1;
+  const sequence = transition.sequence ??= Math.max(cameraSyncSequence, session.sequence || 0) + 1;
+  cameraSyncSequence=Math.max(cameraSyncSequence,sequence);
   try {
-    const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')({ sessionId, controllerId: cameraController, tracking, sequence });
+    const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')({ ...transition, sequence, contractVersion:'2026-10-24' });
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
+    if(result?.data?.session?.canResume===false){await call('finishStudySession')({sessionId});if(requestEpoch===cameraSyncEpoch)leaveEndedStudy();return;}
     if(result?.data?.roomActivity)window.dispatchEvent(new CustomEvent('study:room-activity',{detail:result.data.roomActivity}));
-    if(result?.data?.ignored)cameraResumeSequence=Math.max(cameraResumeSequence||0,(state.active?.sequence||sequence)+1);
-    cameraLastTracking = tracking;
-    cameraLastWordPaused = wordPaused;
-    cameraSyncFailed = false;
-    cameraSyncFailures=0;cameraRetryAt=0;
+    if(result?.data?.ignored && result?.data?.session?.lastEventId!==transition.eventId) {
+      // Word ownership changes also advance the server sequence. Keep the boundary.
+      transition.sequence=Math.max(sequence,state.active?.sequence||0)+1;
+      if((transition.rejections=(transition.rejections||0)+1)>1){cameraSyncFailed=true;cameraRetryAt=Date.now()+5000;}
+    } else {
+      cameraTransitions.shift();
+      cameraLastTracking = tracking;
+      cameraLastWordPaused = transition.wordPaused;
+    }
+    if(!cameraSyncFailed || !result?.data?.ignored){cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;}
   } catch (error) {
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     if(error?.code==='functions/failed-precondition'||error?.code==='functions/not-found'){leaveEndedStudy();return;}
@@ -402,7 +423,7 @@ async function syncCamera(force = false, wordChanged = false) {
     if(requestEpoch!==cameraSyncEpoch)return;
     cameraLastSync = Date.now(); cameraSyncBusy = false; paintTimer();
     const currentTracking = !session.cameraMode || cameraState().tracking && !cameraState().manuallyPaused && !cameraPageHidden();
-    if (tracking !== currentTracking || !cameraSyncFailed && (wordPaused!==wordAppInUse() || cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence)) void syncCamera(true);
+    if (!cameraSyncFailed && (cameraTransitions.length || tracking !== currentTracking || wordPaused!==wordAppInUse() || cameraResumeSequence != null && cameraSyncSequence < cameraResumeSequence)) void syncCamera(true);
   }
 }
 
@@ -509,7 +530,7 @@ async function connectUser() {
     if (profile && (profile.studyRevision || 0) < previousRevision) return;
     state.profile = profile;
     if(previousWordClock!==profile?.wordSnapshot?.serverNowMs)wordClock=profile?.wordSnapshot?{serverMs:profile.wordSnapshot.serverNowMs,localMs:performance.now()}:null;
-    if(previousWordPresence!==profile?.wordPresenceUntilMs)queueMicrotask(()=>{if(token===generation)void syncCamera(false,true);});
+  if(Boolean(previousWordPresence>Date.now())!==Boolean(profile?.wordPresenceUntilMs>Date.now()))queueMicrotask(()=>{if(token===generation)void syncCamera();});
     if (state.profile) resolveProfile();
     else if (!creatingProfile) {
       creatingProfile=true;
