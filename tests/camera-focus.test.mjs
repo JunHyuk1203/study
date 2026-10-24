@@ -75,6 +75,14 @@ test('face returning inside grace resumes immediately without requiring owner mo
   assert.equal(tracker.update({...owner,identity:{matched:false,status:'mismatch'}},5700).tracking,true);
   assert.equal(advance(tracker,owner,5900,8500,200).tracking,true);
 });
+for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`face grace keeps tracking for invalid or incomplete results: ${JSON.stringify(loss)}`,()=>{
+  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
+  advance(tracker,owner,0,2000);
+  assert.equal(advance(tracker,loss,2200,7000,200).tracking,true);
+  assert.equal(tracker.update(loss,7199).tracking,true);
+  assert.equal(tracker.update(loss,7200).tracking,false);
+  assert.equal(tracker.update(owner,7400).tracking,true);
+});
 test('an initial unverified face gets eight seconds only after study actually starts',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'checking',enrolled:true}};
   assert.equal(tracker.update(wrong,0).tracking,false);
@@ -193,7 +201,7 @@ test('idle debug countdown ignores brief movement and resets after sustained mot
 for (const [reason, signals, delay] of [
   ['sleep', { ...healthy, eyesClosed: true }, 4500],
   ['phone', { ...healthy, phoneUse: true }, 750],
-  ['away', { ...healthy, face: false, body: false }, 3000],
+  ['away', { ...healthy, face: false, body: false }, 5000],
 ]) test(`${reason}: stops credit, warns after persistence and automatically recovers`, () => {
   const tracker = createFocusTracker();
   assert.equal(advance(tracker, healthy, 0, 2000).tracking, true);
@@ -206,7 +214,7 @@ for (const [reason, signals, delay] of [
   assert.equal(warned.reason, reason);
   assert.equal(warned.status, 'paused');
   const recoverAt=2500+delay+500;
-  assert.equal(tracker.update(healthy, recoverAt).tracking, false);
+  assert.equal(tracker.update(healthy, recoverAt).tracking, reason==='away');
   assert.equal(advance(tracker, healthy, recoverAt+500, recoverAt+2000).tracking, true);
 });
 test('a blink or brief occlusion never becomes a persistent behavior warning', () => {
@@ -358,21 +366,22 @@ test('phone confirmation takes priority when the phone covers the face', () => {
   const state=tracker.update(covered,3000);
   assert.equal(state.reason,'phone');assert.equal(state.tracking,false);assert.equal(state.status,'paused');
 });
-test('missing/partial observations and long gaps cannot keep crediting time', () => {
+test('missing/partial observations use bounded grace and long gaps cannot keep crediting time', () => {
   for (const signals of [null, {}, { ...healthy, reliable: false }]) {
     const tracker = createFocusTracker(); advance(tracker, healthy, 0, 2000);
-    assert.equal(tracker.update(signals, 2500).tracking, false);
+    assert.equal(tracker.update(signals, 2500).tracking, true);
+    assert.equal(advance(tracker,signals,3000,7500).tracking,false);
   }
   const tracker = createFocusTracker(); advance(tracker, healthy, 0, 2000);
   assert.equal(tracker.update(healthy, 9000).tracking, false);
   assert.equal(advance(tracker, healthy, 9500, 11000).tracking, true);
   tracker.reset(); assert.equal(tracker.update(healthy, 12000).tracking, false);
 });
-test('face loss with visible shoulders uses the same uninterrupted three-second grace', () => {
+test('face loss with visible shoulders uses the same uninterrupted five-second grace', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   assert.equal(tracker.update({...healthy,face:false,body:true},2500).tracking,true);
-  assert.equal(advance(tracker,{...healthy,face:false,body:false},3000,5000).tracking,true);
-  const paused=tracker.update({...healthy,face:false,body:true},5500);
+  assert.equal(advance(tracker,{...healthy,face:false,body:false},3000,7000).tracking,true);
+  const paused=tracker.update({...healthy,face:false,body:true},7500);
   assert.equal(paused.reason,'away');assert.equal(paused.status,'paused');assert.equal(paused.tracking,false);
 });
 test('brief face losses neither stop tracking nor reset the idle observation clock', () => {
@@ -521,7 +530,9 @@ test('controller propagates behavior pauses, ignores stale results and auto resu
   assert.equal(send(2200,{...healthy,phoneUse:true}).tracking,true);
   assert.equal(send(3800,{...healthy,phoneUse:true}).reason,'phone');
   send(4000); assert.equal(send(6000).tracking,true);
-  assert.equal(send(9001,healthy,6000).tracking,false);
+  assert.equal(send(9001,healthy,6000).tracking,true);
+  for(let t=9501;t<14001;t+=500)assert.equal(send(t,healthy,6000).tracking,true);
+  assert.equal(send(14001,healthy,6000).tracking,false);
   assert.ok(events>=5);
 });
 test('inference initialization failure closes every model already created', async () => {

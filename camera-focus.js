@@ -1,6 +1,6 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261024-10';
-export const FOCUS_LIMITS = Object.freeze({ identity: 8000, faceGrace: 5000, sleep: 4500, phone: 750, away: 3000, idle: 15000, resume: 2000, gap: 3000 });
+export const FOCUS_LIMITS = Object.freeze({ identity: 8000, faceGrace: 5000, sleep: 4500, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',
@@ -33,7 +33,7 @@ export function createFocusTracker() {
   }
   function update(signals, now) {
     if (!Number.isFinite(now)) throw new TypeError('A monotonic timestamp is required');
-    if (lastTime !== null && (now <= lastTime || now - lastTime > FOCUS_LIMITS.gap)) reset(true);
+    if (lastTime !== null && (now <= lastTime || now - lastTime > (trackingNow?FOCUS_LIMITS.faceGrace:FOCUS_LIMITS.gap))) reset(true);
     lastTime = now;
     lastSignals = signals;
     const observation=signals?.phoneObservation;
@@ -50,7 +50,7 @@ export function createFocusTracker() {
     const observations={sleep:visible&&signals.eyesClosed,phone:valid&&signals.phoneUse,away:valid&&!signals.face};
     for(const key of Object.keys(behaviorSince))behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
     const faceReturned=visible&&missingSince!==null&&resumeOnFace;
-    missingSince = valid && !signals.face ? missingSince ?? now : null;
+    missingSince = !visible ? missingSince ?? now : null;
     if(identity?.matched)identityFailureSince=null;
     if(faceReturned){
       resumeOnFace=false;identityFailureSince=null;
@@ -63,6 +63,15 @@ export function createFocusTracker() {
     const observeIdle=visible && ownerReady && !signals.eyesClosed;
     if(!observeIdle)idle.pauseGaze();
     const idleState = observeIdle ? idle.update(signals, now) : idle.state(now);
+    const elapsedFor=key=>behaviorSince[key]===null?0:now-behaviorSince[key];
+    const phoneConfirmed=valid&&signals.phoneUse&&elapsedFor('phone')>=FOCUS_LIMITS.phone&&(!observation||phonePositives>=2);
+    if(!visible&&(trackingNow||resumeOnFace||valid&&identity)&&!enrolling&&!phoneConfirmed){
+      resumeOnFace ||= trackingNow;
+      const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
+      if(expired){healthySince=null;trackingNow=false;warning='away';identityFailureSince=null;}
+      return {tracking:trackingNow&&!warning,status:expired?'paused':trackingNow?'tracking':'scanning',reason:expired?'away':null,
+        identityWarning:false,message:expired?FOCUS_MESSAGES.away:'얼굴 인식 유예 중 · 5초 안에 얼굴을 보여 주세요'};
+    }
     if(!valid && identityKnown){
       healthySince=null;trackingNow=false;warning=null;
       return {tracking:false,status:'scanning',reason:'identity',identityWarning:false,message:'인식 중…'};
@@ -72,15 +81,6 @@ export function createFocusTracker() {
       return {tracking:false,status:identityWarning?'paused':'scanning',reason:'identity',identityWarning,
         message:identityWarning?'등록한 얼굴과 다릅니다 · 본인이 돌아오면 자동 재개됩니다':'인식 중…'};
     }
-    if(valid&&identity&&!visible){
-      resumeOnFace ||= trackingNow;
-      const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
-      if(expired){healthySince=null;trackingNow=false;warning='away';identityFailureSince=null;}
-      return {tracking:trackingNow&&!warning,status:expired?'paused':trackingNow?'tracking':'scanning',reason:expired?'away':null,
-        identityWarning:false,message:expired?FOCUS_MESSAGES.away:'얼굴 인식 유예 중 · 5초 안에 얼굴을 보여 주세요'};
-    }
-    const elapsedFor=key=>behaviorSince[key]===null?0:now-behaviorSince[key];
-    const phoneConfirmed=valid&&signals.phoneUse&&elapsedFor('phone')>=FOCUS_LIMITS.phone&&(!observation||phonePositives>=2);
     const sleepConfirmed=visible&&signals.eyesClosed&&elapsedFor('sleep')>=FOCUS_LIMITS.sleep;
     const awayConfirmed=valid&&!signals.face&&elapsedFor('away')>=FOCUS_LIMITS.away;
     const reason = !valid ? 'unknown' : phoneConfirmed ? 'phone' : sleepConfirmed ? 'sleep' : awayConfirmed ? 'away' : idleState.confirmed ? 'idle' : signals.phoneUse ? 'phone' : !signals.face ? 'away' :

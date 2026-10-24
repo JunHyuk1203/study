@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
-import { createFocusTracker } from './camera-focus.js?v=20261024-14';
+import { createFocusTracker } from './camera-focus.js?v=20261024-16';
 import { paintCameraDebug } from './camera-debug.js?v=20261024-15';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -234,7 +234,7 @@ function startCameraWatchdog(token) {
   watchdog = setInterval(() => {
     // Background throttling and camera suspension must not kill the recognition loop.
     if (token !== revision || !enabled || document.hidden) return;
-    if (ready && performance.now() - lastResult > 3000) {
+    if (ready && performance.now() - lastResult > 5000) {
       focusTracker.reset(true); diagnostics = null;
       setStatus('paused', '카메라 인식 응답 없음 · 일시정지');
       if (!fallbackAttempted) recoverRecognition(token, 'Worker stopped responding');
