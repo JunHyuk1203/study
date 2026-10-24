@@ -110,7 +110,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const options = path => ({ ...(canvas ? { canvas } : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
     const face = await vision.FaceLandmarker.createFromOptions(files, {
       ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 2,
-      minFaceDetectionConfidence: .35, minFacePresenceConfidence: .35, minTrackingConfidence: .35,
+      minFaceDetectionConfidence: .25, minFacePresenceConfidence: .25, minTrackingConfidence: .25,
       outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
     });
     resources.push(face);

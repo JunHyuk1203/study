@@ -391,3 +391,9 @@ html,body{height:100%;overflow:hidden;overscroll-behavior:none}
   .camera-focus .cam-debug{grid-column:2;grid-row:5;margin:0}
   .camera-focus .room-focus-peers{grid-column:2;grid-row:6;min-width:0;margin:0;padding-top:16px}
 }
+@media(min-width:1440px){
+  .app{max-width:none;width:100%}
+  .app:has(.bottom-nav)>.header,.bottom-nav{left:0}
+  .focus-header,.focus-content{max-width:none;width:100%}
+  .camera-focus{padding-left:clamp(24px,3vw,72px);padding-right:clamp(24px,3vw,72px)}
+}

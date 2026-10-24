@@ -58,7 +58,7 @@ export async function createLocalFaceGuard(tf,session){
       const eye=(a,b)=>({x:(face[a].x+face[b].x)*width/2,y:(face[a].y+face[b].y)*height/2});
       const left=eye(33,133),right=eye(362,263),dx=right.x-left.x,dy=right.y-left.y;
       const size=Math.hypot(dx,dy),angle=Math.atan2(dy,dx);
-      if(size<24||!Number.isFinite(angle)||Math.abs(angle)>.55){current={matched:false,status:'checking'};return state();}
+      if(size<14||!Number.isFinite(angle)||Math.abs(angle)>.55){current={matched:false,status:'checking'};return state();}
       const scale=224/(size*3),cos=Math.cos(angle)*scale,sin=Math.sin(angle)*scale;
       const midX=(left.x+right.x)/2,midY=(left.y+right.y)/2;
       context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
