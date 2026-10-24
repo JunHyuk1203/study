@@ -212,6 +212,16 @@ test('iris loss and reacquisition do not count as gaze movement', () => {
     assert.equal(tracker.update({...healthy,gazeValid:t>=24000,activityVector},t).reason,'idle');
   }
 });
+test('subtle gaze movements release idle after the same two-second recovery wait', () => {
+  for(const [left,right,delta] of [[2,3,.035],[7,8,.028]]) {
+    const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+    const activityVector=[...healthy.activityVector];activityVector[left]+=delta;activityVector[right]+=delta;
+    const signals={...healthy,activityVector};
+    advance(tracker,signals,22700,24500,200);
+    assert.equal(tracker.update(signals,24699).tracking,false);
+    assert.equal(tracker.update(signals,24700).tracking,true);
+  }
+});
 test('development panel shows whether iris tracking is available and moving', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const label=()=>focusDebugRows(tracker.getDebug()).find(row=>row.key==='idle').text;

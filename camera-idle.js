@@ -32,9 +32,9 @@ export function createIdleTracker(limitMs = 22500) {
         return d[0]*d[1]>0 && Math.min(Math.abs(d[0]),Math.abs(d[1]))>horizontal ||
           d[2]*d[3]>0 && Math.min(Math.abs(d[2]),Math.abs(d[3]))>vertical;
       };
-      gazeSince=coherent(gazeSmooth,gazeAnchor,.07,.05)?gazeSince??now:null;
+      gazeSince=coherent(gazeSmooth,gazeAnchor,.025,.02) && coherent(gaze,gazeAnchor,.025,.02)?gazeSince??now:null;
       gazeSteps=gazeSteps.filter(time=>now-time<=1500);
-      if(coherent(gaze,gazeLast,.035,.025)){gazeSteps.push(now);gazeLast=[...gaze];}
+      if(coherent(gaze,gazeLast,.02,.015)){gazeSteps.push(now);gazeLast=[...gaze];}
       // Reading has repeated short fixations; a sustained gaze shift also counts.
       gazeActive=gazeSteps.length>=3 || gazeSince!==null && now-gazeSince>=400;
     }
