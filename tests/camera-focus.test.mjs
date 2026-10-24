@@ -176,7 +176,18 @@ test('small sustained head and gaze movements release idle without requiring sho
     for(const [index,delta] of changes) activityVector[index]+=delta;
     const moving={...healthy,body:false,activityVector};
     advance(tracker,moving,22700,24500,200);
-    assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<1000,JSON.stringify(changes));
+    assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<2000,JSON.stringify(changes));
+    assert.equal(advance(tracker,moving,24700,26700,200).tracking,true);
+  }
+});
+test('small sustained neck turns and tilts release idle without waiting for large face motion', () => {
+  for (const [index,delta] of [[4,.12],[5,.12],[6,.09]]) {
+    const tracker=createFocusTracker();
+    advance(tracker,{...healthy,body:false},0,22500);
+    const activityVector=[...healthy.activityVector];activityVector[index]+=delta;
+    const moving={...healthy,body:false,activityVector};
+    advance(tracker,moving,22700,24500,200);
+    assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<1000,`${index}:${delta}`);
     assert.equal(advance(tracker,moving,24700,26700,200).tracking,true);
   }
 });

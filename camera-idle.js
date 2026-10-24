@@ -14,14 +14,14 @@ export function createIdleTracker(limitMs = 22500) {
     const alpha = lastTime === null ? 1 : 1 - Math.exp(-Math.max(0, now - lastTime) / 450);
     smooth = smooth.map((value, i) => value + alpha * (vector[i] - value));
     lastTime = now;
-    // Head translation/direction or both eyes must move appreciably. Single-frame jitter is ignored.
-    const moving = Math.hypot(smooth[0] - anchor[0], smooth[1] - anchor[1]) > .035 ||
-      Math.hypot(smooth[4] - anchor[4], smooth[5] - anchor[5]) > .18 || Math.abs(smooth[6] - anchor[6]) > .13 ||
+    // Face translation and head direction release idle; mild gaze jitter is ignored.
+    const moving = Math.hypot(smooth[0] - anchor[0], smooth[1] - anchor[1]) > .025 ||
+      Math.hypot(smooth[4] - anchor[4], smooth[5] - anchor[5]) > .10 || Math.abs(smooth[6] - anchor[6]) > .08 ||
       (Math.abs(smooth[2] - anchor[2]) > .18 && Math.abs(smooth[3] - anchor[3]) > .18) ||
       (Math.abs(smooth[7] - anchor[7]) > .13 && Math.abs(smooth[8] - anchor[8]) > .13);
     motionSince = moving ? motionSince ?? now : null;
     studySince = signals.studyActivity ? studySince ?? now : null;
-    if ((motionSince !== null && now - motionSince >= 500) || (studySince !== null && now - studySince >= 500)) {
+    if ((motionSince !== null && now - motionSince >= 400) || (studySince !== null && now - studySince >= 500)) {
       idleSince = now; anchor = [...smooth]; motionSince = null;
     }
     return state(now);
