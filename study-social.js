@@ -1,5 +1,5 @@
 import {authReady,getAuthUser} from './auth.js?v=20261022-1';
-import {getStudyData} from './data.js?v=20261024-5';
+import {getStudyData} from './data.js?v=20261024-6';
 import {studyCall,serviceError,element as el,duration} from './study-api.js';
 import {showToast} from './notifications.js?v=20261022-18';
 import {roomClock,memberTime,memberStatus} from './room-time.js?v=20261023-16';

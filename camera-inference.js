@@ -32,7 +32,7 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
     const upright = o.box[3] >= .18 && o.box[3] > o.box[2]*1.15 && center.x > .1 && center.x < .9;
     const raised = upright || (head ? center.y < Math.min(.8, head.y + .28) && Math.abs(center.x - head.x) < .45 :
       center.y < .7 && center.x > .1 && center.x < .9);
-    const used = o.score >= .3 && (touching || o.score >= .45 && raised);
+    const used = o.score >= .3 && (touching || raised);
     return { score: o.score, touching, raised, used };
   });
   const phoneUse = phones.some(o => o.used);
@@ -163,7 +163,8 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed)return;
             let found=await objects.detect(full,30,.2);
-            if(!found.some(o=>o.class==='cell phone'&&o.score>=.3)) {
+            // A desk phone must not suppress the close-up search for a held phone.
+            if(!extractFocusSignals(faceResult,poseResult,handResult,found,width,height).phoneUse) {
               const zoomed=await objects.detect(crop,30,.2);
               found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));
             }

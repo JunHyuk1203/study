@@ -265,6 +265,8 @@ test('a raised phone is usable without hands or a downward head, while a desk ph
   const extract = () => extractFocusSignals(s.face,s.pose,s.hands,[phone],100,100);
   assert.equal(extract().phoneUse, true);
   assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[phone],100,100).phoneUse,true);
+  assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[{...phone,score:.35}],100,100).phoneUse,true);
+  assert.equal(extractFocusSignals(s.face,{landmarks:[]},s.hands,[{...phone,score:.35,bbox:[40,80,20,20]}],100,100).phoneUse,false);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{...phone,bbox:[40,80,20,20]}],100,100).phoneUse,false);
   s.hands.landmarks = [[{ x:.5,y:.6 }]];
   assert.equal(extract().phoneUse, true);
@@ -272,6 +274,23 @@ test('a raised phone is usable without hands or a downward head, while a desk ph
   assert.equal(extract().phoneUse, true);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.25 }],100,100).phoneUse,false);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.4 }],100,100).phoneUse,true);
+});
+test('a desk phone does not prevent close-up detection of a held phone', async () => {
+  const previous=globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
+  const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
+  let calls=0;
+  const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model({landmarks:[]})},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
+    {load:async()=>({detect:async()=>++calls===1?[{...phone,bbox:[40,85,20,10]}]:[{...phone,score:.35,bbox:[10,20,15,25]}],dispose(){}})},
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+  try {
+    await engine.detect({width:100,height:100},0);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const result=await engine.detect({width:100,height:100},100);
+    assert.equal(calls,2);
+    assert.equal(result.signals.phoneUse,true);
+    assert.equal(result.signals.phoneObservation.positive,true);
+  } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
 });
 test('eye closure, reading context, absence and wrist visibility are extracted independently', () => {
   const s = scene();
