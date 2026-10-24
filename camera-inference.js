@@ -1,4 +1,5 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
+import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -139,21 +140,48 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
     const faceContinuity = createFaceContinuity();
+    const faceInput = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(512, 512) : document.createElement('canvas');
+    faceInput.width = faceInput.height = 512;
+    const faceContext = faceInput.getContext('2d');
+    let closeup = null, lastBounds = null, lastFaceTime = -Infinity, scan = 0;
     return {
       async detect(source, time) {
         const startedAt = performance.now();
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
         let began=performance.now();
-        const faceResult = face.detectForVideo(source, time);modelMs.face=performance.now()-began;
-        const identityState=identity?await identity.check(source,faceResult,time):null;
+        let faceResult = face.detectForVideo(source, time);
+        const fullFaceMs = performance.now() - began;
+        const bounds = faceBounds(faceResult), count = faceResult.faceLandmarks?.length || 0;
         if(time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
+        const faceStarted = performance.now();
+        if (count < 2 && (!bounds || Math.max(bounds.width * width, bounds.height * height) < Math.min(width, height) * .22)) {
+          if (!closeup) {
+            closeup = await vision.FaceLandmarker.createFromOptions(files, {
+              ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), runningMode: 'IMAGE', numFaces: 2,
+              minFaceDetectionConfidence: .25, minFacePresenceConfidence: .25,
+              outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
+            });
+            resources.push(closeup);
+          }
+          const previous = time >= lastFaceTime && time - lastFaceTime < 1200 ? lastBounds : null;
+          const attempt = scan++;
+          const region = faceSearchRegion(bounds || previous, attempt % 3 === 2 ? {} : poseResult, width, height, Math.floor(attempt / 3));
+          faceContext.drawImage(source, region.x * width, region.y * height, region.width * width, region.height * height, 0, 0, 512, 512);
+          const zoomed = restoreFaceCoordinates(closeup.detect(faceInput), region);
+          if (zoomed.faceLandmarks.length > 1 || (zoomed.faceLandmarks.length === 1 && (!bounds || sameFace(bounds, faceBounds(zoomed))))) faceResult = zoomed;
+        }
+        modelMs.face = fullFaceMs + performance.now() - faceStarted;
+        if (faceResult.faceLandmarks?.length === 1) { lastBounds = faceBounds(faceResult); lastFaceTime = time; }
+        const identityState=identity?await identity.check(source,faceResult,time):null;
         if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
         if (!objectPending && time - objectTime >= 800) {
           objectTime=time;
-          input.width = width; input.height = height;
-          context.drawImage(source, 0, 0, width, height);
-          const full=context.getImageData(0,0,width,height),region=phoneSearchRegion(poseResult,handResult);
+          const objectScale = Math.min(1, 640 / Math.max(width, height));
+          const fullWidth = Math.max(1, Math.round(width * objectScale)), fullHeight = Math.max(1, Math.round(height * objectScale));
+          input.width = fullWidth; input.height = fullHeight;
+          context.drawImage(source, 0, 0, fullWidth, fullHeight);
+          const full=context.getImageData(0,0,fullWidth,fullHeight),region=phoneSearchRegion(poseResult,handResult);
           const cropWidth=Math.max(1,Math.round(region.width*width)),cropHeight=Math.max(1,Math.round(region.height*height));
           input.width=cropWidth;input.height=cropHeight;
           context.drawImage(source,region.x*width,region.y*height,region.width*width,region.height*height,0,0,cropWidth,cropHeight);
@@ -162,7 +190,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           // A new task lets the Worker post this face result before TF CPU work.
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed)return;
-            let found=await objects.detect(full,30,.2);
+            let found=(await objects.detect(full,30,.2)).map(o=>({...o,bbox:[o.bbox[0]*width/fullWidth,o.bbox[1]*height/fullHeight,o.bbox[2]*width/fullWidth,o.bbox[3]*height/fullHeight]}));
             if(!extractFocusSignals(faceResult,poseResult,handResult,found,width,height).phoneUse) {
               const zoomed=await objects.detect(crop,30,.2);
               found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));

@@ -182,7 +182,7 @@ function acceptResult(data) {
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261024-19', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261024-20', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -263,7 +263,7 @@ export async function startCamera() {
   setStatus('opening', '카메라 권한을 확인하는 중…');
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
-    const incoming = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 24 } } });
+    const incoming = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 24 } } });
     if (token !== revision) { incoming.getTracks().forEach(track => track.stop()); return false; }
     stream = incoming; video.srcObject = stream;
     document.body.append(video);
