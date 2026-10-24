@@ -1,6 +1,6 @@
 // Temporal policy: no images, networking, storage, or user calibration.
-import { createIdleTracker } from './camera-idle.js?v=20261024-9';
-export const FOCUS_LIMITS = Object.freeze({ sleep: 4500, phone: 750, away: 3000, idle: 22500, resume: 2000, gap: 3000 });
+import { createIdleTracker } from './camera-idle.js?v=20261024-10';
+export const FOCUS_LIMITS = Object.freeze({ sleep: 4500, phone: 750, away: 3000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',

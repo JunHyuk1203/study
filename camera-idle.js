@@ -1,5 +1,5 @@
 // Face-only inactivity clock. Arms and wrists are optional study-motion evidence.
-export function createIdleTracker(limitMs = 22500) {
+export function createIdleTracker(limitMs = 15000) {
   let anchor = null, smooth = null, lastTime = null, idleSince = null, motionSince = null, studySince = null;
   let gazeAnchor=null,gazeSmooth=null,gazeLast=null,gazeSince=null,gazeSteps=[];
   function pauseGaze() { gazeAnchor=gazeSmooth=gazeLast=gazeSince=null;gazeSteps=[]; }

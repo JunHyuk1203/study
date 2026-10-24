@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
-import { createFocusTracker } from '../camera-focus.js';
+import { createFocusTracker, FOCUS_LIMITS } from '../camera-focus.js';
 import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
 
 const healthy = { reliable: true, face: true, body: true, eyesClosed: false, gazeValid: true, phoneUse: false, studyActivity: false, activityVector: [.5,.5,.5,.5,0,.4,0,0,0] };
+const IDLE_AT=FOCUS_LIMITS.idle;
 test('cached phone evidence cannot confirm use and a new negative resets the candidate',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const signal=(id,at,positive,age=0)=>({...healthy,phoneUse:positive,phoneObservation:{id,observedAt:at,ageMs:age,fresh:age===0,positive}});
@@ -88,14 +89,14 @@ test('idle debug countdown ignores brief movement and resets after sustained mot
   const tracker=createFocusTracker();
   advance(tracker,healthy,0,10000);
   let row=tracker.getDebug().rows.find(row=>row.key==='idle');
-  assert.equal(row.elapsedMs,10000); assert.equal(row.pauseRemainingMs,12500);
+  assert.equal(row.elapsedMs,10000); assert.equal(row.pauseRemainingMs,5000);
   const moving={...healthy,activityVector:[.8,.5,.5,.5,0,.4,0,0,0]};
   tracker.update(moving,10500);
   row=tracker.getDebug().rows.find(row=>row.key==='idle');
   assert.equal(row.elapsedMs,10500);
   advance(tracker,moving,11000,12000);
   row=tracker.getDebug().rows.find(row=>row.key==='idle');
-  assert.ok(row.elapsedMs<=1500); assert.ok(row.pauseRemainingMs>=21000);
+  assert.ok(row.elapsedMs<=1500); assert.ok(row.pauseRemainingMs>=13000);
   tracker.update({...healthy,studyActivity:true},12500);
   assert.equal(tracker.getDebug().rows.find(row=>row.key==='idle').blocked,'학습 동작 감지');
   tracker.update({...healthy,activityVector:null},13000);
@@ -137,18 +138,18 @@ test('eye closure continues timing before confirmation and warns exactly when it
   const confirmed=tracker.update({...healthy,eyesClosed:true},6700);
   assert.equal(confirmed.tracking,false);assert.equal(confirmed.status,'paused');assert.equal(confirmed.reason,'sleep');
 });
-test('idle requires 22.5 seconds of stillness and exits on observed movement', () => {
+test('idle requires fifteen seconds of stillness and exits on observed movement', () => {
   const tracker = createFocusTracker();
-  assert.equal(advance(tracker, healthy, 0, 22000).tracking, true);
-  assert.equal(tracker.update(healthy, 22500).reason, 'idle');
+  assert.equal(advance(tracker, healthy, 0, IDLE_AT-500).tracking, true);
+  assert.equal(tracker.update(healthy, IDLE_AT).reason, 'idle');
   const moving = { ...healthy, activityVector: [.7,.5,.5,.5,0,.4,0,0,0] };
-  assert.equal(advance(tracker, moving, 23000, 26500).tracking, true);
+  assert.equal(advance(tracker, moving, IDLE_AT+500, IDLE_AT+4000).tracking, true);
 });
 test('ordinary blinks do not restart the long stillness observation window', () => {
   const tracker=createFocusTracker(); let state;
   for(let t=0;t<=60000;t+=200) {
     state=tracker.update({...healthy,eyesClosed:t>2000 && t%4000===0},t);
-    if(t>=22600)assert.equal(state.reason,'idle');
+    if(t>=IDLE_AT+100)assert.equal(state.reason,'idle');
   }
   assert.equal(state.reason,'idle'); assert.equal(state.tracking,false);
 });
@@ -163,7 +164,7 @@ test('face alone can trigger idle without shoulders, wrists or hands, despite mi
     const vector=[...healthy.activityVector];
     vector[0]+=.02*Math.sin(t/500);vector[2]+=.015*Math.sin(t/300);vector[3]+=.015*Math.sin(t/300);
     state=tracker.update({...healthy,body:false,activityVector:vector},t);
-    if(t>=22600)assert.equal(state.reason,'idle');
+    if(t>=IDLE_AT+100)assert.equal(state.reason,'idle');
   }
   assert.equal(state.tracking,false);
 });
@@ -188,38 +189,38 @@ test('reading with short bilateral horizontal or vertical gaze shifts keeps timi
   }
 });
 test('gaze shifts alone release idle while a single-eye change or one-frame jump does not', () => {
-  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
-  for(let t=22700;t<=27000;t+=100){
-    const activityVector=[...healthy.activityVector],offset=Math.floor((t-22700)%1600/400)*.06;
+  const tracker=createFocusTracker();advance(tracker,healthy,0,IDLE_AT);
+  for(let t=IDLE_AT+200;t<=IDLE_AT+4500;t+=100){
+    const activityVector=[...healthy.activityVector],offset=Math.floor((t-(IDLE_AT+200))%1600/400)*.06;
     activityVector[2]+=offset;activityVector[3]+=offset;
     tracker.update({...healthy,activityVector},t);
   }
-  assert.equal(tracker.update(healthy,27100).tracking,true);
+  assert.equal(tracker.update(healthy,IDLE_AT+4600).tracking,true);
   for(const bilateral of [false,true]) {
-    const paused=createFocusTracker();advance(paused,healthy,0,22500);
-    for(let t=22700;t<=27000;t+=100){
+    const paused=createFocusTracker();advance(paused,healthy,0,IDLE_AT);
+    for(let t=IDLE_AT+200;t<=IDLE_AT+4500;t+=100){
       const activityVector=[...healthy.activityVector];
-      if(!bilateral || t===23000){activityVector[2]+=.4;if(bilateral)activityVector[3]+=.4;}
+      if(!bilateral || t===IDLE_AT+500){activityVector[2]+=.4;if(bilateral)activityVector[3]+=.4;}
       paused.update({...healthy,activityVector},t);
     }
-    assert.equal(paused.update(healthy,27100).reason,'idle');
+    assert.equal(paused.update(healthy,IDLE_AT+4600).reason,'idle');
   }
 });
 test('iris loss and reacquisition do not count as gaze movement', () => {
-  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
-  for(let t=22700;t<=27000;t+=100){
+  const tracker=createFocusTracker();advance(tracker,healthy,0,IDLE_AT);
+  for(let t=IDLE_AT+200;t<=IDLE_AT+4500;t+=100){
     const activityVector=[...healthy.activityVector];activityVector[2]=activityVector[3]=.9;
-    assert.equal(tracker.update({...healthy,gazeValid:t>=24000,activityVector},t).reason,'idle');
+    assert.equal(tracker.update({...healthy,gazeValid:t>=IDLE_AT+1500,activityVector},t).reason,'idle');
   }
 });
 test('subtle gaze movements release idle after the same two-second recovery wait', () => {
   for(const [left,right,delta] of [[2,3,.035],[7,8,.028]]) {
-    const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+    const tracker=createFocusTracker();advance(tracker,healthy,0,IDLE_AT);
     const activityVector=[...healthy.activityVector];activityVector[left]+=delta;activityVector[right]+=delta;
     const signals={...healthy,activityVector};
-    advance(tracker,signals,22700,24500,200);
-    assert.equal(tracker.update(signals,24699).tracking,false);
-    assert.equal(tracker.update(signals,24700).tracking,true);
+    advance(tracker,signals,IDLE_AT+200,IDLE_AT+2000,200);
+    assert.equal(tracker.update(signals,IDLE_AT+2199).tracking,false);
+    assert.equal(tracker.update(signals,IDLE_AT+2200).tracking,true);
   }
 });
 test('development panel shows whether iris tracking is available and moving', () => {
@@ -232,33 +233,33 @@ test('development panel shows whether iris tracking is available and moving', ()
   assert.match(label(),/시선 확인 불가/);
 });
 test('moderate sustained movement releases idle sooner, while a brief phone appearance never pauses time', () => {
-  const tracker=createFocusTracker();advance(tracker,healthy,0,22500);
+  const tracker=createFocusTracker();advance(tracker,healthy,0,IDLE_AT);
   const moving={...healthy,activityVector:[.56,.5,.5,.5,0,.4,0,0,0]};
-  assert.equal(advance(tracker,moving,23000,26500,250).tracking,true);
-  assert.equal(tracker.update({...moving,phoneUse:true},26750).tracking,true);
-  assert.equal(tracker.update(moving,27000).tracking,true);
+  assert.equal(advance(tracker,moving,IDLE_AT+500,IDLE_AT+4000,250).tracking,true);
+  assert.equal(tracker.update({...moving,phoneUse:true},IDLE_AT+4250).tracking,true);
+  assert.equal(tracker.update(moving,IDLE_AT+4500).tracking,true);
 });
 test('small sustained head and gaze movements release idle without requiring shoulders', () => {
   for (const changes of [[[0,.04]], [[4,.2]], [[6,.15]], [[2,.2],[3,.2]], [[7,.15],[8,.15]]]) {
     const tracker=createFocusTracker();
-    advance(tracker,{...healthy,body:false},0,22500);
+    advance(tracker,{...healthy,body:false},0,IDLE_AT);
     const activityVector=[...healthy.activityVector];
     for(const [index,delta] of changes) activityVector[index]+=delta;
     const moving={...healthy,body:false,activityVector};
-    advance(tracker,moving,22700,24500,200);
+    advance(tracker,moving,IDLE_AT+200,IDLE_AT+2000,200);
     assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<2000,JSON.stringify(changes));
-    assert.equal(advance(tracker,moving,24700,26700,200).tracking,true);
+    assert.equal(advance(tracker,moving,IDLE_AT+2200,IDLE_AT+4200,200).tracking,true);
   }
 });
 test('small sustained neck turns and tilts release idle without waiting for large face motion', () => {
   for (const [index,delta] of [[4,.12],[5,.12],[6,.09]]) {
     const tracker=createFocusTracker();
-    advance(tracker,{...healthy,body:false},0,22500);
+    advance(tracker,{...healthy,body:false},0,IDLE_AT);
     const activityVector=[...healthy.activityVector];activityVector[index]+=delta;
     const moving={...healthy,body:false,activityVector};
-    advance(tracker,moving,22700,24500,200);
+    advance(tracker,moving,IDLE_AT+200,IDLE_AT+2000,200);
     assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<1000,`${index}:${delta}`);
-    assert.equal(advance(tracker,moving,24700,26700,200).tracking,true);
+    assert.equal(advance(tracker,moving,IDLE_AT+2200,IDLE_AT+4200,200).tracking,true);
   }
 });
 
@@ -291,7 +292,7 @@ test('brief face losses neither stop tracking nor reset the idle observation clo
   for(let t=0;t<=23000;t+=500){
     const missing=t===10000||t===15000;
     state=tracker.update({...healthy,face:!missing,body:true},t);
-    if(t>=2000&&t<22500)assert.equal(state.tracking,true);
+    if(t>=2000&&t<IDLE_AT)assert.equal(state.tracking,true);
   }
   assert.equal(state.reason,'idle');
 });
