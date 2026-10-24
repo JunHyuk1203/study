@@ -1,4 +1,4 @@
-import { getStudyData } from './data.js?v=20261024-18';
+import { getStudyData } from './data.js?v=20261024-19';
 import { updatePlan } from './integrations.js?v=20261024-1';
 import { planSubjects } from './functions/plan-domain.js?v=20261022-18';
 import { goalProgress, goalSummary, durationLabel, periodLabels } from './goal-state.js?v=20261022-18';

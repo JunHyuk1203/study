@@ -21,7 +21,7 @@ export function createIdentityMatcher(saved=[]){
         return {matched:samples.length===3,status:samples.length===3?'matched':'enrolling',progress:samples.length};
       }
       const score=Math.max(...samples.map(sample=>similarity(sample,descriptor)));
-      return {matched:score>=.82,status:score>=.82?'matched':'mismatch',score};
+      return {matched:score>=.65,status:score>=.65?'matched':'mismatch',score};
     },
   };
 }

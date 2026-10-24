@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
 import { createFocusTracker } from './camera-focus.js?v=20261024-16';
-import { paintCameraDebug } from './camera-debug.js?v=20261024-15';
+import { paintCameraDebug } from './camera-debug.js?v=20261024-19';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let reason = null;
@@ -184,7 +184,7 @@ function acceptResult(data) {
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261024-18', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261024-19', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {

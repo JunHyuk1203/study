@@ -1,6 +1,6 @@
 import './auth.js?v=20261022-1';
-import './data.js?v=20261024-18';
-import './camera.js?v=20261024-18';
+import './data.js?v=20261024-19';
+import './camera.js?v=20261024-19';
 import './integrations.js?v=20261024-1';
 import './planning.js?v=20261024-1';
 import './daily-report.js?v=20261024-1';

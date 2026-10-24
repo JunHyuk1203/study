@@ -25,6 +25,10 @@ test('enrolled local face descriptors reject another face without replacing the 
   assert.equal(matcher.observe(other).status,'mismatch');
   assert.equal(matcher.observe(owner).matched,true);
   assert.deepEqual(createIdentityMatcher(matcher.samples).observe(other).matched,false);
+  for(const [score,expected] of [[.6499,false],[.65,true],[.6501,true]]){
+    const descriptor=Array(1024).fill(0);descriptor[0]=score;descriptor[1]=Math.sqrt(1-score*score);
+    assert.equal(matcher.observe(descriptor).matched,expected,`similarity ${score}`);
+  }
 });
 test('study continues while verifying identity and warns only after eight seconds',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
