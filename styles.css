@@ -115,8 +115,11 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .cam-caption{font-size:10px;line-height:1.7;color:var(--muted);margin:0}
 [data-state="warning"]{--cam-color:#a57b2e}
 [data-state="paused"],[data-state="error"]{--cam-color:#bc4141}
+[data-identity-phase="enrolling"]:not([data-state="error"]){--cam-color:var(--green)}
 .timer-panel.camera-paused{border:1px solid #bc414166;background:#bc41410a}
 .timer-panel.camera-paused .timer,.timer-panel.camera-paused [data-timer-state]{color:#bc4141}
+[data-identity-phase="enrolling"] .timer-panel{border-color:#80977566;background:#8097750a}
+[data-identity-phase="enrolling"] .timer-panel .timer,[data-identity-phase="enrolling"] .timer-panel [data-timer-state]{color:var(--green)}
 .timer-panel.camera-pending{border:1px solid var(--border);background:var(--sage)}
 .timer-panel.camera-pending .timer,.timer-panel.camera-pending [data-timer-state]{color:var(--green)}
 @keyframes cam-scan{from{top:15px;opacity:.4}to{top:calc(100% - 15px);opacity:1}}

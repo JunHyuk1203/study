@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
-import { createFocusTracker } from './camera-focus.js?v=20261024-12';
+import { createFocusTracker } from './camera-focus.js?v=20261024-13';
 import { paintCameraDebug } from './camera-debug.js?v=20261024-8';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -16,6 +16,7 @@ let fallbackAttempted = false;
 let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
 let identityStatus=null;
+let identityPhase=null;
 let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
@@ -27,7 +28,7 @@ export function setCameraCompanion(durationMs){
   if(enabled && !cameraVisible())setStatus('paused','화면을 벗어났습니다 · 일시정지');
 }
 export const cameraController = crypto.randomUUID();
-export function cameraState() { return { enabled, tracking, status, message, reason, manuallyPaused }; }
+export function cameraState() { return { enabled, tracking, status, message, reason, manuallyPaused, identityPhase }; }
 export function toggleCameraPause() {
   if (!enabled) return;
   manuallyPaused = !manuallyPaused;
@@ -119,6 +120,7 @@ function paint() {
   if (!root) return;
   root.dataset.state = status;
   root.dataset.reason = reason || '';
+  root.dataset.identityPhase=identityPhase||'';
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
   paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status);
@@ -131,6 +133,9 @@ function paint() {
   if (focusPanel) paintCameraDebug(root, diagnostics, cameraState());
 }
 function setStatus(next, text, active = false) {
+  if(enabled&&identityPhase==='enrolling'&&!manuallyPaused&&['paused','scanning'].includes(next)){
+    next='scanning';text='얼굴 등록 중…';active=false;
+  }
   if (manuallyPaused && next !== 'error' && next !== 'off') {
     next = 'paused'; text = '수동 일시정지 · 재개 버튼을 눌러 주세요'; active = false;
   }
@@ -149,7 +154,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   video.srcObject = null;
   video.remove(); avatarPose = null;
   fallbackAttempted = false;
-  focusTracker.reset(); diagnostics = null; reason = null;identityStatus=null;
+  focusTracker.reset(); diagnostics = null; reason = null;identityStatus=identityPhase=null;
   setStatus(error ? 'error' : 'off', text);
 }
 function recognitionError(detail = '') {
@@ -172,6 +177,8 @@ function acceptResult(data) {
   const stale = !Number.isFinite(data.time) || now - data.time > 3000;
   const decision = focusTracker.update(stale ? null : data.signals, now);
   identityStatus=decision.identityWarning?'mismatch':null;
+  if(data.signals?.identity?.enrolled===false)identityPhase='enrolling';
+  else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':decision.reason==='identity'?'checking':'verified';
   diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
@@ -253,6 +260,7 @@ function resumeCameraRecognition() {
 export async function startCamera() {
   if (enabled) return false;
   const token = ++revision;
+  identityPhase='enrolling';identityStatus=null;
   enabled = true;
   setStatus('opening', '카메라 권한을 확인하는 중…');
   try {

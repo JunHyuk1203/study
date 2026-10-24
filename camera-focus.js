@@ -1,6 +1,6 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261024-10';
-export const FOCUS_LIMITS = Object.freeze({ identity: 5000, sleep: 4500, phone: 750, away: 3000, idle: 15000, resume: 2000, gap: 3000 });
+export const FOCUS_LIMITS = Object.freeze({ identity: 15000, identityReturn: 5000, sleep: 4500, phone: 750, away: 3000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',
@@ -18,8 +18,10 @@ export function createFocusTracker() {
   let phoneObservationId=null,phonePositives=0;
   let behaviorSince={sleep:null,phone:null,away:null},needsOwnerMotion=false,returnAnchor=null,returnMotionSince=null;
   let identityFailureSince=null;
+  let identityKnown=false,ownerRecognized=false,returningFromAway=false,returnVerificationSince=null;
   function reset(preserveOwner=false) {
     const keepLock=preserveOwner && (needsOwnerMotion || Boolean(lastSignals?.identity));
+    const keepIdentity=preserveOwner&&identityKnown,keepOwner=preserveOwner&&ownerRecognized,keepReturn=preserveOwner&&returningFromAway;
     lastTime = candidate = since = healthySince = warning = null;
     idle.reset();
     trackingNow = false;
@@ -28,6 +30,7 @@ export function createFocusTracker() {
     phoneObservationId=null;phonePositives=0;
     behaviorSince={sleep:null,phone:null,away:null};needsOwnerMotion=keepLock;returnAnchor=returnMotionSince=null;
     identityFailureSince=null;
+    identityKnown=keepIdentity;ownerRecognized=keepOwner;returningFromAway=keepReturn;returnVerificationSince=null;
   }
   function update(signals, now) {
     if (!Number.isFinite(now)) throw new TypeError('A monotonic timestamp is required');
@@ -43,17 +46,21 @@ export function createFocusTracker() {
     const valid = signals?.reliable === true;
     const visible = valid && signals.face;
     const identity=signals?.identity,ownerReady=!identity || identity.matched===true;
+    identityKnown ||= Boolean(identity);
     const enrolling=identity && (identity.enrolled===false || identity.status==='enrolling');
-    const wrongOwner=valid && identity && !enrolling && !ownerReady && ['mismatch','multiple'].includes(identity.status);
-    identityFailureSince=wrongOwner?identityFailureSince??now:null;
-    const identityWarning=identityFailureSince!==null && now-identityFailureSince>=FOCUS_LIMITS.identity;
-    if(warning==='identity'&&!identityWarning)warning=null;
     const observations={sleep:visible&&signals.eyesClosed,phone:valid&&signals.phoneUse,away:valid&&!signals.face};
     for(const key of Object.keys(behaviorSince))behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
     missingSince = valid && !signals.face ? missingSince ?? now : null;
-    if(identity && (identity.status==='mismatch' || identity.status==='multiple' || missingSince!==null&&now-missingSince>=FOCUS_LIMITS.away)){
-      needsOwnerMotion=true;returnAnchor=returnMotionSince=null;
+    if(identity?.matched){ownerRecognized=true;returningFromAway=false;}
+    if(identity && ownerRecognized && !enrolling && missingSince!==null&&now-missingSince>=FOCUS_LIMITS.away){
+      returningFromAway=true;needsOwnerMotion=true;returnAnchor=returnMotionSince=null;
     }
+    const unverified=valid && visible && identity && !enrolling && !ownerReady && ownerRecognized;
+    identityFailureSince=unverified&&!returningFromAway?identityFailureSince??now:null;
+    returnVerificationSince=unverified&&returningFromAway?returnVerificationSince??now:null;
+    const identityWarning=returningFromAway ? returnVerificationSince!==null&&now-returnVerificationSince>=FOCUS_LIMITS.identityReturn :
+      identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity;
+    if(warning==='identity'&&!identityWarning)warning=null;
     if(needsOwnerMotion && visible && ownerReady){
       const vector=signals.activityVector;
       if(Array.isArray(vector)&&vector.length===9&&vector.every(Number.isFinite)){
@@ -69,6 +76,10 @@ export function createFocusTracker() {
     const observeIdle=visible && ownerReady && !signals.eyesClosed;
     if(!observeIdle)idle.pauseGaze();
     const idleState = observeIdle ? idle.update(signals, now) : idle.state(now);
+    if(!valid && identityKnown){
+      healthySince=null;trackingNow=false;warning=null;
+      return {tracking:false,status:'scanning',reason:'identity',identityWarning:false,message:'인식 중…'};
+    }
     if(valid && identity && !ownerReady){
       healthySince=null;trackingNow=false;warning=identityWarning?'identity':null;
       return {tracking:false,status:identityWarning?'paused':'scanning',reason:'identity',identityWarning,

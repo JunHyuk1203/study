@@ -26,28 +26,44 @@ test('enrolled local face descriptors reject another face without replacing the 
   assert.equal(matcher.observe(owner).matched,true);
   assert.deepEqual(createIdentityMatcher(matcher.samples).observe(other).matched,false);
 });
-test('identity warnings start only after five continuous seconds and never during enrollment',()=>{
+test('identity warnings wait fifteen seconds during study and never warn during enrollment',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
-  for(let t=0;t<5000;t+=200){
+  advance(tracker,{...healthy,identity:{matched:true,status:'matched',enrolled:true}},0,2000);
+  for(let t=2200;t<17200;t+=200){
     const result=tracker.update(wrong,t);assert.equal(result.status,'scanning');assert.equal(result.identityWarning,false);assert.equal(result.message,'인식 중…');
   }
-  assert.equal(tracker.update(wrong,4999).identityWarning,false);
-  assert.equal(tracker.update(wrong,5000).identityWarning,true);
-  const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},5200);
-  assert.equal(restored.status,'scanning');assert.equal(restored.identityWarning,false);
+  assert.equal(tracker.update(wrong,17199).identityWarning,false);
+  assert.equal(tracker.update(wrong,17200).identityWarning,true);
+  const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},17400);
+  assert.equal(restored.status,'scanning');assert.equal(Boolean(restored.identityWarning),false);
   for(const status of ['enrolling','checking','missing','multiple']){
     const enrollment=createFocusTracker();
     const signals={...healthy,face:status!=='missing',identity:{matched:false,status,enrolled:false}};
-    const result=advance(enrollment,signals,0,12000,200);
+    const result=advance(enrollment,signals,0,20000,200);
     assert.equal(result.status,'scanning');assert.equal(result.identityWarning,false);assert.equal(result.message,'인식 중…');
   }
 });
-test('a break in mismatches restarts the five-second identity warning timer',()=>{
+test('return verification starts on the returning face and warns after five seconds',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
-  advance(tracker,wrong,0,4800,200);
-  tracker.update({...healthy,identity:{matched:false,status:'checking',enrolled:true}},4900);
-  assert.equal(advance(tracker,wrong,5000,9800,200).identityWarning,false);
-  assert.equal(tracker.update(wrong,10000).identityWarning,true);
+  const owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
+  advance(tracker,owner,0,2000);
+  const absent={...healthy,face:false,identity:{matched:false,status:'missing',enrolled:true}};
+  assert.equal(advance(tracker,absent,2500,10000).identityWarning,false);
+  assert.equal(advance(tracker,wrong,10200,15000,200).identityWarning,false);
+  assert.equal(tracker.update(wrong,15199).identityWarning,false);
+  assert.equal(tracker.update(wrong,15200).identityWarning,true);
+  assert.equal(tracker.update(owner,15400).identityWarning,false);
+});
+test('only a recognized owner clears the continuous study verification deadline',()=>{
+  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
+  const wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
+  advance(tracker,owner,0,2000);
+  advance(tracker,wrong,2200,10000,200);
+  tracker.update({...wrong,identity:{matched:false,status:'checking',enrolled:true}},10200);
+  assert.equal(advance(tracker,wrong,10400,17200,200).identityWarning,true);
+  assert.equal(Boolean(tracker.update(owner,17400).identityWarning),false);
+  assert.equal(advance(tracker,wrong,17600,32400,200).identityWarning,false);
+  assert.equal(tracker.update(wrong,32600).identityWarning,true);
 });
 test('away clears only for the enrolled owner after movement and the normal recovery wait',()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched'}};

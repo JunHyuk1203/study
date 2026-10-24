@@ -532,6 +532,10 @@ test('camera setup and synchronization use a normal pending state while real fai
   camera.status='scanning';
   vm.runInContext('cameraSyncFailed=true;paintTimer();',context);
   assert.equal(classes.has('camera-pending'),false);assert.equal(classes.has('camera-paused'),true);
+  camera.status='paused';camera.identityPhase='enrolling';
+  vm.runInContext('paintTimer();',context);
+  assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);
+  assert.equal(message.textContent,'얼굴 등록 중…');
 });
 
 test('normal camera termination shows saving without paused error styling until the server replies',async()=>{

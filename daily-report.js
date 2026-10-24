@@ -1,5 +1,5 @@
 import {authReady,getAuthUser} from './auth.js?v=20261022-1';
-import {getStudyData} from './data.js?v=20261024-12';
+import {getStudyData} from './data.js?v=20261024-13';
 import {studyCall,serviceError,element as el,duration} from './study-api.js';
 import {studyDate} from './functions/report-math.js';
 let cached=null,cacheKey='',pending=false,epoch=0;
