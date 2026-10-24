@@ -113,6 +113,14 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .cam-live{position:absolute;left:16px;bottom:15px;font:10px monospace;letter-spacing:1px;color:white;text-shadow:0 1px 3px #000}
 .cam-status{font-size:12px;font-weight:650;color:var(--cam-color);margin:14px 0 5px}
 .cam-caption{font-size:10px;line-height:1.7;color:var(--muted);margin:0}
+.protector-info{margin-top:3px}
+.protector-info summary{display:flex;align-items:center;gap:5px;width:fit-content;max-width:100%;list-style:none;cursor:pointer}
+.protector-info summary::-webkit-details-marker{display:none}
+.protector-info summary:focus-visible{outline:3px solid #779378;outline-offset:4px;border-radius:3px}
+.protector-info-icon{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:14px;height:14px;border:1px solid currentColor;border-radius:50%;font:600 10px/1 Georgia,serif}
+.protector-info[open] .protector-info-icon{color:var(--green);background:var(--sage)}
+.protector-info-content{margin-top:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--paper);font-size:11px;line-height:1.8;color:var(--text);overflow-wrap:anywhere}
+.protector-info-content p+p{margin-top:8px}
 [data-state="warning"]{--cam-color:#a57b2e}
 [data-state="paused"],[data-state="error"]{--cam-color:#bc4141}
 [data-identity-phase="enrolling"]:not([data-state="error"]){--cam-color:var(--green)}

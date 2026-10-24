@@ -125,8 +125,6 @@ function paint() {
   const mount = root.querySelector('[data-camera-video]');
   paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status==='paused'&&['sleep','phone','away','idle'].includes(reason) ? 'behavior-warning' : status);
   root.querySelector('[data-camera-status]').textContent = message;
-  const caption=root.querySelector('.cam-caption');
-  if(caption)caption.textContent='시작한 얼굴의 특징값은 이 기기에만 저장됩니다.';
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
   root.querySelector('[data-camera-resolution]').textContent = enabled && video.videoWidth ? 'AVATAR · 기기 내 인식' : '';
