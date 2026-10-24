@@ -167,6 +167,8 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
       </g>
     </svg><svg class="cam-paused" viewBox="0 0 320 320" role="img" aria-label="수동 일시정지" aria-hidden="true">
       <g fill="currentColor"><rect x="127" y="120" width="22" height="80" rx="5"/><rect x="171" y="120" width="22" height="80" rx="5"/></g>
+    </svg><svg class="cam-warning" viewBox="0 0 320 320" role="img" aria-label="학습 행동 경고" aria-hidden="true">
+      <path d="M160 110v65" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round"/><circle cx="160" cy="203" r="9" fill="currentColor"/>
     </svg>`;
   }
   let presentation = presentations.get(mount);
@@ -176,7 +178,7 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
     else presentation.missingSince = null;
   }
   const briefLoss = active && status === 'scanning' && presentation?.desired === 'recognized' && now - presentation.missingSince <= 3000;
-  const desired = status === 'identity-failed' ? 'rejected' : status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  const desired = status === 'identity-failed' ? 'rejected' : status === 'behavior-warning' ? 'warning' : status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
   if (!presentation || presentation.desired !== desired || returnedAfterLongLoss) {
     const parts = desired === 'recognized' ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
@@ -199,8 +201,9 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
   mount.querySelector('.cam-recognition').setAttribute('aria-label', desired === 'rejected' ? '본인 확인 실패' : desired === 'recognized' ? '얼굴 인식 완료' : desired === 'error' ? '얼굴 인식 연결 대기' : '얼굴을 찾는 중');
   const avatar = mount.querySelector('.cam-avatar');
   avatar.setAttribute('aria-hidden', String(mount.dataset.avatarPhase !== 'avatar'));
-  mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle', 'paused'].includes(mount.dataset.avatarPhase)));
+  mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle', 'paused', 'warning'].includes(mount.dataset.avatarPhase)));
   mount.querySelector('.cam-paused').setAttribute('aria-hidden', String(desired !== 'paused'));
+  mount.querySelector('.cam-warning').setAttribute('aria-hidden', String(desired !== 'warning'));
   avatar.classList.toggle('is-tracked', Boolean(pose));
   avatar.classList.toggle('is-active', active);
   avatar.style.setProperty('--avatar-x', `${pose?.x || 0}px`);

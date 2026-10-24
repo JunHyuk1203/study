@@ -1,4 +1,4 @@
-import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-11';
+import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
 import { createFocusTracker } from './camera-focus.js?v=20261024-16';
 import { paintCameraDebug } from './camera-debug.js?v=20261024-15';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
@@ -123,7 +123,7 @@ function paint() {
   root.dataset.identityPhase=identityPhase||'';
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
-  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status);
+  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status==='paused'&&['sleep','phone','away','idle'].includes(reason) ? 'behavior-warning' : status);
   root.querySelector('[data-camera-status]').textContent = message;
   const caption=root.querySelector('.cam-caption');
   if(caption)caption.textContent='시작한 얼굴의 특징값은 이 기기에만 저장됩니다.';
