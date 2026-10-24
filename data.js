@@ -1,7 +1,6 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { firebaseConfig } from './firebase-config.js';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
-import { readCache, statsRevision } from './client-cache.js?v=20261024-1';
+import { readCache, statsRevision } from './client-cache.js?v=20261024-selfhost1';
 import { showToast } from './notifications.js?v=20261022-18';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261024-19';
 
@@ -164,7 +163,7 @@ function errorText(error) {
     'functions/failed-precondition': '계정 화면에서 이메일 인증을 완료한 뒤 돌아와 주세요.',
     'functions/already-exists': '진행 중인 학습 기록이 있습니다. 먼저 종료해 주세요.',
     'functions/not-found': '학습 기록을 찾지 못했습니다. 새로고침해 주세요.',
-    'functions/unavailable': '저장 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    'functions/unavailable': '자체 서버에 연결하지 못했습니다. 서버 프로그램 실행 상태를 확인해 주세요.',
     'functions/internal': '저장 서비스 응답을 받지 못했습니다. 기록 상태를 확인하고 다시 시도해 주세요.',
     'permission-denied': '기록을 읽을 권한이 없습니다. 다시 로그인해 주세요.',
   };
@@ -744,17 +743,9 @@ try {
   authServices = await authReady;
   if (!authServices) { authResolved = true; state.pending.clear(); notice('서비스를 불러오지 못했습니다. 새로고침해 주세요.', true); }
   if (authServices) {
-    const [appSdk, firestoreSdk, callableSdk] = await Promise.all([
-      import('https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js'),
-      import('https://www.gstatic.com/firebasejs/13.0.0/firebase-functions.js'),
-    ]);
-    sdk = firestoreSdk;
-    functionsSdk = callableSdk;
-    const app = appSdk.getApps()[0] ?? appSdk.initializeApp(firebaseConfig);
-    db = sdk.getFirestore(app, 'study-data');
-    const functions = functionsSdk.getFunctions(app, 'asia-northeast3');
-    call = name => functionsSdk.httpsCallable(functions, name);
+    sdk = await import('./server-client.js?v=20261024-selfhost1');
+    db = null;
+    call = name => sdk.serverCallable(name);
     await connectUser();
   }
 } catch (error) { notice(errorText(error), true); }

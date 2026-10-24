@@ -1,7 +1,7 @@
 // A small, account-scoped response cache. Storage failure must never block study.
 export function createReadCache({storage, now = Date.now} = {}) {
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
-  const prefix = 'study-read-v1:', memory = new Map();
+  const prefix = 'study-read-selfhost-v1:', memory = new Map();
   return {
     get(key) {
       try {

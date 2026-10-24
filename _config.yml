@@ -1,0 +1,14 @@
+# GitHub Pages remains the frontend host. Private server artifacts are excluded.
+# Browser-shared pure modules in functions/ remain available.
+exclude:
+  - server
+  - node_modules
+  - functions/node_modules
+  - tests
+  - scripts
+  - docs
+  - package.json
+  - package-lock.json
+  - firebase.json
+  - firestore.rules
+  - firestore.indexes.json

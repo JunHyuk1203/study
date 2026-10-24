@@ -1,6 +1,6 @@
 import {authReady,getAuthUser} from './auth.js?v=20261022-1';
-import {getStudyData} from './data.js?v=20261024-19';
-import {studyCall,serviceError,element as el,duration} from './study-api.js';
+import {getStudyData} from './data.js?v=20261024-selfhost1';
+import {studyCall,serviceError,element as el,duration} from './study-api.js?v=20261024-selfhost1';
 import {studyDate} from './functions/report-math.js';
 let cached=null,cacheKey='',pending=false,epoch=0;
 const colors=['#647e58','#8fa77e','#b1bd88','#b79473','#8b9fa2','#b899a8'];

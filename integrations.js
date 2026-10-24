@@ -1,8 +1,8 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { getStudyData } from './data.js?v=20261024-19';
-import { firebaseConfig } from './firebase-config.js';
+import { getStudyData } from './data.js?v=20261024-selfhost1';
+import { serverCallable } from './server-client.js?v=20261024-selfhost1';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
-import { readCache } from './client-cache.js?v=20261024-1';
+import { readCache } from './client-cache.js?v=20261024-selfhost1';
 import { briefingPeriod } from './functions/briefing-period.js?v=20261022-11';
 import { renderCalendar } from './school-calendar.js?v=20261022-12';
 
@@ -11,10 +11,7 @@ async function client(name) {
   if (!await authReady) throw new Error('로그인 서비스를 불러오지 못했습니다. 새로고침해 주세요.');
   if (!getAuthUser()) throw new Error('로그인 후 이용할 수 있습니다.');
   if (!callable) {
-    const [appSdk, functionsSdk] = await Promise.all([import('https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js'), import('https://www.gstatic.com/firebasejs/13.0.0/firebase-functions.js')]);
-    const app = appSdk.getApps()[0] ?? appSdk.initializeApp(firebaseConfig);
-    const functions = functionsSdk.getFunctions(app, 'asia-northeast3');
-    callable = name => functionsSdk.httpsCallable(functions, name, {timeout:name==='chatWithStudy'?245000:85000});
+    callable = name => serverCallable(name, {timeout:name==='chatWithStudy'?245000:85000});
   }
   return callable(name);
 }
