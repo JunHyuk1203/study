@@ -1,5 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
+import { createPhoneTracker, createPhoneScheduler } from './camera-phone.js?v=20261025-2';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -116,7 +117,7 @@ export function phoneSearchRegions(poseResult, handResult, scan = 0) {
   return regions.length > 1 ? regions.slice(0, 2) :
     [regions[0] || phoneSearchRegion(poseResult, handResult), sweep];
 }
-export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory } = {}) {
+export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
   const resources = [];
   try {
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
@@ -148,6 +149,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0, phoneScan=0;
+    let phoneTracker=createPhoneTracker(), phoneScheduler=createPhoneScheduler(), phoneEpoch=null, latestPhone=null;
     let objectPending=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
     const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
@@ -157,8 +159,9 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const faceContext = faceInput.getContext('2d');
     let closeup = null, lastBounds = null, lastFaceTime = -Infinity, scan = 0;
     return {
-      async detect(source, time) {
+      async detect(source, time, epoch = 0) {
         const startedAt = performance.now();
+        if(phoneEpoch!==epoch){phoneEpoch=epoch;phoneTracker=createPhoneTracker();phoneScheduler=createPhoneScheduler();latestPhone=null;cachedObjects=[];observedAt=-Infinity;objectTime=-Infinity;}
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
         let began=performance.now();
         let faceResult = face.detectForVideo(source, time);
@@ -187,7 +190,30 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         const identityState=identity?await identity.check(source,faceResult,time):null;
         if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
-        if (!objectPending && time - objectTime >= 800) {
+        if (phoneRedesign && !objectPending) {
+          const region=phoneScheduler.next(width,height,time,phoneTracker.targets(time),phoneSearchRegions(poseResult,handResult));
+          const scale=Math.min(1,640/Math.max(region.width*width,region.height*height));
+          const cropWidth=Math.max(1,Math.round(region.width*width*scale)),cropHeight=Math.max(1,Math.round(region.height*height*scale));
+          input.width=cropWidth;input.height=cropHeight;
+          context.drawImage(source,region.x*width,region.y*height,region.width*width,region.height*height,0,0,cropWidth,cropHeight);
+          const pixels=context.getImageData(0,0,cropWidth,cropHeight),objectStarted=performance.now();
+          const publish=(found,status)=>{
+            if(closed||phoneEpoch!==epoch)return;
+            const completedAt=time+performance.now()-startedAt;
+            const candidates=found.filter(o=>o.class==='cell phone').map(o=>({score:o.score,box:[region.x+o.bbox[0]/cropWidth*region.width,region.y+o.bbox[1]/cropHeight*region.height,o.bbox[2]/cropWidth*region.width,o.bbox[3]/cropHeight*region.height]}));
+            latestPhone={version:2,id:++observationId,frameId:time,observedAt:time,completedAt,region,candidates,status,epoch};
+            phoneTracker.observe(latestPhone,completedAt);
+            if(status==='ok'){
+              cachedObjects=found.map(o=>({...o,bbox:[(region.x+o.bbox[0]/cropWidth*region.width)*width,(region.y+o.bbox[1]/cropHeight*region.height)*height,o.bbox[2]/cropWidth*region.width*width,o.bbox[3]/cropHeight*region.height*height]}));
+              objectWidth=width;objectHeight=height;observedAt=time;
+            }else {cachedObjects=[];observedAt=-Infinity;}
+            onPhoneObservation?.({type:'phone-observation',observation:latestPhone,epoch,diagnostics:phoneTracker.diagnostics(),search:phoneScheduler.diagnostics()});
+          };
+          objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
+            if(closed||phoneEpoch!==epoch)return;
+            try {publish(await objects.detect(pixels,30,.12),'ok');}catch {publish([],'error');}
+          }).finally(()=>{modelMs.objects=performance.now()-objectStarted;objectPending=null;});
+        } else if (!phoneRedesign && !objectPending && time - objectTime >= 800) {
           objectTime=time;
           const objectScale = Math.min(1, 640 / Math.max(width, height));
           const fullWidth = Math.max(1, Math.round(width * objectScale)), fullHeight = Math.max(1, Math.round(height * objectScale));
@@ -218,7 +244,8 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         const currentObjects=ageMs<=1500?cachedObjects.map(o=>({...o,bbox:[o.bbox[0]*width/objectWidth,o.bbox[1]*height/objectHeight,o.bbox[2]*width/objectWidth,o.bbox[3]*height/objectHeight]})):[];
         const signals = extractFocusSignals(faceResult, poseResult, handResult, currentObjects, width, height);
         if(identityState)signals.identity=identityState;
-        signals.phoneObservation={id:observationId,observedAt,ageMs,fresh:observationId!==deliveredId,positive:signals.phoneUse,confidence:signals.phoneEvidence.score};
+        signals.phoneObservation=phoneRedesign ? latestPhone : {id:observationId,observedAt,ageMs,fresh:observationId!==deliveredId,positive:signals.phoneUse,confidence:signals.phoneEvidence.score};
+        if(phoneRedesign)signals.phonePolicy='tracked';
         deliveredId=observationId;
         signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);
         delete signals.studyPoints;

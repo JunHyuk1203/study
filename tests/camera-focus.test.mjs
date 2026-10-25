@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './camera-phone.test.mjs';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
@@ -448,14 +449,14 @@ test('phone use depends only on a confidence of at least twenty percent', () => 
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.25 }],100,100).phoneUse,true);
   assert.equal(extractFocusSignals(s.face,s.pose,s.hands,[{ ...phone,score:.4 }],100,100).phoneUse,true);
 });
-test('a below-threshold phone does not prevent close-up detection', async () => {
+test('legacy: a below-threshold phone does not prevent close-up detection', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
   const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
   let calls=0;
   const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model({landmarks:[]})},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
     {load:async()=>({detect:async()=>++calls===1?[{...phone,score:.19,bbox:[40,85,20,10]}]:[{...phone,score:.2,bbox:[10,20,15,25]}],dispose(){}})},
-    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'},undefined,{phoneRedesign:false});
   try {
     await engine.detect({width:100,height:100},0);
     await new Promise(resolve=>setTimeout(resolve,0));
@@ -465,13 +466,13 @@ test('a below-threshold phone does not prevent close-up detection', async () => 
     assert.equal(result.signals.phoneObservation.positive,true);
   } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
 });
-test('low-confidence diagnostic candidates reach the display without triggering phone use', async () => {
+test('legacy: low-confidence diagnostic candidates reach the display without triggering phone use', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(){return {};}};}};
   const s=scene(),model=result=>({detectForVideo:()=>result,close(){}}),thresholds=[];
   const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model(s.pose)},HandLandmarker:{createFromOptions:async()=>model(s.hands)}},
     {load:async()=>({detect:async(source,count,threshold)=>{thresholds.push(threshold);return [{...phone,score:.057}];},dispose(){}})},
-    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'},undefined,{phoneRedesign:false});
   try {
     await engine.detect({width:100,height:100},0);
     await new Promise(resolve=>setTimeout(resolve,0));
@@ -482,14 +483,14 @@ test('low-confidence diagnostic candidates reach the display without triggering 
   } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
 });
 
-test('a phone found only by the edge sweep reaches the focus tracker', async () => {
+test('legacy: a phone found only by the edge sweep reaches the focus tracker', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(_x,_y,width,height){return {width,height};}};}};
   const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
   let calls=0;
   const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model({landmarks:[]})},HandLandmarker:{createFromOptions:async()=>model({landmarks:[]})}},
     {load:async()=>({detect:async()=>++calls===3?[{...phone,score:.3,bbox:[10,20,15,25]}]:[],dispose(){}})},
-    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'},undefined,{phoneRedesign:false});
   try {
     await engine.detect({width:100,height:100},0);
     await new Promise(resolve=>setTimeout(resolve,0));
@@ -628,7 +629,7 @@ test('returning from a long background suspension restarts video and the frame l
   events.pageshow({persisted:true});await new Promise(resolve=>setImmediate(resolve));
   assert.ok(posted.filter(data=>data.type==='frame').length>=2);
 });
-test('WASM inference preserves 800ms object cadence in standard and light mode', async () => {
+test('legacy: WASM inference preserves 800ms object cadence in standard and light mode', async () => {
   const previous=globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas=class {getContext(){return {drawImage(){},getImageData(){return {};}};}};
   try{
@@ -640,7 +641,7 @@ test('WASM inference preserves 800ms object cadence in standard and light mode',
       const tf={wasm:{},setBackend:async value=>{backends.push(value);return true;},ready:async()=>{},getBackend:()=>backends.at(-1)};
       let base;
       const coco={load:async options=>{base=options.base;return {detect:async(...args)=>{calls.push(args);return [phone];},dispose(){}};}};
-      const engine=await createCameraInference(vision,coco,tf,undefined,{light});
+      const engine=await createCameraInference(vision,coco,tf,undefined,{light,phoneRedesign:false});
       try{
         const first=await engine.detect({width:100,height:100},0);
         await new Promise(resolve=>setTimeout(resolve,0));

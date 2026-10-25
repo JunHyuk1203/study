@@ -6,6 +6,22 @@ import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURAT
 import { createFocusTracker } from '../camera-focus.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
+test('independent phone completion pauses immediately without releasing an in-flight face frame',async()=>{
+  let now=0;
+  const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  vm.runInContext(`${source}\nenabled=true;globalThis.camera={acceptResult,acceptPhoneObservation,cameraState};globalThis.pending=()=>{inFlight=true;};globalThis.flight=()=>({inFlight,lastResult});`,context);
+  const camera=context.camera,box=[.3,.5,.12,.2];
+  const face=()=>camera.acceptResult({signals:{...healthySignals,phonePolicy:'tracked'},time:now,epoch:4});
+  const phone=(candidates)=>camera.acceptPhoneObservation({epoch:4,observation:{version:2,id:now,frameId:now,observedAt:now,completedAt:now,epoch:4,status:'ok',region:{x:0,y:0,width:1,height:1},candidates}});
+  face();now=1000;face();phone([]);now=2000;face();phone([]);
+  now=2200;face();phone([{box,score:.6}]);now=2600;face();context.pending();
+  now=2700;phone([{box,score:.6}]);
+  assert.equal(camera.cameraState().reason,'phone');assert.equal(camera.cameraState().tracking,false);
+  assert.equal(context.flight().inFlight,true);assert.equal(context.flight().lastResult,2600);
+});
+
 test('manual pause during engine setup survives detection and visibility changes until explicit resume',async()=>{
   let now=0;
   const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};

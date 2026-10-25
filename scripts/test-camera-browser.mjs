@@ -41,6 +41,7 @@ try {
     const monitor=setInterval(()=>{const now=performance.now();maxTickGap=Math.max(maxTickGap,now-previousTick);previousTick=now;},50);
     async function infer(light){return new Promise((resolve,reject) => {
       const worker = new Worker('./camera-worker.js?v=smoke');
+      let faceResult,phoneObservation;
       const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Worker smoke timeout'));},120000);
       function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
       worker.onerror=error=>finish(new Error(error.message));
@@ -50,7 +51,9 @@ try {
           const bitmap=await createImageBitmap(canvas);
           worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
         }
-        if(data.type==='result')finish(null,data);
+        if(data.type==='result')faceResult=data;
+        if(data.type==='phone-observation')phoneObservation=data.observation;
+        if(faceResult&&phoneObservation)finish(null,{...faceResult,phoneObservation});
       };
       worker.postMessage({type:'init',light});
     });}
@@ -62,6 +65,9 @@ try {
     assert.equal(result.signals.face,false); assert.equal(result.signals.body,false);
     assert.equal(result.signals.phoneUse,false); assert.ok(Number.isFinite(result.time));
     assert.equal(result.backend,'wasm');
+    assert.equal(result.phoneObservation.status,'ok');
+    assert.equal(result.phoneObservation.observedAt,result.time);
+    assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
     console.log(`${mode}: real face/pose/hand/COCO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
   }
   const tickGap=await page.evaluate(()=>window.cameraMaxTickGap);
@@ -91,7 +97,10 @@ try {
             const bitmap=await createImageBitmap(photo,{resizeWidth:Math.round(photo.naturalWidth*scale),resizeHeight:Math.round(photo.naturalHeight*scale)});
             worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
           }
-          if(data.type==='result')finish(null,data.signals.phoneEvidence);
+          if(data.type==='phone-observation'){
+            if(data.observation.status!=='ok')finish(new Error('Phone object inference failed'));
+            else finish(null,{score:Math.max(0,...data.observation.candidates.map(c=>c.score))});
+          }
         };
         worker.postMessage({type:'init'});
       });
@@ -107,12 +116,14 @@ try {
     camera.openCameraFocus(document.querySelector('[data-camera-toggle]'));
     if (!await camera.startCamera()) throw new Error(camera.cameraState().message);
     try {
+      // A synthetic camera cannot enroll an owner. Require safe enrollment waiting,
+      // rather than expecting the absence policy reserved for an enrolled session.
       const paused = await new Promise((resolve,reject) => {
-        const timer=setTimeout(()=>{clearInterval(poll);reject(new Error('Controller absence timeout'));},90000);
+        const timer=setTimeout(()=>{clearInterval(poll);reject(new Error('Controller enrollment timeout'));},90000);
         const poll=setInterval(()=>{
           const state=camera.cameraState();
           if(state.status==='error'){clearTimeout(timer);clearInterval(poll);reject(new Error(state.message));}
-          if(state.reason==='away' && state.status==='paused'){
+          if(state.reason==='identity' && state.status==='scanning' && document.querySelector('[data-camera-debug]')?.textContent.includes('얼굴 등록 중')){
             clearTimeout(timer);clearInterval(poll);resolve(state);
           }
         },200);
@@ -128,7 +139,7 @@ try {
         background=false;document.dispatchEvent(new Event('visibilitychange'));
         await new Promise((resolve,reject)=>{
           const timeout=setTimeout(()=>{clearInterval(poll);reject(new Error('Camera did not recover after visibility return'));},15000);
-          const poll=setInterval(()=>{const state=camera.cameraState();if(state.reason==='away' && state.status==='paused'){
+          const poll=setInterval(()=>{const state=camera.cameraState();if(state.reason==='identity' && state.status==='scanning'){
             clearInterval(poll);clearTimeout(timeout);resolve();
           }},100);
         });
@@ -140,8 +151,8 @@ try {
   assert.equal(controllerResult.stopped.enabled,false);
   assert.equal(controllerResult.remainingVideos,0);
   assert.equal(controllerResult.recovered,true);
-  assert.match(controllerResult.debugText,/자리 이탈.*경고·정지 기준 도달/);
-  console.log('controller: automatic warning/pause, background return/video restart, and stop cleanup passed');
+  assert.match(controllerResult.debugText,/얼굴 등록 중/);
+  console.log('controller: safe enrollment waiting, background return/video restart, and stop cleanup passed');
   for(const width of [390,1280]){
     await page.setViewportSize({width,height:900});
     const layout=await page.evaluate(async()=>{
@@ -155,7 +166,7 @@ try {
       return {left:rect.left,right:rect.right,viewport:innerWidth,overflow:panel.scrollWidth>panel.clientWidth,text:panel.textContent};
     });
     assert.ok(layout.left>=0 && layout.right<=layout.viewport,`debug panel outside viewport: ${width}`);
-    assert.equal(layout.overflow,false);assert.match(layout.text,/경고·정지까지 12.5초/);
+    assert.equal(layout.overflow,false);assert.match(layout.text,/경고·정지까지 5.0초/);
     await page.locator('[data-camera-debug]').scrollIntoViewIfNeeded();
     await page.screenshot({path:resolve(root,`.codex-focus-debug-${width}.png`),fullPage:true});
     console.log(`debug UI ${width}px: countdown visible, no horizontal overflow`);

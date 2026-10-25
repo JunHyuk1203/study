@@ -1,8 +1,11 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261024-16';
-import { paintCameraDebug } from './camera-debug.js?v=20261024-19';
+import { createFocusTracker } from './camera-focus.js?v=20261025-2';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-2';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
+// Rollback switch: false selects the previous search and temporal policy together.
+const phoneRedesign = true;
+let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
 let reason = null;
 let diagnostics = null;
 const video = document.createElement('video');
@@ -168,6 +171,19 @@ function recognitionError(detail = '') {
 function acceptResult(data) {
   inFlight = false;
   const now = performance.now(); lastResult = now;
+  latestFaceResult=data;
+  if(data.signals?.phonePolicy==='tracked' && latestPhoneObservation && latestPhoneObservation.epoch===data.epoch)
+    data={...data,signals:{...data.signals,phoneObservation:latestPhoneObservation}};
+  applyResult(data,now);
+}
+function acceptPhoneObservation(data) {
+  latestPhoneObservation=data.observation;
+  latestPhoneSearch=data.search;
+  // Phone completion must not release the face request or refresh the face watchdog.
+  if(!latestFaceResult || latestFaceResult.epoch!==data.epoch)return;
+  applyResult({...latestFaceResult,signals:{...latestFaceResult.signals,phoneObservation:data.observation}},performance.now());
+}
+function applyResult(data,now) {
   if (manuallyPaused || !cameraVisible() || stream?.getVideoTracks()[0]?.muted) return;
   // Worker sends only the three points needed by the avatar, never the full face mesh.
   const points = data.landmarks;
@@ -177,12 +193,13 @@ function acceptResult(data) {
   identityStatus=decision.identityWarning?'mismatch':null;
   if(data.signals?.identity?.enrolled===false)identityPhase='enrolling';
   else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':!data.signals.identity.matched?'checking':'verified';
-  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs } };
+  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs,phoneSearch:latestPhoneSearch } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-1', import.meta.url));
+  latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-2', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -191,9 +208,10 @@ function startRecognitionWorker(token, light = false) {
     if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
     if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
+    if (data.type === 'phone-observation') acceptPhoneObservation(data);
   };
   loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
-  target.postMessage({ type: 'init', light, identityKey:`${cameraController}:${token}` });
+  target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}` });
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
@@ -218,10 +236,11 @@ async function frame(token, epoch = frameEpoch) {
     inFlight = true;
     try {
       const target = worker;
+      const capturedAt=performance.now();
       const bitmap = await createImageBitmap(video);
       if (token !== revision || epoch !== frameEpoch) { bitmap.close(); return; }
       if (worker !== target || !ready) { bitmap.close(); inFlight = false; }
-      else target.postMessage({ type: 'frame', bitmap, time: performance.now(), epoch }, [bitmap]);
+      else target.postMessage({ type: 'frame', bitmap, time: capturedAt, epoch }, [bitmap]);
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
   if (!enabled || token !== revision || epoch !== frameEpoch) return;

@@ -12,6 +12,11 @@ export function focusDebugRows(debug) {
     }
     const row = debug?.rows.find(row => row.key === key);
     if (!row) return { key, label, text: '분석 대기', active: false };
+    if(key==='phone'&&debug?.phoneState){
+      const state=debug.phoneState;
+      const labels={searching:'전체 화면 탐색 중',candidate:'휴대폰 후보 재확인 중',confirmed:'반복 검출 · 경고·정지',missing:'일시 누락 · 재확인 중',released:'휴대폰 해제 · 복귀 확인',unavailable:'휴대폰 관측 불가'};
+      return {key,label,text:labels[state.status]||'분석 대기',active:state.confirmed};
+    }
     if (row.blocked) return { key, label, text: row.blocked, active: false };
     const evidence = key === 'phone' ? debug?.phoneEvidence : null;
     const gazeNote=key==='idle' && debug?.gaze ? ` · ${!debug.gaze.tracking?'시선 확인 불가':debug.gaze.moving?'시선 변화 감지':'시선 추적 중'}` : '';
@@ -47,7 +52,7 @@ export function paintCameraDebug(root, debug, state) {
   panel.querySelector('[data-debug-summary]').textContent = summary;
   const runtime = snapshot?.runtime;
   panel.querySelector('.cam-debug-note').textContent = runtime?.backend ?
-    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''} · 200/800ms 요청` :
+    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 200/800ms 요청'}` :
     '분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.';
   for (const row of focusDebugRows(snapshot)) {
     const element = panel.querySelector(`[data-debug-row="${row.key}"]`);
