@@ -182,7 +182,7 @@ function acceptResult(data) {
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const target = new Worker(new URL('./camera-worker.js?v=20261024-20', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-1', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {

@@ -104,6 +104,18 @@ export function phoneSearchRegion(poseResult, handResult) {
   return { x: Math.max(0, Math.min(1-width, (minX+maxX-width)/2)),
     y: Math.max(0, Math.min(1-height, (minY+maxY-height)/2)), width, height };
 }
+export function phoneSearchRegions(poseResult, handResult, scan = 0) {
+  // Separate hands must not turn a close-up into another nearly full-frame view.
+  const hands = (handResult.landmarks || []).filter(hand => hand.some(visiblePoint));
+  const wrists = [poseResult.landmarks?.[0]?.[15], poseResult.landmarks?.[0]?.[16]].filter(visiblePoint);
+  const targets = hands.length ? hands : wrists.map(point => [point]);
+  const regions = targets.map(hand => phoneSearchRegion({ landmarks: [] }, { landmarks: [hand] }));
+  // Sweep overlapping quadrants when fewer than two hands are visible.
+  const corner = scan % 4;
+  const sweep = { x: corner % 2 ? .4 : 0, y: corner >= 2 ? .4 : 0, width: .6, height: .6 };
+  return regions.length > 1 ? regions.slice(0, 2) :
+    [regions[0] || phoneSearchRegion(poseResult, handResult), sweep];
+}
 export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory } = {}) {
   const resources = [];
   try {
@@ -135,7 +147,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     if(identity)resources.push(identity);
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
-    let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0;
+    let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0, phoneScan=0;
     let objectPending=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
     const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
@@ -181,18 +193,22 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           const fullWidth = Math.max(1, Math.round(width * objectScale)), fullHeight = Math.max(1, Math.round(height * objectScale));
           input.width = fullWidth; input.height = fullHeight;
           context.drawImage(source, 0, 0, fullWidth, fullHeight);
-          const full=context.getImageData(0,0,fullWidth,fullHeight),region=phoneSearchRegion(poseResult,handResult);
-          const cropWidth=Math.max(1,Math.round(region.width*width)),cropHeight=Math.max(1,Math.round(region.height*height));
-          input.width=cropWidth;input.height=cropHeight;
-          context.drawImage(source,region.x*width,region.y*height,region.width*width,region.height*height,0,0,cropWidth,cropHeight);
-          const crop=context.getImageData(0,0,cropWidth,cropHeight),objectStarted=performance.now();
+          const full=context.getImageData(0,0,fullWidth,fullHeight);
+          const crops=phoneSearchRegions(poseResult,handResult,phoneScan++).map(region=>{
+            const scale=Math.min(1,640/Math.max(region.width*width,region.height*height));
+            const cropWidth=Math.max(1,Math.round(region.width*width*scale)),cropHeight=Math.max(1,Math.round(region.height*height*scale));
+            input.width=cropWidth;input.height=cropHeight;
+            context.drawImage(source,region.x*width,region.y*height,region.width*width,region.height*height,0,0,cropWidth,cropHeight);
+            return {region,cropWidth,cropHeight,pixels:context.getImageData(0,0,cropWidth,cropHeight)};
+          }),objectStarted=performance.now();
           // Copy pixels before returning: the worker may close the input bitmap.
           // A new task lets the Worker post this face result before TF CPU work.
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed)return;
             let found=(await objects.detect(full,30,.2)).map(o=>({...o,bbox:[o.bbox[0]*width/fullWidth,o.bbox[1]*height/fullHeight,o.bbox[2]*width/fullWidth,o.bbox[3]*height/fullHeight]}));
-            if(!extractFocusSignals(faceResult,poseResult,handResult,found,width,height).phoneUse) {
-              const zoomed=await objects.detect(crop,30,.2);
+            for(const {region,cropWidth,cropHeight,pixels} of crops) {
+              if(closed || extractFocusSignals(faceResult,poseResult,handResult,found,width,height).phoneUse)break;
+              const zoomed=await objects.detect(pixels,30,.2);
               found=found.concat(zoomed.filter(o=>o.class==='cell phone').map(o=>({...o,bbox:[region.x*width+o.bbox[0]*region.width*width/cropWidth,region.y*height+o.bbox[1]*region.height*height/cropHeight,o.bbox[2]*region.width*width/cropWidth,o.bbox[3]*region.height*height/cropHeight]})));
             }
             if(!closed){cachedObjects=found;objectWidth=width;objectHeight=height;observedAt=time;observationId++;}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createFocusTracker, FOCUS_LIMITS } from '../camera-focus.js';
-import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, createFaceContinuity } from '../camera-inference.js';
+import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, phoneSearchRegions, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
 import { createIdentityMatcher } from '../camera-identity.js';
 import { decodeStudyObjects } from '../camera-objects.js';
@@ -476,9 +476,27 @@ test('low-confidence diagnostic candidates reach the display without triggering 
     await engine.detect({width:100,height:100},0);
     await new Promise(resolve=>setTimeout(resolve,0));
     const result=await engine.detect({width:100,height:100},100);
-    assert.deepEqual(thresholds,[.2,.2]);
+    assert.deepEqual(thresholds,[.2,.2,.2]);
     assert.equal(result.signals.phoneUse,false);
     assert.equal(result.signals.phoneEvidence.score,.057);
+  } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
+});
+
+test('a phone found only by the edge sweep reaches the focus tracker', async () => {
+  const previous=globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},getImageData(_x,_y,width,height){return {width,height};}};}};
+  const s=scene(),model=result=>({detectForVideo:()=>result,close(){}});
+  let calls=0;
+  const engine=await createCameraInference({FilesetResolver:{forVisionTasks:async()=>({})},FaceLandmarker:{createFromOptions:async()=>model(s.face)},PoseLandmarker:{createFromOptions:async()=>model({landmarks:[]})},HandLandmarker:{createFromOptions:async()=>model({landmarks:[]})}},
+    {load:async()=>({detect:async()=>++calls===3?[{...phone,score:.3,bbox:[10,20,15,25]}]:[],dispose(){}})},
+    {setBackend:async()=>true,ready:async()=>{},getBackend:()=> 'cpu'});
+  try {
+    await engine.detect({width:100,height:100},0);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    const result=await engine.detect({width:100,height:100},100);
+    assert.equal(calls,3);
+    assert.equal(result.signals.phoneObservation.positive,true);
+    assert.equal(result.signals.phoneEvidence.score,.3);
   } finally {engine.close();if(previous===undefined)delete globalThis.OffscreenCanvas;else globalThis.OffscreenCanvas=previous;}
 });
 test('eye closure, reading context, absence and wrist visibility are extracted independently', () => {
@@ -521,6 +539,23 @@ test('phone search crop follows visible hands and stays inside the frame without
   assert.ok(region.width<.5);
   const fallback=phoneSearchRegion({landmarks:[]},{landmarks:[]});
   assert.equal(fallback.width,.55);
+});
+
+test('phone close-ups separate distant hands and sweep all frame corners without landmarks', () => {
+  const hands={landmarks:[[{x:.08,y:.85}],[{x:.92,y:.85}]]};
+  for(let scan=0;scan<4;scan++){
+    const regions=phoneSearchRegions({landmarks:[]},hands,scan);
+    for(const [index,hand] of regions.entries()){
+      const point=hands.landmarks[index][0];
+      assert.ok(hand.width<.5);
+      assert.ok(point.x>=hand.x && point.x<=hand.x+hand.width);
+      assert.ok(point.y>=hand.y && point.y<=hand.y+hand.height);
+    }
+    const sweep=phoneSearchRegions({landmarks:[]},{landmarks:[]},scan)[1];
+    assert.equal(sweep.x,scan%2?.4:0);
+    assert.equal(sweep.y,scan>=2?.4:0);
+    assert.ok(sweep.x+sweep.width<=1 && sweep.y+sweep.height<=1);
+  }
 });
 test('controller propagates behavior pauses, ignores stale results and auto resumes without confirmation', async () => {
   let now = 0, events = 0;
