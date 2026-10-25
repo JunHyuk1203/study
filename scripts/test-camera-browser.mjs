@@ -48,8 +48,9 @@ try {
       worker.onmessage=async({data})=>{
         if(data.type==='error')finish(new Error(`${data.stage}: ${data.message}`));
         if(data.type==='ready'){
+          const capturedAt=performance.now();
           const bitmap=await createImageBitmap(canvas);
-          worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
+          worker.postMessage({type:'frame',bitmap,time:capturedAt,clockOrigin:performance.timeOrigin},[bitmap]);
         }
         if(data.type==='result')faceResult=data;
         if(data.type==='phone-observation')phoneObservation=data.observation;
@@ -68,17 +69,19 @@ try {
     assert.equal(result.phoneObservation.status,'ok');
     assert.equal(result.phoneObservation.observedAt,result.time);
     assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
-    console.log(`${mode}: real face/pose/hand/COCO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
+    assert.equal(result.phoneObservation.model,mode==='light'?'yolov10n':'yolov10s');
+    console.log(`${mode}: real face/pose/hand/YOLO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
   }
   const tickGap=await page.evaluate(()=>window.cameraMaxTickGap);
   assert.ok(tickGap<500,`UI thread stalled for ${tickGap.toFixed(0)}ms during worker inference`);
   console.log(`UI timer during both worker modes: maximum gap ${tickGap.toFixed(0)}ms`);
-  if(process.argv.includes('--phone-fixture')){
+  if(process.argv.includes('--phone-fixture')||process.argv.includes('--hand-fixture')){
     // Mictlancihuatl / TheEgdeLord, CC BY-SA 4.0. Remote references; no images are bundled.
     // https://commons.wikimedia.org/wiki/File:Hand_holding_Smartphone.jpg
     // https://commons.wikimedia.org/wiki/File:Teenager_using_mobile_phone.jpg
     const challenging=process.argv.includes('--occluded-phone-fixture');
-    const source=challenging?'https://upload.wikimedia.org/wikipedia/commons/e/eb/Teenager_using_mobile_phone.jpg':
+    const negative=process.argv.includes('--hand-fixture');
+    const source=negative?'https://upload.wikimedia.org/wikipedia/commons/b/b5/Hand_in_closed_fist_black_background.jpg':challenging?'https://upload.wikimedia.org/wikipedia/commons/e/eb/Teenager_using_mobile_phone.jpg':
       'https://upload.wikimedia.org/wikipedia/commons/0/0b/Hand_holding_Smartphone.jpg';
     const phone=await page.evaluate(async({source,sequence})=>{
       const photo=new Image();photo.crossOrigin='anonymous';
@@ -90,8 +93,9 @@ try {
         const trace=[],samples=sequence?12:1;
         async function send(){
           const scale=Math.min(640/photo.naturalWidth,480/photo.naturalHeight);
+          const capturedAt=performance.now();
           const bitmap=await createImageBitmap(photo,{resizeWidth:Math.round(photo.naturalWidth*scale),resizeHeight:Math.round(photo.naturalHeight*scale)});
-          worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
+          worker.postMessage({type:'frame',bitmap,time:capturedAt,clockOrigin:performance.timeOrigin},[bitmap]);
         }
         const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Phone fixture timeout'));},120000);
         function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
@@ -111,12 +115,13 @@ try {
         worker.postMessage({type:'init'});
       });
     },{source,sequence:process.argv.includes('--phone-sequence')});
-    console.log('public phone fixture evidence: '+JSON.stringify(phone));
+    console.log('public '+(negative?'empty-hand':'phone')+' fixture evidence: '+JSON.stringify(phone));
     await page.screenshot({path:resolve(root,'.codex-phone-reference.png')});
     await page.locator('[data-phone-fixture]').evaluate(image=>image.remove());
-    if(challenging && phone.score<.35) console.log('Known model limitation: small, mostly occluded phone remains undetected; UI exposes not-found evidence.');
+    if(negative){assert.equal(phone.confirmed,false,'An empty hand must not confirm a phone');assert.ok(phone.score<.55,'An empty hand must not produce strong phone evidence');}
+    else if(challenging && phone.score<.55) console.log('Known model limitation: small, mostly occluded phone remains undetected; UI exposes not-found evidence.');
     else {
-      assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
+      assert.ok(phone.score>=.55,'The real phone model did not detect the reference phone');
       if(process.argv.includes('--phone-sequence'))assert.equal(phone.confirmed,true,'Repeated real-model phone results must confirm the same phone');
     }
   }

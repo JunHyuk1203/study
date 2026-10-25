@@ -6,6 +6,21 @@ import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURAT
 import { createFocusTracker } from '../camera-focus.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
+test('phone backpressure captures a new frame only after inference completes and transmits the clock origin',async()=>{
+  let now=0;const posted=[],video={setAttribute(){},readyState:2,currentTime:0};
+  const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener(){}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,setTimeout:()=>0,createImageBitmap:async()=>({close(){}}),performance:{now:()=>now,timeOrigin:1234},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  context.target={postMessage:data=>posted.push(data)};
+  vm.runInContext(`${source}\nenabled=ready=true;worker=target;globalThis.camera={frame,acceptResult,acceptPhoneObservation};`,context);
+  const c=context.camera;
+  await c.frame(0);assert.equal(posted.length,1);assert.equal(posted[0].clockOrigin,1234);
+  c.acceptResult({time:0,epoch:0,signals:{...healthySignals,phonePolicy:'tracked'},phonePending:true});
+  now=200;video.currentTime=.2;await c.frame(0);assert.equal(posted.length,1,'do not queue an old snapshot behind busy inference');
+  c.acceptPhoneObservation({epoch:0,observation:{version:3,id:1,frameId:0,observedAt:0,completedAt:200,status:'ok',region:{x:0,y:0,width:1,height:1},candidates:[]}});
+  now=400;video.currentTime=.4;await c.frame(0);assert.equal(posted.length,2);assert.equal(posted[1].time,400);
+});
+
 test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{
   const workers=[];
   class Worker{constructor(){workers.push(this);}postMessage(data){this.init=data;}terminate(){this.terminated=true;}}

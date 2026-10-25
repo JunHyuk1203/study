@@ -15,8 +15,9 @@ export function focusDebugRows(debug) {
     if(key==='phone'&&debug?.phoneState){
       const state=debug.phoneState;
       const labels={searching:'전체 화면 탐색 중',candidate:'휴대폰 후보 재확인 중',confirmed:'반복 검출 · 경고·정지',missing:'일시 누락 · 재확인 중',released:'휴대폰 해제 · 복귀 확인',unavailable:'휴대폰 관측 불가'};
-      const evidence=state.trackId ? ` · 모델 점수 ${state.score.toFixed(3)} · 독립 양성 ${state.positives}/2` : '';
-      return {key,label,text:(labels[state.status]||'분석 대기')+evidence,active:state.confirmed};
+      const evidence=state.trackId ? ` · 모델 점수 ${state.score.toFixed(3)} · 독립 양성 ${Math.min(2,state.positives)}/2` : '';
+      const phase=state.status==='candidate'&&state.positives>=2&&!state.contextVerified?'주변 화면 재검증 중':labels[state.status];
+      return {key,label,text:(debug.phoneObservation?.model?debug.phoneObservation.model.toUpperCase()+' · ':'')+(phase||'분석 대기')+evidence,active:state.confirmed};
     }
     if (row.blocked) return { key, label, text: row.blocked, active: false };
     const evidence = key === 'phone' ? debug?.phoneEvidence : null;

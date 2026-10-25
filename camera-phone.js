@@ -1,5 +1,5 @@
 // Pure local phone observation policy. Coordinates are normalized to the original image.
-export const PHONE_LIMITS = Object.freeze({ seed: .05, create: .2, window: 2000, separation: 400, grace: 1000, maxAge: 1500, maxHold: 2500 });
+export const PHONE_LIMITS = Object.freeze({ seed: .15, context: .35, contextWindow:3500, create: .55, window: 2200, separation: 400, grace: 1000, maxAge: 1500, maxHold: 2500 });
 export const FULL_FRAME = Object.freeze({ x: 0, y: 0, width: 1, height: 1, key: 'full' });
 const area = b => b[2] * b[3];
 const intersection = (a, b) => Math.max(0, Math.min(a[0]+a[2], b[0]+b[2])-Math.max(a[0],b[0])) *
@@ -13,6 +13,12 @@ function match(a, b) {
 }
 function covers(region, box) {
   return region && intersection([region.x,region.y,region.width,region.height],box)/area(box) >= .8;
+}
+function inspectable(observation,box) {
+  const {resolution,region}=observation;
+  if(!resolution)return true;
+  const scale=resolution.inputSize/Math.max(region.width*resolution.width,region.height*resolution.height);
+  return Math.max(box[2]*resolution.width,box[3]*resolution.height)*scale>=32;
 }
 export function createPhoneTracker() {
   let tracks=[], nextId=1, lastAt=-Infinity, lastValid=null, started=null, unavailable=false;
@@ -44,19 +50,31 @@ export function createPhoneTracker() {
           if(!weakest||weakest.score>=candidate.score)continue;
           tracks=tracks.filter(t=>t!==weakest);
         }
-        track={id:nextId++,box:candidate.box,history:[],lastSeen:observedAt,lastPositive:null,lastPositiveReceipt:null,confirmed:false};tracks.push(track);
+        track={id:nextId++,box:candidate.box,history:[],lastSeen:observedAt,lastPositive:null,lastPositiveReceipt:null,contextAt:null,confirmed:false};tracks.push(track);
       }
-      assigned.add(track.id);track.box=candidate.box;track.score=candidate.score;track.lastSeen=observedAt;
       const positive=candidate.score>=PHONE_LIMITS.create;
+      assigned.add(track.id);
+      // An uncertain crop must not steer the next crop away from the original object.
+      if(positive||track.score==null)track.box=candidate.box;
+      track.score=candidate.score;track.lastSeen=observedAt;
+      // Tight crops can amplify a hand-shaped false positive. Require classification
+      // support from a full frame, tile or hand-context pass before confirming it.
+      if(candidate.score>=PHONE_LIMITS.context && !region?.key?.startsWith('track-'))track.contextAt=observedAt;
       const old=track.history.find(e=>e.frameId===frameId);
-      if(old)old.positive ||= positive;else track.history.push({frameId,at:observedAt,positive});
+      if(old)old.positive ||= positive;else if(positive)track.history.push({frameId,at:observedAt,positive:true});
       if(positive){track.lastPositive=observedAt;track.lastPositiveReceipt=now;track.released=false;}
+      if(positive&&region?.key&&region.key!=='full'&&!region.key.startsWith('track-')&&candidate.score>(track.bestViewScore??0)){
+        track.bestViewScore=candidate.score;track.bestView={width:region.width,height:region.height,
+          offsetX:region.x-candidate.box[0]-candidate.box[2]/2,offsetY:region.y-candidate.box[1]-candidate.box[3]/2};
+      }
     }
     for(const track of tracks){
-      if(!assigned.has(track.id)&&covers(region,track.box)&&!track.history.some(e=>e.frameId===frameId))track.history.push({frameId,at:observedAt,positive:false});
+      if(!assigned.has(track.id)&&covers(region,track.box)&&inspectable(observation,track.box)&&!track.history.some(e=>e.frameId===frameId))track.history.push({frameId,at:observedAt,positive:false});
       track.history=track.history.filter(e=>observedAt-e.at<=PHONE_LIMITS.window).slice(-3);
       const positives=track.history.filter(e=>e.positive);
-      if(positives.length>=2 && positives.at(-1).at-positives[0].at>=PHONE_LIMITS.separation)track.confirmed=true;
+      const contextFresh=track.contextAt!==null&&observedAt-track.contextAt<=PHONE_LIMITS.contextWindow;
+      if(!contextFresh)track.confirmed=false;
+      if(positives.length>=2 && positives.at(-1).at-positives[0].at>=PHONE_LIMITS.separation && contextFresh)track.confirmed=true;
     }
     return state(now);
   }
@@ -79,32 +97,42 @@ export function createPhoneTracker() {
     const candidate=tracks.filter(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window).sort((a,b)=>b.score-a.score)[0];
     const status=confirmed ? (active?'confirmed':'missing') : unavailable||lost||now-(lastValid??started)>Math.max(PHONE_LIMITS.maxAge,holdMs()) ? 'unavailable' : candidate ? 'candidate' : tracks.some(t=>t.released) ? 'released' : 'searching';
     const selected=confirmed||candidate;
-    return {status,confirmed:Boolean(confirmed),trackId:selected?.id??null,box:selected?.box??null,score:selected?.score??0,positives:selected?.history.filter(e=>e.positive).length??0};
+    return {status,confirmed:Boolean(confirmed),trackId:selected?.id??null,box:selected?.box??null,score:selected?.score??0,positives:selected?.history.filter(e=>e.positive).length??0,
+      contextVerified:selected?.contextAt!=null&&now-selected.contextAt<=PHONE_LIMITS.contextWindow+PHONE_LIMITS.maxAge};
   }
   return {observe,state,targets:now=>tracks.filter(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window).sort((a,b)=>Number(b.confirmed)-Number(a.confirmed)||b.score-a.score).slice(0,2).map(t=>({...t,trackId:t.id})),
     diagnostics(){const sorted=[...diagnostics.latencies].sort((a,b)=>a-b);return {...diagnostics,latencies:undefined,holdMs:holdMs(),p50:sorted[Math.floor(sorted.length*.5)]??0,p95:sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]??0};}};
 }
 export function createPhoneScheduler() {
-  let turn=0, lastFull=-Infinity;
-  const visited=new Map();
+  let turn=0, lastFull=-Infinity,jobsSinceFull=0,targetBurst=0;
+  const visited=new Map(),views=new Map();
   return { next(width,height,now,targets=[],hands=[]) {
     const activeKeys=new Set(targets.map(t=>`track-${t.trackId}`));
-    for(const key of visited.keys())if(key.startsWith('track-')&&!activeKeys.has(key))visited.delete(key);
+    for(const key of visited.keys())if(key.startsWith('track-')&&!activeKeys.has(key)){visited.delete(key);views.delete(key);}
     const current=turn++;
-    if(current%4===0 || now-lastFull>=2000){lastFull=now;return {...FULL_FRAME};}
-    if(targets.length && current%2===1){
+    const full=()=>{lastFull=now;jobsSinceFull=0;targetBurst=0;return {...FULL_FRAME};};
+    if(!Number.isFinite(lastFull))return full();
+    // A newly found candidate gets the next job. Reset the full-frame budget on
+    // actual execution, so a deadline scan cannot cause another adjacent full scan.
+    if(targets.length && targetBurst<2 && jobsSinceFull<3){
       const target=[...targets].sort((a,b)=>(visited.get(`track-${a.trackId}`)??-Infinity)-(visited.get(`track-${b.trackId}`)??-Infinity))[0];
-      const [x,y,w,h]=target.box,scale=now-target.lastSeen>400?2.2:1.6;
-      const rw=Math.min(1,Math.max(.22,w*scale)),rh=Math.min(1,Math.max(.22,h*scale)),key=`track-${target.trackId}`;
-      visited.set(key,now);return {x:Math.max(0,Math.min(1-rw,x+w/2-rw/2)),y:Math.max(0,Math.min(1-rh,y+h/2-rh/2)),width:rw,height:rh,key};
+      const key=`track-${target.trackId}`,view=views.get(key)||0,context=Boolean(target.bestView)||view%2===1;
+      const [x,y,w,h]=target.box,scale=context?3:1.6,minimum=context ? .36 : .16;
+      const rw=target.bestView?Math.min(1,Math.max(target.bestView.width,w*1.2)):Math.min(1,Math.max(minimum,w*scale));
+      const rh=target.bestView?Math.min(1,Math.max(target.bestView.height,h*1.2)):Math.min(1,Math.max(minimum,h*scale));
+      const desiredX=target.bestView?x+w/2+target.bestView.offsetX:x+w/2-rw/2;
+      const desiredY=target.bestView?y+h/2+target.bestView.offsetY:y+h/2-rh/2;
+      visited.set(key,now);views.set(key,view+1);jobsSinceFull++;targetBurst++;
+      return {x:Math.max(0,Math.min(1-rw,Math.max(x+w-rw,Math.min(x,desiredX)))),y:Math.max(0,Math.min(1-rh,Math.max(y+h-rh,Math.min(y,desiredY)))),width:rw,height:rh,key:context?`verify-${target.trackId}`:key};
     }
+    if(now-lastFull>=2000||jobsSinceFull>=3)return full();
     // Square pixel tiles overlap by at least 20%, even on portrait cameras.
     const side=Math.min(width,height)*.65,tw=Math.min(1,side/width),th=Math.min(1,side/height);
     const cols=Math.ceil((1-tw)/(tw*.8))+1,rows=Math.ceil((1-th)/(th*.8))+1,tiles=[];
     for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)tiles.push({x:x*(1-tw)/Math.max(1,cols-1),y:y*(1-th)/Math.max(1,rows-1),width:tw,height:th,key:`tile-${x}-${y}`});
     // Hands get occasional priority but cannot starve the tile sweep.
-    const choices=!targets.length&&current%4===1&&hands.length?hands.map((r,i)=>({...r,key:`hand-${i}`})):tiles;
+    const choices=!targets.length&&current%3===1&&hands.length?hands.map((r,i)=>({...r,key:`hand-${i}`})):tiles;
     const region=choices.sort((a,b)=>(visited.get(a.key)??-Infinity)-(visited.get(b.key)??-Infinity))[0];
-    visited.set(region.key,now);return region;
+    visited.set(region.key,now);jobsSinceFull++;targetBurst=0;return region;
   }, diagnostics:()=>({lastFull,regions:Object.fromEntries(visited)})};
 }

@@ -1,10 +1,8 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-3';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-3';
+import { createFocusTracker } from './camera-focus.js?v=20261025-4';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-4';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
-// Rollback switch: false selects the previous search and temporal policy together.
-const phoneRedesign = true;
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
 let reason = null;
 let diagnostics = null;
@@ -20,7 +18,7 @@ let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
 let identityStatus=null;
 let identityPhase=null;
-let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
+let ready = false, inFlight = false, phoneBusy=false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
@@ -170,6 +168,7 @@ function recognitionError(detail = '') {
 }
 function acceptResult(data) {
   inFlight = false;
+  phoneBusy=Boolean(data.phonePending);
   const now = performance.now(); lastResult = now;
   latestFaceResult=data;
   if(data.signals?.phonePolicy==='tracked' && latestPhoneObservation && latestPhoneObservation.epoch===data.epoch)
@@ -177,6 +176,7 @@ function acceptResult(data) {
   applyResult(data,now);
 }
 function acceptPhoneObservation(data) {
+  phoneBusy=false;
   latestPhoneObservation=data.observation;
   latestPhoneSearch=data.search;
   // Phone completion must not release the face request or refresh the face watchdog.
@@ -193,13 +193,14 @@ function applyResult(data,now) {
   identityStatus=decision.identityWarning?'mismatch':null;
   if(data.signals?.identity?.enrolled===false)identityPhase='enrolling';
   else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':!data.signals.identity.matched?'checking':'verified';
-  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs,phoneSearch:latestPhoneSearch } };
+  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, phoneModel:data.signals?.phoneObservation?.model, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs,phoneSearch:latestPhoneSearch } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
+  phoneBusy=false;
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-3', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-4', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -214,7 +215,7 @@ function startRecognitionWorker(token, light = false) {
     }
   };
   loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
-  target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}` });
+  target.postMessage({ type: 'init', light, identityKey:`${cameraController}:${token}` });
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
@@ -234,7 +235,7 @@ function recoverRecognition(token, detail) {
 }
 async function frame(token, epoch = frameEpoch) {
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
-  if (ready && !inFlight && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+  if (ready && !inFlight && !phoneBusy && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     inFlight = true;
     try {
@@ -243,7 +244,7 @@ async function frame(token, epoch = frameEpoch) {
       const bitmap = await createImageBitmap(video);
       if (token !== revision || epoch !== frameEpoch) { bitmap.close(); return; }
       if (worker !== target || !ready) { bitmap.close(); inFlight = false; }
-      else target.postMessage({ type: 'frame', bitmap, time: capturedAt, epoch }, [bitmap]);
+      else target.postMessage({ type: 'frame', bitmap, time: capturedAt, clockOrigin:performance.timeOrigin, epoch }, [bitmap]);
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
@@ -265,7 +266,7 @@ function startCameraWatchdog(token) {
 function resumeCameraRecognition() {
   if (!enabled || document.hidden || !stream) return;
   const token = revision;
-  frameEpoch++; clearTimeout(loop); inFlight = false; lastVideoTime = -1; lastResult = performance.now();
+  frameEpoch++; clearTimeout(loop); inFlight = false; phoneBusy=false; lastVideoTime = -1; lastResult = performance.now();
   focusTracker.reset(true); diagnostics = null;
   setStatus('scanning', '얼굴을 다시 확인하는 중…');
   if (!worker) {
