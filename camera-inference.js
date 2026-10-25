@@ -1,6 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
-import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-6';
+import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-7';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -121,6 +121,13 @@ export function phoneSearchRegions(poseResult, handResult, scan = 0) {
 export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, lowMemory = false, onStage = () => {}, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
   const resources = [];
   try {
+    const loadObjects=async()=>{
+      onStage('phone');
+      const objects=await cocoSsd.load({base:light?'lite_mobilenet_v2':'mobilenet_v2'});
+      resources.push(objects);return objects;
+    };
+    // Compile ONNX before allocating MediaPipe/identity heaps on iOS.
+    let objects=lowMemory?await loadObjects():null;
     onStage('vision-files');
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
     // MediaPipe's Safari auto-canvas branch uses document even in a Worker.
@@ -146,14 +153,12 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     resources.push(hand);
     onStage('backend');
     let accelerated = false;
-    if (tf.wasm) {
+    if (tf.wasm && !lowMemory) {
       try { accelerated = await tf.setBackend('wasm'); } catch { /* Worker-only CPU fallback. */ }
     }
     if (!accelerated) await tf.setBackend('cpu');
     await tf.ready();
-    onStage('phone');
-    const objects = await cocoSsd.load({ base: light ? 'lite_mobilenet_v2' : 'mobilenet_v2' });
-    resources.push(objects);
+    objects??=await loadObjects();
     onStage('identity');
     const identity=identityFactory?await identityFactory():null;
     if(identity)resources.push(identity);

@@ -2,9 +2,10 @@
 self.onmessage=async()=>{
   let session,tensor,outputs;
   try{
-    const {ORT_WASM_SCRIPT,configureCameraOrt}=await import('../camera-runtime.js');
+    const {cameraRuntimeProfile,configureCameraOrt}=await import('../camera-runtime.js');
+    const profile=cameraRuntimeProfile(),ORT_WASM_SCRIPT=profile.ortScript;
     const {PHONE_MODEL}=await import('../camera-detector.js');
-    importScripts(ORT_WASM_SCRIPT);configureCameraOrt(self.ort);
+    importScripts(ORT_WASM_SCRIPT);configureCameraOrt(self.ort,profile);
     const response=await fetch(PHONE_MODEL.url);if(!response.ok)throw Error('Model download failed');
     const bytes=await response.arrayBuffer(),digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
     if(Array.from(digest,b=>b.toString(16).padStart(2,'0')).join('')!==PHONE_MODEL.sha256)throw Error('Model checksum mismatch');

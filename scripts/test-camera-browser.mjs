@@ -34,6 +34,7 @@ try {
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
   ] });
   const page = await browser.newPage(iosProfile?{userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{});
+  const wasmRequests=[];page.on('request',request=>{if(/\.wasm(?:\?|$)/.test(request.url()))wasmRequests.push(request.url());});
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   console.log('Browser capabilities: '+JSON.stringify(await page.evaluate(async()=>{
     const script=new Blob(["self.postMessage({canvas:typeof OffscreenCanvas,bitmap:typeof createImageBitmap,webgl:typeof WebGL2RenderingContext})"],{type:'text/javascript'});
@@ -46,11 +47,11 @@ try {
     const result=await page.evaluate(async()=>{
       const {paintCameraDebug}=await import('/camera-debug.js');
       const root=document.createElement('section');document.querySelector('main').append(root);
-      paintCameraDebug(root,{engine:{build:'20261025-6',code:'C6-IDENTITY-STORAGE',phase:'identity',message:'IndexedDB database unavailable'}},{status:'error',tracking:false});
+      paintCameraDebug(root,{engine:{build:'20261025-7',code:'C7-IDENTITY-STORAGE',phase:'identity',message:'IndexedDB database unavailable'}},{status:'error',tracking:false});
       const panel=root.querySelector('[data-camera-debug]'),note=panel.querySelector('.cam-debug-note');
       return {text:note.textContent,overflow:panel.scrollWidth>panel.clientWidth,selectable:getComputedStyle(note).userSelect};
     });
-    assert.match(result.text,/C6-IDENTITY-STORAGE/);assert.match(result.text,/IndexedDB/);
+    assert.match(result.text,/C7-IDENTITY-STORAGE/);assert.match(result.text,/IndexedDB/);
     assert.equal(result.overflow,false);assert.equal(result.selectable,'text');
     console.log('iPhone-width error diagnostics: readable stage code and raw message, selectable text, no overflow');
   }else if(process.argv.includes('--runtime-only')){
@@ -96,7 +97,7 @@ try {
     assert.equal(result.type,'result'); assert.equal(result.signals.reliable,true);
     assert.equal(result.signals.face,false); assert.equal(result.signals.body,false);
     assert.equal(result.signals.phoneUse,false); assert.ok(Number.isFinite(result.time));
-    assert.equal(result.backend,'wasm');
+    assert.equal(result.backend,iosProfile?'cpu':'wasm');
     assert.equal(result.phoneObservation.status,'ok');
     assert.equal(result.phoneObservation.observedAt,result.time);
     assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
@@ -219,5 +220,11 @@ try {
     console.log(`debug UI ${width}px: countdown visible, no horizontal overflow`);
   }
   }
+  }
+  if(iosProfile&&!process.argv.includes('--diagnostic-ui-only')){
+    assert.ok(wasmRequests.some(url=>url.includes('onnxruntime-web@1.17.3/dist/ort-wasm-simd.wasm')),JSON.stringify(wasmRequests));
+    assert.ok(!wasmRequests.some(url=>/onnxruntime.*(?:threaded|jsep)/.test(url)),JSON.stringify(wasmRequests));
+    assert.ok(!wasmRequests.some(url=>url.includes('tfjs-backend-wasm')),JSON.stringify(wasmRequests));
+    console.log('iOS runtime requests: non-threaded ONNX SIMD, no JSEP or additional TensorFlow WASM heap');
   }
 } finally { await browser?.close(); await new Promise(resolve=>server.close(resolve)); }

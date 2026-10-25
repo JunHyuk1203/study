@@ -1,7 +1,7 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-6';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-6';
-import { cameraRuntimeProfile,cameraInitializationDiagnostic } from './camera-runtime.js?v=20261025-6';
+import { createFocusTracker } from './camera-focus.js?v=20261025-7';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-7';
+import { cameraRuntimeProfile,cameraInitializationDiagnostic } from './camera-runtime.js?v=20261025-7';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
@@ -203,22 +203,22 @@ function applyResult(data,now) {
 function startRecognitionWorker(token, light = false) {
   const profile=cameraRuntimeProfile();
   light ||= profile.light;
-  engineDiagnostic={build:'20261025-6',phase:'profile'};
+  engineDiagnostic={build:'20261025-7',phase:'profile'};
   phoneBusy=false;
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-6', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-7', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
     if (data.epoch != null && data.epoch !== frameEpoch) return;
     if (data.type === 'error') {
-      engineDiagnostic={build:'20261025-6',phase:data.stage};
+      engineDiagnostic={build:'20261025-7',phase:data.stage};
       if(data.code==='unsupported-canvas')recognitionError(`${data.stage}: ${data.message}`,'이 브라우저는 카메라 분석을 지원하지 않습니다 · iOS 또는 브라우저를 최신 버전으로 업데이트해 주세요');
       else recoverRecognition(token, `${data.stage}: ${data.message}`);
       return;
     }
-    if(data.type==='loading'){engineDiagnostic={build:'20261025-6',phase:data.stage};paint();}
+    if(data.type==='loading'){engineDiagnostic={build:'20261025-7',phase:data.stage};paint();}
     if (data.type === 'ready') { ready = true;engineDiagnostic=null; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
     if (data.type === 'phone-observation') {
