@@ -1,6 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
-import { createPhoneTracker, createPhoneScheduler } from './camera-phone.js?v=20261025-2';
+import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-3';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -149,7 +149,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0, phoneScan=0;
-    let phoneTracker=createPhoneTracker(), phoneScheduler=createPhoneScheduler(), phoneEpoch=null, latestPhone=null;
+    let phoneTracker=createPhoneTracker(), phoneScheduler=createPhoneScheduler(), phoneEpoch=null, latestPhone=null,phoneLagCount=0;
     let objectPending=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
     const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
@@ -161,7 +161,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     return {
       async detect(source, time, epoch = 0) {
         const startedAt = performance.now();
-        if(phoneEpoch!==epoch){phoneEpoch=epoch;phoneTracker=createPhoneTracker();phoneScheduler=createPhoneScheduler();latestPhone=null;cachedObjects=[];observedAt=-Infinity;objectTime=-Infinity;}
+        if(phoneEpoch!==epoch){phoneEpoch=epoch;phoneTracker=createPhoneTracker();phoneScheduler=createPhoneScheduler();latestPhone=null;phoneLagCount=0;cachedObjects=[];observedAt=-Infinity;objectTime=-Infinity;}
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
         let began=performance.now();
         let faceResult = face.detectForVideo(source, time);
@@ -203,15 +203,16 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
             const candidates=found.filter(o=>o.class==='cell phone').map(o=>({score:o.score,box:[region.x+o.bbox[0]/cropWidth*region.width,region.y+o.bbox[1]/cropHeight*region.height,o.bbox[2]/cropWidth*region.width,o.bbox[3]/cropHeight*region.height]}));
             latestPhone={version:2,id:++observationId,frameId:time,observedAt:time,completedAt,region,candidates,status,epoch};
             phoneTracker.observe(latestPhone,completedAt);
+            phoneLagCount=completedAt-time>PHONE_LIMITS.maxAge?phoneLagCount+1:0;
             if(status==='ok'){
               cachedObjects=found.map(o=>({...o,bbox:[(region.x+o.bbox[0]/cropWidth*region.width)*width,(region.y+o.bbox[1]/cropHeight*region.height)*height,o.bbox[2]/cropWidth*region.width*width,o.bbox[3]/cropHeight*region.height*height]}));
               objectWidth=width;objectHeight=height;observedAt=time;
             }else {cachedObjects=[];observedAt=-Infinity;}
-            onPhoneObservation?.({type:'phone-observation',observation:latestPhone,epoch,diagnostics:phoneTracker.diagnostics(),search:phoneScheduler.diagnostics()});
+            onPhoneObservation?.({type:'phone-observation',observation:latestPhone,epoch,diagnostics:phoneTracker.diagnostics(),state:phoneTracker.state(completedAt),search:phoneScheduler.diagnostics(),slow:!light&&phoneLagCount>=2});
           };
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed||phoneEpoch!==epoch)return;
-            try {publish(await objects.detect(pixels,30,.12),'ok');}catch {publish([],'error');}
+            try {publish(await objects.detect(pixels,30,PHONE_LIMITS.seed),'ok');}catch {publish([],'error');}
           }).finally(()=>{modelMs.objects=performance.now()-objectStarted;objectPending=null;});
         } else if (!phoneRedesign && !objectPending && time - objectTime >= 800) {
           objectTime=time;

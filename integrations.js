@@ -1,5 +1,5 @@
 import { authReady, getAuthUser } from './auth.js?v=20261022-1';
-import { getStudyData } from './data.js?v=20261025-2';
+import { getStudyData } from './data.js?v=20261025-3';
 import { serverCallable } from './server-client.js?v=20261024-selfhost1';
 import { chatHistory, completedAnswer } from './chat-state.js?v=20261021-28';
 import { readCache } from './client-cache.js?v=20261024-selfhost1';

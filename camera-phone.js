@@ -1,5 +1,5 @@
 // Pure local phone observation policy. Coordinates are normalized to the original image.
-export const PHONE_LIMITS = Object.freeze({ create: .2, retain: .12, window: 2000, separation: 400, grace: 1000, maxAge: 1500 });
+export const PHONE_LIMITS = Object.freeze({ seed: .05, create: .2, window: 2000, separation: 400, grace: 1000, maxAge: 1500, maxHold: 2500 });
 export const FULL_FRAME = Object.freeze({ x: 0, y: 0, width: 1, height: 1, key: 'full' });
 const area = b => b[2] * b[3];
 const intersection = (a, b) => Math.max(0, Math.min(a[0]+a[2], b[0]+b[2])-Math.max(a[0],b[0])) *
@@ -26,22 +26,31 @@ export function createPhoneTracker() {
     if(!Number.isFinite(observedAt)||!Number.isFinite(completedAt)||completedAt<observedAt||observedAt>now||frameId==null){reject('invalid');return state(now);}
     if(observedAt<lastAt){reject('out-of-order');return state(now);}
     lastAt=observedAt;
+    diagnostics.latencies.push(completedAt-observedAt);if(diagnostics.latencies.length>120)diagnostics.latencies.shift();
     if(now-observedAt>PHONE_LIMITS.maxAge){reject('stale');unavailable=true;return state(now);}
     if(observation.status!=='ok'){reject('model-error');unavailable=true;return state(now);}
-    lastValid=observedAt;unavailable=false;diagnostics.accepted++;
-    diagnostics.latencies.push(completedAt-observedAt);if(diagnostics.latencies.length>120)diagnostics.latencies.shift();
+    // Capture time controls freshness and independent evidence. Receipt time controls
+    // how long a newly accepted result may survive a brief gap on a slow device.
+    lastValid=now;unavailable=false;diagnostics.accepted++;
     tracks=tracks.filter(t=>observedAt-t.lastSeen<=PHONE_LIMITS.window);
     const assigned=new Set();
-    for(const candidate of [...(observation.candidates||[])].filter(c=>validBox(c.box)&&Number.isFinite(c.score)&&c.score>=PHONE_LIMITS.retain).sort((a,b)=>b.score-a.score)) {
+    for(const candidate of [...(observation.candidates||[])].filter(c=>validBox(c.box)&&Number.isFinite(c.score)&&c.score>=PHONE_LIMITS.seed).sort((a,b)=>b.score-a.score)) {
       let track=tracks.find(t=>!assigned.has(t.id)&&match(t.box,candidate.box));
       // Overlapping detections from one pass are the same evidence, not new tracks.
       if(!track && tracks.some(t=>assigned.has(t.id)&&match(t.box,candidate.box)))continue;
-      if(!track){if(candidate.score<PHONE_LIMITS.create)continue;track={id:nextId++,box:candidate.box,history:[],lastSeen:observedAt,lastPositive:null,confirmed:false};tracks.push(track);}
+      if(!track){
+        if(tracks.length>=8){
+          const weakest=tracks.filter(t=>!t.confirmed).sort((a,b)=>a.score-b.score)[0];
+          if(!weakest||weakest.score>=candidate.score)continue;
+          tracks=tracks.filter(t=>t!==weakest);
+        }
+        track={id:nextId++,box:candidate.box,history:[],lastSeen:observedAt,lastPositive:null,lastPositiveReceipt:null,confirmed:false};tracks.push(track);
+      }
       assigned.add(track.id);track.box=candidate.box;track.score=candidate.score;track.lastSeen=observedAt;
       const positive=candidate.score>=PHONE_LIMITS.create;
       const old=track.history.find(e=>e.frameId===frameId);
       if(old)old.positive ||= positive;else track.history.push({frameId,at:observedAt,positive});
-      if(positive){track.lastPositive=observedAt;track.released=false;}
+      if(positive){track.lastPositive=observedAt;track.lastPositiveReceipt=now;track.released=false;}
     }
     for(const track of tracks){
       if(!assigned.has(track.id)&&covers(region,track.box)&&!track.history.some(e=>e.frameId===frameId))track.history.push({frameId,at:observedAt,positive:false});
@@ -51,22 +60,29 @@ export function createPhoneTracker() {
     }
     return state(now);
   }
+  function holdMs() {
+    const sorted=[...diagnostics.latencies].sort((a,b)=>a-b);
+    const p95=sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]??0;
+    return Math.max(PHONE_LIMITS.grace,Math.min(PHONE_LIMITS.maxHold,p95*2));
+  }
   function state(now) {
     started ??= now;
     let active=null, missing=null, lost=false;
     for(const track of tracks){
-      const age=now-(track.lastPositive??track.lastSeen);
+      const age=now-(track.lastPositiveReceipt??track.lastSeen);
+      const captureAge=now-(track.lastPositive??track.lastSeen);
       const negatives=track.history.filter(e=>!e.positive&&e.at>(track.lastPositive??-Infinity)).length;
       if(track.confirmed&&negatives>=2&&age>=PHONE_LIMITS.grace){track.confirmed=false;track.released=true;}
-      if(track.confirmed){if(age<=PHONE_LIMITS.grace){if(!negatives)active=track;else missing=track;}else lost=true;}
+      if(track.confirmed){if(age<=holdMs()&&captureAge<=PHONE_LIMITS.maxAge+PHONE_LIMITS.maxHold){if(!negatives)active=track;else missing=track;}else lost=true;}
     }
     const confirmed=active||missing;
-    const candidate=tracks.find(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window);
-    const status=confirmed ? (active?'confirmed':'missing') : unavailable||lost||now-(lastValid??started)>PHONE_LIMITS.maxAge ? 'unavailable' : candidate ? 'candidate' : tracks.some(t=>t.released) ? 'released' : 'searching';
-    return {status,confirmed:Boolean(confirmed),trackId:(confirmed||candidate)?.id??null,box:(confirmed||candidate)?.box??null};
+    const candidate=tracks.filter(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window).sort((a,b)=>b.score-a.score)[0];
+    const status=confirmed ? (active?'confirmed':'missing') : unavailable||lost||now-(lastValid??started)>Math.max(PHONE_LIMITS.maxAge,holdMs()) ? 'unavailable' : candidate ? 'candidate' : tracks.some(t=>t.released) ? 'released' : 'searching';
+    const selected=confirmed||candidate;
+    return {status,confirmed:Boolean(confirmed),trackId:selected?.id??null,box:selected?.box??null,score:selected?.score??0,positives:selected?.history.filter(e=>e.positive).length??0};
   }
-  return {observe,state,targets:now=>tracks.filter(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window).map(t=>({...t,trackId:t.id})),
-    diagnostics(){const sorted=[...diagnostics.latencies].sort((a,b)=>a-b);return {...diagnostics,latencies:undefined,p50:sorted[Math.floor(sorted.length*.5)]??0,p95:sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]??0};}};
+  return {observe,state,targets:now=>tracks.filter(t=>!t.released&&now-t.lastSeen<=PHONE_LIMITS.window).sort((a,b)=>Number(b.confirmed)-Number(a.confirmed)||b.score-a.score).slice(0,2).map(t=>({...t,trackId:t.id})),
+    diagnostics(){const sorted=[...diagnostics.latencies].sort((a,b)=>a-b);return {...diagnostics,latencies:undefined,holdMs:holdMs(),p50:sorted[Math.floor(sorted.length*.5)]??0,p95:sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]??0};}};
 }
 export function createPhoneScheduler() {
   let turn=0, lastFull=-Infinity;

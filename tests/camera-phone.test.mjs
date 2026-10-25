@@ -52,7 +52,36 @@ test('weak observations can retain a candidate but cannot confirm it',()=>{
   assert.equal(t.observe(observation(500,[{box,score:.15}]),500).confirmed,false);
   assert.equal(t.targets(500).length,1);
   const weak=createPhoneTracker();weak.observe(observation(0,[{box,score:.15}]),0);
-  assert.equal(weak.targets(0).length,0);
+  assert.equal(weak.targets(0).length,1);
+});
+test('low-score seeds schedule a close-up without counting as pause evidence',()=>{
+  const t=createPhoneTracker(),weak=[{box,score:.057}];
+  for(const at of [0,500,1000])assert.equal(t.observe(observation(at,weak),at).confirmed,false);
+  assert.equal(t.targets(1000).length,1);
+  const s=createPhoneScheduler();s.next(640,480,1000);
+  assert.match(s.next(640,480,1100,t.targets(1100)).key,/^track-/);
+  assert.equal(t.observe(observation(1400),1400).confirmed,false);
+  assert.equal(t.observe(observation(1900),1900).confirmed,true);
+  const noise=createPhoneTracker();noise.observe(observation(0,[{box,score:.004}]),0);
+  assert.equal(noise.targets(0).length,0);
+});
+test('1.2-second inference can confirm and remain stable between independent results',()=>{
+  const t=createPhoneTracker();
+  const slow=at=>observation(at,undefined,{completedAt:at+1200});
+  assert.equal(t.observe(slow(0),1200).confirmed,false);
+  assert.equal(t.observe(slow(1500),2700).confirmed,true);
+  assert.equal(t.state(4100).confirmed,true);
+  assert.equal(t.observe(slow(3000),4200).confirmed,true);
+  assert.equal(t.state(6701).status,'unavailable','silence must eventually expire a slow result');
+  assert.equal(t.diagnostics().p95,1200);
+});
+test('slow completion still uses capture time to reject stale frames and require independent evidence',()=>{
+  const t=createPhoneTracker();
+  t.observe(observation(0,undefined,{completedAt:1200}),1200);
+  assert.equal(t.observe(observation(0,undefined,{id:'crop',completedAt:1300}),1300).confirmed,false);
+  assert.equal(t.observe(observation(1500,undefined,{completedAt:3100}),3100).confirmed,false);
+  assert.equal(t.diagnostics().reasons.stale,1);
+  assert.equal(t.diagnostics().p95,1600,'diagnostics must also measure discarded slow inference');
 });
 test('scheduler revisits full frame and tiles while tracking or seeing two hands',()=>{
   for(const targets of [[],[{trackId:1,box,lastSeen:0}]]){

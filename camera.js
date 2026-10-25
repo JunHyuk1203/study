@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-2';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-2';
+import { createFocusTracker } from './camera-focus.js?v=20261025-3';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-3';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 // Rollback switch: false selects the previous search and temporal policy together.
@@ -199,7 +199,7 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-2', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-3', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -208,7 +208,10 @@ function startRecognitionWorker(token, light = false) {
     if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
     if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
-    if (data.type === 'phone-observation') acceptPhoneObservation(data);
+    if (data.type === 'phone-observation') {
+      acceptPhoneObservation(data);
+      if(data.slow&&!fallbackAttempted)recoverRecognition(token,'Phone inference repeatedly exceeded its freshness deadline');
+    }
   };
   loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
   target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}` });

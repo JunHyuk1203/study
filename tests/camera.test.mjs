@@ -6,6 +6,21 @@ import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURAT
 import { createFocusTracker } from '../camera-focus.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
+test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{
+  const workers=[];
+  class Worker{constructor(){workers.push(this);}postMessage(data){this.init=data;}terminate(){this.terminated=true;}}
+  const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,setTimeout:()=>0,clearTimeout(){},performance:{now:()=>0},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  vm.runInContext(`${source}\nenabled=true;startRecognitionWorker(revision);`,context);
+  workers[0].onmessage({data:{type:'phone-observation',slow:true,epoch:0,observation:{epoch:0}}});
+  assert.equal(workers.length,2);assert.equal(workers[0].terminated,true);
+  assert.equal(workers[1].init.light,true);assert.equal(workers[0].init.identityKey,workers[1].init.identityKey);
+  workers[0].onmessage({data:{type:'phone-observation',slow:true,epoch:0,observation:{epoch:0}}});
+  workers[1].onmessage({data:{type:'phone-observation',slow:false,epoch:0,observation:{epoch:0}}});
+  assert.equal(workers.length,2);assert.notEqual(workers[1].terminated,true);
+});
+
 test('independent phone completion pauses immediately without releasing an in-flight face frame',async()=>{
   let now=0;
   const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};

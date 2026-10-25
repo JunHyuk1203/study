@@ -80,36 +80,45 @@ try {
     const challenging=process.argv.includes('--occluded-phone-fixture');
     const source=challenging?'https://upload.wikimedia.org/wikipedia/commons/e/eb/Teenager_using_mobile_phone.jpg':
       'https://upload.wikimedia.org/wikipedia/commons/0/0b/Hand_holding_Smartphone.jpg';
-    const phone=await page.evaluate(async(source)=>{
+    const phone=await page.evaluate(async({source,sequence})=>{
       const photo=new Image();photo.crossOrigin='anonymous';
       photo.src=source;
       await photo.decode();
       photo.dataset.phoneFixture='';photo.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;background:white;z-index:999';document.body.append(photo);
       return new Promise((resolve,reject)=>{
         const worker=new Worker('/camera-worker.js?v=phone-smoke');
+        const trace=[],samples=sequence?12:1;
+        async function send(){
+          const scale=Math.min(640/photo.naturalWidth,480/photo.naturalHeight);
+          const bitmap=await createImageBitmap(photo,{resizeWidth:Math.round(photo.naturalWidth*scale),resizeHeight:Math.round(photo.naturalHeight*scale)});
+          worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
+        }
         const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Phone fixture timeout'));},120000);
         function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
         worker.onerror=error=>finish(new Error(error.message));
         worker.onmessage=async({data})=>{
           if(data.type==='error')finish(new Error(data.message));
-          if(data.type==='ready'){
-            const scale=Math.min(640/photo.naturalWidth,480/photo.naturalHeight);
-            const bitmap=await createImageBitmap(photo,{resizeWidth:Math.round(photo.naturalWidth*scale),resizeHeight:Math.round(photo.naturalHeight*scale)});
-            worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
-          }
+          if(data.type==='ready')await send();
           if(data.type==='phone-observation'){
             if(data.observation.status!=='ok')finish(new Error('Phone object inference failed'));
-            else finish(null,{score:Math.max(0,...data.observation.candidates.map(c=>c.score))});
+            else {
+              trace.push({region:data.observation.region.key,score:Math.max(0,...data.observation.candidates.map(c=>c.score)),latency:Math.round(data.observation.completedAt-data.observation.observedAt),state:data.state?.status});
+              if(trace.length<samples)setTimeout(()=>void send().catch(error=>finish(error)),450);
+              else finish(null,{score:Math.max(...trace.map(r=>r.score)),confirmed:trace.some(r=>r.state==='confirmed'),trace});
+            }
           }
         };
         worker.postMessage({type:'init'});
       });
-    },source);
+    },{source,sequence:process.argv.includes('--phone-sequence')});
     console.log('public phone fixture evidence: '+JSON.stringify(phone));
     await page.screenshot({path:resolve(root,'.codex-phone-reference.png')});
     await page.locator('[data-phone-fixture]').evaluate(image=>image.remove());
     if(challenging && phone.score<.35) console.log('Known model limitation: small, mostly occluded phone remains undetected; UI exposes not-found evidence.');
-    else assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
+    else {
+      assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
+      if(process.argv.includes('--phone-sequence'))assert.equal(phone.confirmed,true,'Repeated real-model phone results must confirm the same phone');
+    }
   }
   const controllerResult = await page.evaluate(async () => {
     const camera = await import('/camera.js?v=20261023-6');
