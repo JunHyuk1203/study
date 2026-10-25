@@ -1,6 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
-import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-4';
+import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-5';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -122,7 +122,9 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
   const resources = [];
   try {
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
-    const options = path => ({ ...(canvas ? { canvas } : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
+    // MediaPipe's Safari auto-canvas branch uses document even in a Worker.
+    // Supplying a canvas bypasses that branch; each model gets its own canvas.
+    const options = path => ({ ...(canvas ? { canvas } : typeof OffscreenCanvas==='function' ? {canvas:new OffscreenCanvas(1,1)} : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
     const face = await vision.FaceLandmarker.createFromOptions(files, {
       ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 2,
       minFaceDetectionConfidence: .25, minFacePresenceConfidence: .25, minTrackingConfidence: .25,

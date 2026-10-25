@@ -7,9 +7,8 @@ self.onmessage=async({data})=>{
       importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.js');
       self.tf.wasm.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
       await self.tf.setBackend('wasm');await self.tf.ready();
-      importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js');
-      self.ort.env.wasm.wasmPaths='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
-      self.ort.env.wasm.numThreads=1;
+      const {ORT_WASM_SCRIPT,configureCameraOrt}=await import('../camera-runtime.js');
+      importScripts(ORT_WASM_SCRIPT);configureCameraOrt(self.ort);
       const {createStudyObjectDetector}=await import('../camera-objects.js');
       const {createPhoneObjectDetector,PHONE_MODEL_ACCURATE}=await import('../camera-detector.js');
       models={ssd:await createStudyObjectDetector(self.tf),yolo:await createPhoneObjectDetector(self.ort),yoloAccurate:await createPhoneObjectDetector(self.ort,{model:PHONE_MODEL_ACCURATE})};

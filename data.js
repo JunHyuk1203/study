@@ -2,7 +2,7 @@ import { authReady, getAuthUser } from './auth.js?v=20261022-1';
 import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache, statsRevision } from './client-cache.js?v=20261024-selfhost1';
 import { showToast } from './notifications.js?v=20261022-18';
-import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261025-4';
+import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261025-5';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }

@@ -4,6 +4,7 @@ import {createPhoneTracker,createPhoneScheduler,FULL_FRAME} from '../camera-phon
 import {createFocusTracker} from '../camera-focus.js';
 import {createCameraInference,extractFocusSignals} from '../camera-inference.js';
 import './camera-detector.test.mjs';
+import './camera-runtime.test.mjs';
 const box=[.3,.5,.12,.2], other=[.8,.1,.1,.18];
 const observation=(at,candidates=[{box,score:.85}],extra={})=>({version:3,id:at,frameId:at,observedAt:at,completedAt:at,region:FULL_FRAME,candidates,status:'ok',...extra});
 test('raw YOLO evidence uses the new threshold consistently with temporal confirmation',()=>{

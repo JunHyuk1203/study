@@ -1,6 +1,7 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-4';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-4';
+import { createFocusTracker } from './camera-focus.js?v=20261025-5';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-5';
+import { cameraRuntimeProfile } from './camera-runtime.js?v=20261025-5';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
@@ -156,7 +157,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   focusTracker.reset(); diagnostics = null; reason = null;identityStatus=identityPhase=null;
   setStatus(error ? 'error' : 'off', text);
 }
-function recognitionError(detail = '') {
+function recognitionError(detail = '', displayMessage='인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요') {
   ready = false; inFlight = false;
   worker?.terminate(); worker = null;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
@@ -164,7 +165,7 @@ function recognitionError(detail = '') {
   avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
   console.error('Study camera initialization failed:', detail);
-  setStatus('error', '인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요');
+  setStatus('error', displayMessage);
 }
 function acceptResult(data) {
   inFlight = false;
@@ -198,15 +199,21 @@ function applyResult(data,now) {
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
+  const profile=cameraRuntimeProfile();
+  light ||= profile.light;
   phoneBusy=false;
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-4', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-5', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
     if (data.epoch != null && data.epoch !== frameEpoch) return;
-    if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
+    if (data.type === 'error') {
+      if(data.code==='unsupported-canvas')recognitionError(`${data.stage}: ${data.message}`,'이 브라우저는 카메라 분석을 지원하지 않습니다 · iOS 또는 브라우저를 최신 버전으로 업데이트해 주세요');
+      else recoverRecognition(token, `${data.stage}: ${data.message}`);
+      return;
+    }
     if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
     if (data.type === 'phone-observation') {
@@ -214,7 +221,7 @@ function startRecognitionWorker(token, light = false) {
       if(data.slow&&!fallbackAttempted)recoverRecognition(token,'Phone inference repeatedly exceeded its freshness deadline');
     }
   };
-  loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
+  loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, profile.initializationMs);
   target.postMessage({ type: 'init', light, identityKey:`${cameraController}:${token}` });
 }
 function recoverRecognition(token, detail) {

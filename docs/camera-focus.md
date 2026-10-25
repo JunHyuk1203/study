@@ -2,7 +2,7 @@
 
 ## 현재 휴대폰 파이프라인 (2026-10-25)
 
-휴대폰 탐지는 `camera-detector.js`의 YOLOv10s(표준)와 YOLOv10n(경량)을 ONNX Runtime Web 1.22.0 WASM에서 실행한다. TensorFlow는 얼굴 본인 확인에 사용한다. 표준 모델이 촬영 시각 기준 1.5초 유효기간을 연속 2회 넘기거나 Worker가 실패하면 본인 확인 키를 유지하며 경량 모델로 한 번 재시도한다. 휴대폰 모델을 COCO-SSD로 되돌리지 않으며, 경량 모델도 실행할 수 없으면 오류·관측 불가로 정지한다. 원본 영상은 기기 밖으로 전송하지 않는다.
+휴대폰 탐지는 `camera-detector.js`의 YOLOv10s(표준)와 YOLOv10n(경량)을 ONNX Runtime Web 1.22.0의 CPU 전용 WASM 번들에서 실행한다. iPhone·iPad는 초기화 시점부터 경량 모델을 선택한다. TensorFlow는 얼굴 본인 확인에 사용한다. 표준 모델이 촬영 시각 기준 1.5초 유효기간을 연속 2회 넘기거나 Worker가 실패하면 본인 확인 키를 유지하며 경량 모델로 한 번 재시도한다. 휴대폰 모델을 COCO-SSD로 되돌리지 않으며, 경량 모델도 실행할 수 없으면 오류·관측 불가로 정지한다. 원본 영상은 기기 밖으로 전송하지 않는다.
 
 - 입력을 RGB 0~1, CHW 배열로 만들고 640×640에 비율을 유지해 패딩한다. 출력 상자를 패딩과 실제 축척을 역변환해 원본 좌표로 복원한다. COCO 연속 클래스 67만 휴대폰으로 해석한다.
 - 모델 점수 0.15 이상은 탐색 후보, 0.55 이상은 강한 양성이다. 같은 물체가 최근 2.2초의 독립 관측 3회 중 2회 이상 강한 양성이며 두 관측 간격이 400ms 이상이어야 정지할 수 있다. 점수는 실제 정답 확률이 아니다.
@@ -13,6 +13,8 @@
 - 객체 추론이 끝나기 전에는 다음 캡처를 Worker 대기열에 넣지 않는다. 완료 후 최신 프레임을 캡처한다. 촬영 시각과 문서의 clock origin을 함께 전달해 Worker 대기 시간까지 결과 지연에 포함한다. 휴대폰 완료 메시지는 진행 중인 얼굴 요청을 해제하거나 얼굴 응답 watchdog을 갱신하지 않는다.
 
 모델 가중치는 고정 리비전 `305deee9272dc7082fbc36e9f424a38d6ef23b8e`에서 받고 SHA-256을 확인한다. [YOLOv10 원본](https://github.com/THU-MIG/yolov10)과 [ONNX 가중치 배포](https://huggingface.co/onnx-community/YOLOv10)는 AGPL-3.0으로 배포된다. [ONNX Runtime Web](https://onnxruntime.ai/docs/get-started/with-javascript/web.html)은 Worker 내 추론에 사용한다.
+
+iOS/Safari에서는 MediaPipe에 Worker용 캔버스를 명시해 기본 캔버스 선택의 `document` 참조를 피한다. iOS 초기화는 120초까지 기다린다. 호환성 수정 근거와 실제 WebKit/모의 iOS 검증 범위는 `docs/reviews/ios-camera-initialization-2026-10-25.md`에 기록한다.
 
 검증 명령:
 

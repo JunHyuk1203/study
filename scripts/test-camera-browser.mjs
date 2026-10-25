@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
 import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
-let chromium;
-try { ({ chromium } = require('playwright')); }
-catch { ({ chromium } = createRequire('C:/Users/tntdr/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/x.js')('playwright')); }
+let chromium,webkit;
+try { ({ chromium,webkit } = require('playwright')); }
+catch { ({ chromium,webkit } = createRequire('C:/Users/tntdr/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/x.js')('playwright')); }
+const testWebKit=process.argv.includes('--webkit'),iosProfile=testWebKit||process.argv.includes('--ios-profile');
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const server = createServer(async (request, response) => {
   try {
@@ -29,11 +30,29 @@ const server = createServer(async (request, response) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
-  browser = await chromium.launch({ headless:true, channel:'msedge', args:[
+  browser = testWebKit?await webkit.launch({headless:true}):await chromium.launch({ headless:true, channel:'msedge', args:[
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
   ] });
-  const page = await browser.newPage();
+  const page = await browser.newPage(iosProfile?{userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{});
   await page.goto(`http://127.0.0.1:${server.address().port}`);
+  console.log('Browser capabilities: '+JSON.stringify(await page.evaluate(async()=>{
+    const script=new Blob(["self.postMessage({canvas:typeof OffscreenCanvas,bitmap:typeof createImageBitmap,webgl:typeof WebGL2RenderingContext})"],{type:'text/javascript'});
+    const url=URL.createObjectURL(script),worker=new Worker(url);
+    try{return {pageCanvas:typeof OffscreenCanvas,worker:await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));})};}
+    finally{worker.terminate();URL.revokeObjectURL(url);}
+  })));
+  if(process.argv.includes('--runtime-only')){
+    const result=await page.evaluate(()=>new Promise((resolve,reject)=>{
+      const worker=new Worker('/scripts/camera-runtime-smoke-worker.js');
+      const timeout=setTimeout(()=>{worker.terminate();reject(Error('WASM runtime smoke timeout'));},120000);
+      worker.onmessage=({data})=>{clearTimeout(timeout);worker.terminate();data.type==='error'?reject(Error(data.message)):resolve(data);};
+      worker.onerror=e=>{clearTimeout(timeout);worker.terminate();reject(Error(e.message));};
+      worker.postMessage({type:'run'});
+    }));
+    assert.equal(result.model,'yolov10n');assert.deepEqual(result.dims,[1,300,6]);
+    assert.match(result.bootstrap,/ort\.wasm\.min\.js$/);
+    console.log(`CPU-only ONNX runtime: ${JSON.stringify(result)}; this probe does not test MediaPipe or an actual iPhone`);
+  }else{
   const results = await page.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width=640; canvas.height=480;
     const context=canvas.getContext('2d'); context.fillStyle='#888'; context.fillRect(0,0,640,480);
@@ -46,7 +65,7 @@ try {
       function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
       worker.onerror=error=>finish(new Error(error.message));
       worker.onmessage=async({data})=>{
-        if(data.type==='error')finish(new Error(`${data.stage}: ${data.message}`));
+        if(data.type==='error')finish(new Error(`${data.stage}: ${data.message}\n${data.detail||''}`));
         if(data.type==='ready'){
           const capturedAt=performance.now();
           const bitmap=await createImageBitmap(canvas);
@@ -69,7 +88,7 @@ try {
     assert.equal(result.phoneObservation.status,'ok');
     assert.equal(result.phoneObservation.observedAt,result.time);
     assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
-    assert.equal(result.phoneObservation.model,mode==='light'?'yolov10n':'yolov10s');
+    assert.equal(result.phoneObservation.model,iosProfile||mode==='light'?'yolov10n':'yolov10s');
     console.log(`${mode}: real face/pose/hand/YOLO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
   }
   const tickGap=await page.evaluate(()=>window.cameraMaxTickGap);
@@ -125,6 +144,7 @@ try {
       if(process.argv.includes('--phone-sequence'))assert.equal(phone.confirmed,true,'Repeated real-model phone results must confirm the same phone');
     }
   }
+  if(!process.argv.includes('--models-only')){
   const controllerResult = await page.evaluate(async () => {
     const camera = await import('/camera.js?v=20261023-6');
     camera.openCameraFocus(document.querySelector('[data-camera-toggle]'));
@@ -184,5 +204,7 @@ try {
     await page.locator('[data-camera-debug]').scrollIntoViewIfNeeded();
     await page.screenshot({path:resolve(root,`.codex-focus-debug-${width}.png`),fullPage:true});
     console.log(`debug UI ${width}px: countdown visible, no horizontal overflow`);
+  }
+  }
   }
 } finally { await browser?.close(); await new Promise(resolve=>server.close(resolve)); }
