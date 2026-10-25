@@ -41,7 +41,19 @@ try {
     try{return {pageCanvas:typeof OffscreenCanvas,worker:await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));})};}
     finally{worker.terminate();URL.revokeObjectURL(url);}
   })));
-  if(process.argv.includes('--runtime-only')){
+  if(process.argv.includes('--diagnostic-ui-only')){
+    await page.setViewportSize({width:390,height:844});
+    const result=await page.evaluate(async()=>{
+      const {paintCameraDebug}=await import('/camera-debug.js');
+      const root=document.createElement('section');document.querySelector('main').append(root);
+      paintCameraDebug(root,{engine:{build:'20261025-6',code:'C6-IDENTITY-STORAGE',phase:'identity',message:'IndexedDB database unavailable'}},{status:'error',tracking:false});
+      const panel=root.querySelector('[data-camera-debug]'),note=panel.querySelector('.cam-debug-note');
+      return {text:note.textContent,overflow:panel.scrollWidth>panel.clientWidth,selectable:getComputedStyle(note).userSelect};
+    });
+    assert.match(result.text,/C6-IDENTITY-STORAGE/);assert.match(result.text,/IndexedDB/);
+    assert.equal(result.overflow,false);assert.equal(result.selectable,'text');
+    console.log('iPhone-width error diagnostics: readable stage code and raw message, selectable text, no overflow');
+  }else if(process.argv.includes('--runtime-only')){
     const result=await page.evaluate(()=>new Promise((resolve,reject)=>{
       const worker=new Worker('/scripts/camera-runtime-smoke-worker.js');
       const timeout=setTimeout(()=>{worker.terminate();reject(Error('WASM runtime smoke timeout'));},120000);
@@ -89,6 +101,7 @@ try {
     assert.equal(result.phoneObservation.observedAt,result.time);
     assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
     assert.equal(result.phoneObservation.model,iosProfile||mode==='light'?'yolov10n':'yolov10s');
+    if(iosProfile){assert.equal(result.modelMs.pose,0);assert.equal(result.modelMs.hand,0);}
     console.log(`${mode}: real face/pose/hand/YOLO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
   }
   const tickGap=await page.evaluate(()=>window.cameraMaxTickGap);

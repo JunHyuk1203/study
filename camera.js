@@ -1,12 +1,13 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-5';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-5';
-import { cameraRuntimeProfile } from './camera-runtime.js?v=20261025-5';
+import { createFocusTracker } from './camera-focus.js?v=20261025-6';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-6';
+import { cameraRuntimeProfile,cameraInitializationDiagnostic } from './camera-runtime.js?v=20261025-6';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
 let reason = null;
 let diagnostics = null;
+let engineDiagnostic=null;
 const video = document.createElement('video');
 video.autoplay = true;
 video.muted = true;
@@ -130,7 +131,7 @@ function paint() {
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
   root.querySelector('[data-camera-resolution]').textContent = enabled && video.videoWidth ? 'AVATAR · 기기 내 인식' : '';
-  if (focusPanel) paintCameraDebug(root, diagnostics, cameraState());
+  if (focusPanel) paintCameraDebug(root, {...diagnostics,engine:engineDiagnostic}, cameraState());
 }
 function setStatus(next, text, active = false) {
   if(enabled&&identityPhase==='enrolling'&&!manuallyPaused&&['paused','scanning'].includes(next)){
@@ -154,10 +155,11 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   video.srcObject = null;
   video.remove(); avatarPose = null;
   fallbackAttempted = false;
-  focusTracker.reset(); diagnostics = null; reason = null;identityStatus=identityPhase=null;
+  focusTracker.reset(); diagnostics = null;engineDiagnostic=null; reason = null;identityStatus=identityPhase=null;
   setStatus(error ? 'error' : 'off', text);
 }
 function recognitionError(detail = '', displayMessage='인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요') {
+  engineDiagnostic=cameraInitializationDiagnostic(engineDiagnostic?.phase,detail);
   ready = false; inFlight = false;
   worker?.terminate(); worker = null;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
@@ -165,7 +167,7 @@ function recognitionError(detail = '', displayMessage='인식 엔진을 준비�
   avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
   console.error('Study camera initialization failed:', detail);
-  setStatus('error', displayMessage);
+  setStatus('error', `${displayMessage} · ${engineDiagnostic.code}`);
 }
 function acceptResult(data) {
   inFlight = false;
@@ -201,20 +203,23 @@ function applyResult(data,now) {
 function startRecognitionWorker(token, light = false) {
   const profile=cameraRuntimeProfile();
   light ||= profile.light;
+  engineDiagnostic={build:'20261025-6',phase:'profile'};
   phoneBusy=false;
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-5', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-6', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
     if (data.epoch != null && data.epoch !== frameEpoch) return;
     if (data.type === 'error') {
+      engineDiagnostic={build:'20261025-6',phase:data.stage};
       if(data.code==='unsupported-canvas')recognitionError(`${data.stage}: ${data.message}`,'이 브라우저는 카메라 분석을 지원하지 않습니다 · iOS 또는 브라우저를 최신 버전으로 업데이트해 주세요');
       else recoverRecognition(token, `${data.stage}: ${data.message}`);
       return;
     }
-    if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
+    if(data.type==='loading'){engineDiagnostic={build:'20261025-6',phase:data.stage};paint();}
+    if (data.type === 'ready') { ready = true;engineDiagnostic=null; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
     if (data.type === 'phone-observation') {
       acceptPhoneObservation(data);

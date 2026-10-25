@@ -26,7 +26,7 @@ try{
     const message=()=>new Promise((resolve,reject)=>{
       const timeout=setTimeout(()=>reject(Error('Phone model evaluation timeout')),180000);
       worker.onmessage=({data})=>{
-        if(pipeline&&data.type==='result')return;
+        if(pipeline&&(data.type==='result'||data.type==='loading'))return;
         clearTimeout(timeout);data.type==='error'?reject(Error(data.message)):resolve(data);
       };
       worker.onerror=e=>{clearTimeout(timeout);reject(Error(e.message));};

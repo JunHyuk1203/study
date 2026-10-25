@@ -1,6 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
-import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-5';
+import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-6';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -118,37 +118,46 @@ export function phoneSearchRegions(poseResult, handResult, scan = 0) {
   return regions.length > 1 ? regions.slice(0, 2) :
     [regions[0] || phoneSearchRegion(poseResult, handResult), sweep];
 }
-export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
+export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, lowMemory = false, onStage = () => {}, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
   const resources = [];
   try {
+    onStage('vision-files');
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
     // MediaPipe's Safari auto-canvas branch uses document even in a Worker.
     // Supplying a canvas bypasses that branch; each model gets its own canvas.
     const options = path => ({ ...(canvas ? { canvas } : typeof OffscreenCanvas==='function' ? {canvas:new OffscreenCanvas(1,1)} : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
+    onStage('face');
     const face = await vision.FaceLandmarker.createFromOptions(files, {
       ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 2,
       minFaceDetectionConfidence: .25, minFacePresenceConfidence: .25, minTrackingConfidence: .25,
       outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
     });
     resources.push(face);
-    const pose = await vision.PoseLandmarker.createFromOptions(files, {
+    const empty=()=>({landmarks:[]});
+    if(!lowMemory)onStage('pose');
+    const pose = lowMemory ? {detectForVideo:empty,close(){}} : await vision.PoseLandmarker.createFromOptions(files, {
       ...options('pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'), numPoses: 1,
     });
     resources.push(pose);
-    const hand = await vision.HandLandmarker.createFromOptions(files, {
+    if(!lowMemory)onStage('hand');
+    const hand = lowMemory ? {detectForVideo:empty,close(){}} : await vision.HandLandmarker.createFromOptions(files, {
       ...options('hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'), numHands: 2,
     });
     resources.push(hand);
+    onStage('backend');
     let accelerated = false;
     if (tf.wasm) {
       try { accelerated = await tf.setBackend('wasm'); } catch { /* Worker-only CPU fallback. */ }
     }
     if (!accelerated) await tf.setBackend('cpu');
     await tf.ready();
+    onStage('phone');
     const objects = await cocoSsd.load({ base: light ? 'lite_mobilenet_v2' : 'mobilenet_v2' });
     resources.push(objects);
+    onStage('identity');
     const identity=identityFactory?await identityFactory():null;
     if(identity)resources.push(identity);
+    onStage('canvases');
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0, phoneScan=0;
@@ -170,9 +179,9 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         let faceResult = face.detectForVideo(source, time);
         const fullFaceMs = performance.now() - began;
         const bounds = faceBounds(faceResult), count = faceResult.faceLandmarks?.length || 0;
-        if(time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
+        if(!lowMemory&&time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
         const faceStarted = performance.now();
-        if (count < 2 && (!bounds || Math.max(bounds.width * width, bounds.height * height) < Math.min(width, height) * .22)) {
+        if (!lowMemory && count < 2 && (!bounds || Math.max(bounds.width * width, bounds.height * height) < Math.min(width, height) * .22)) {
           if (!closeup) {
             closeup = await vision.FaceLandmarker.createFromOptions(files, {
               ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), runningMode: 'IMAGE', numFaces: 2,
@@ -191,7 +200,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         modelMs.face = fullFaceMs + performance.now() - faceStarted;
         if (faceResult.faceLandmarks?.length === 1) { lastBounds = faceBounds(faceResult); lastFaceTime = time; }
         const identityState=identity?await identity.check(source,faceResult,time):null;
-        if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
+        if(!lowMemory&&time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
         if (phoneRedesign && !objectPending) {
           objectEpoch=epoch;
