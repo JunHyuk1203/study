@@ -1,7 +1,7 @@
 import './auth.js?v=20261022-1';
-import './data.js?v=20261025-7';
-import './camera.js?v=20261025-7';
-import './integrations.js?v=20261025-7';
-import './planning.js?v=20261025-7';
-import './daily-report.js?v=20261025-7';
-import './study-social.js?v=20261025-7';
+import './data.js?v=20261025-8';
+import './camera.js?v=20261025-8';
+import './integrations.js?v=20261025-8';
+import './planning.js?v=20261025-8';
+import './daily-report.js?v=20261025-8';
+import './study-social.js?v=20261025-8';

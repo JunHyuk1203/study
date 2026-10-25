@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createFocusTracker, FOCUS_LIMITS } from '../camera-focus.js';
-import { cameraRuntimeProfile,cameraInitializationDiagnostic } from '../camera-runtime.js';
 import { extractFocusSignals, createCameraInference, createStudyMotionTracker, phoneSearchRegion, phoneSearchRegions, createFaceContinuity } from '../camera-inference.js';
 import { focusDebugRows } from '../camera-debug.js';
 import { createIdentityMatcher } from '../camera-identity.js';
@@ -563,7 +562,7 @@ test('controller propagates behavior pauses, ignores stale results and auto resu
   let now = 0, events = 0;
   const document = { hidden:false, createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){} };
   const code = (await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context = vm.createContext({document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){events++;}}});
+  const context = vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){events++;}}});
   vm.runInContext(`${code}\nenabled=true;globalThis.controller={acceptResult,cameraState};`,context);
   const controller = context.controller;
   const send = (time, signals=healthy, captured=time) => { now=time; controller.acceptResult({time:captured,signals}); return controller.cameraState(); };
@@ -588,7 +587,7 @@ test('worker failures retry once in another worker, never on the UI thread, and 
   class Worker { constructor(){workers.push(this);} postMessage(message){this.init=message;} terminate(){this.terminated=true;} }
   const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
   const code=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,setTimeout:()=>0,clearTimeout(){},clearInterval(){},performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,setTimeout:()=>0,clearTimeout(){},clearInterval(){},performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${code}\nenabled=true;startRecognitionWorker(revision);globalThis.controller={cameraState};`,context);
   workers[0].onmessage({data:{type:'error',stage:'init',message:'test failure'}});
   assert.equal(workers.length,2);assert.equal(workers[0].terminated,true);assert.equal(workers[1].init.light,true);
@@ -611,7 +610,7 @@ test('returning from a long background suspension restarts video and the frame l
   const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener:(name,fn)=>handlers[name]=fn};
   class Worker{constructor(){workers.push(this);}postMessage(data){posted.push(data);}terminate(){this.terminated=true;}}
   const code=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,setTimeout:()=>1,clearTimeout(){},setInterval:fn=>{watch=fn;return 1;},clearInterval(){},
+  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,setTimeout:()=>1,clearTimeout(){},setInterval:fn=>{watch=fn;return 1;},clearInterval(){},
     createImageBitmap:async()=>({close(){}}),performance:{now:()=>now},facePose:()=>null,window:{addEventListener:(name,fn)=>events[name]=fn,dispatchEvent(){}}});
   vm.runInContext(`${code}\nenabled=true;stream={getVideoTracks:()=>[{muted:false}]};startRecognitionWorker(revision);ready=true;inFlight=true;startCameraWatchdog(revision);globalThis.controller={cameraState,flight:()=>inFlight};`,context);
   document.hidden=true;handlers.visibilitychange();now=60000;watch();

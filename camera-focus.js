@@ -1,6 +1,6 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261024-10';
-import { createPhoneTracker } from './camera-phone.js?v=20261025-7';
+import { createPhoneTracker } from './camera-phone.js?v=20261025-8';
 export const FOCUS_LIMITS = Object.freeze({ identity: 8000, faceGrace: 5000, sleep: 4500, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
@@ -40,7 +40,7 @@ export function createFocusTracker() {
     lastTime = now;
     lastSignals = signals;
     const observation=signals?.phoneObservation;
-    const tracked=signals?.phonePolicy==='tracked'||observation?.version>=2;
+    const tracked=signals?.phonePolicy==='tracked'||observation?.version===2;
     phoneState=tracked?phoneTracker.observe(observation,now):null;
     if(!tracked && observation && observation.id!==phoneObservationId) {
       phoneObservationId=observation.id;

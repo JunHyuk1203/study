@@ -1,35 +1,5 @@
 # 카메라 집중 감지
 
-## 현재 휴대폰 파이프라인 (2026-10-25)
-
-휴대폰 탐지는 `camera-detector.js`의 YOLOv10s(표준)와 YOLOv10n(경량)을 ONNX Runtime Web 1.22.0의 CPU 전용 WASM 번들에서 실행한다. iPhone·iPad는 초기화 시점부터 경량 모델을 선택한다. TensorFlow는 얼굴 본인 확인에 사용한다. 표준 모델이 촬영 시각 기준 1.5초 유효기간을 연속 2회 넘기거나 Worker가 실패하면 본인 확인 키를 유지하며 경량 모델로 한 번 재시도한다. 휴대폰 모델을 COCO-SSD로 되돌리지 않으며, 경량 모델도 실행할 수 없으면 오류·관측 불가로 정지한다. 원본 영상은 기기 밖으로 전송하지 않는다.
-
-- 입력을 RGB 0~1, CHW 배열로 만들고 640×640에 비율을 유지해 패딩한다. 출력 상자를 패딩과 실제 축척을 역변환해 원본 좌표로 복원한다. COCO 연속 클래스 67만 휴대폰으로 해석한다.
-- 모델 점수 0.15 이상은 탐색 후보, 0.55 이상은 강한 양성이다. 같은 물체가 최근 2.2초의 독립 관측 3회 중 2회 이상 강한 양성이며 두 관측 간격이 400ms 이상이어야 정지할 수 있다. 점수는 실제 정답 확률이 아니다.
-- 좁은 확대 화면의 반복 검출만으로 확정하지 않는다. 최근 3.5초 이내 전체 화면·타일·손 주변 또는 넓은 재검증 영역에서도 0.35 이상 분류된 증거가 필요하다. 주변 분류 증거가 만료되면 확대만으로 확정을 계속 유지하지 않는다.
-- 후보가 발견되면 최대 2개 연속 작업으로 좁은 영역과 넓은 영역을 재검증한다. 넓은 영역에서 강한 양성을 얻으면 그 영역 크기를 우선 재사용한다. 3개 작업 이후에는 전체 화면을 검사하며, 시간 제한에 따른 검사가 다음 정기 검사와 겹쳐 후보 재확인을 밀어내지 않는다. 손이 없어도 전체 화면·타일을 검사한다.
-- 약한 후보는 양성이나 음성으로 계산하지 않는다. 실제로 후보 위치를 검사했고 모델 입력에서 후보의 긴 변이 32픽셀 이상 확보되는 미검출만 음성으로 센다. 작은 물체를 구분할 해상도가 없는 전체 화면 결과가 확대 감지를 지우지 못하게 한다.
-- 촬영 시각 기준 1.5초 유효기간, 독립 프레임 중복 제거, 유예 만료 및 해제 후 정상 상태 2초 확인은 유지한다. 자세한 상한과 진단값은 `docs/phone-detection-redesign-plan.md`에 기록한다.
-- 객체 추론이 끝나기 전에는 다음 캡처를 Worker 대기열에 넣지 않는다. 완료 후 최신 프레임을 캡처한다. 촬영 시각과 문서의 clock origin을 함께 전달해 Worker 대기 시간까지 결과 지연에 포함한다. 휴대폰 완료 메시지는 진행 중인 얼굴 요청을 해제하거나 얼굴 응답 watchdog을 갱신하지 않는다.
-
-모델 가중치는 고정 리비전 `305deee9272dc7082fbc36e9f424a38d6ef23b8e`에서 받고 SHA-256을 확인한다. [YOLOv10 원본](https://github.com/THU-MIG/yolov10)과 [ONNX 가중치 배포](https://huggingface.co/onnx-community/YOLOv10)는 AGPL-3.0으로 배포된다. [ONNX Runtime Web](https://onnxruntime.ai/docs/get-started/with-javascript/web.html)은 Worker 내 추론에 사용한다.
-
-iOS/Safari에서는 MediaPipe에 Worker용 캔버스를 명시해 기본 캔버스 선택의 `document` 참조를 피한다. iOS 초기화는 120초까지 기다린다. 호환성 수정 근거와 실제 WebKit/모의 iOS 검증 범위는 `docs/reviews/ios-camera-initialization-2026-10-25.md`에 기록한다.
-
-iOS 저메모리 모드는 자세·손 보조 모델 및 원거리 얼굴용 추가 모델을 생략한다. 얼굴·본인 확인·휴대폰 판정은 유지하지만 손 동작 기반 보조와 별도 확대 얼굴 검출은 제공하지 않는다. 초기화 실패 시 `C6-` 단계 코드를 안내하고 개발 패널에 원시 오류 문구를 표시한다. 해당 기기의 해결 여부는 실제 오류 코드와 재실행 결과로 확인한다.
-
-검증 명령:
-
-- `node scripts/evaluate-phone-models.mjs`: 같은 공개 사진·크기에서 이전 모델과 대체 모델을 비교한다.
-- `node scripts/evaluate-phone-models.mjs --pipeline`: 실제 카메라 Worker에서 선명한/작은/가려진 폰과 빈손 3종을 연속 관측한다. 선명한 폰 미검출과 빈손 확정은 실패로 처리하며, 가림 사례의 결과도 그대로 보고한다.
-- `node scripts/test-camera-browser.mjs --phone-fixture --phone-sequence`: 모델·Worker·생명주기·화면 및 휴대폰 연속 확정을 검사한다. `--hand-fixture --phone-sequence`는 빈 주먹의 오정지를 검사한다.
-
-평가 사진은 원격 공개 자료만 쓰며 저장소에 복사하지 않는다. 휴대폰 사진은 [Mictlancihuatl](https://commons.wikimedia.org/wiki/File:Hand_holding_Smartphone.jpg), [TheEgdeLord](https://commons.wikimedia.org/wiki/File:Teenager_using_mobile_phone.jpg)의 CC BY-SA 4.0 자료다. 빈손은 [닫힌 주먹](https://commons.wikimedia.org/wiki/File:Hand_in_closed_fist_black_background.jpg), [Sertion/Fluff의 주먹](https://commons.wikimedia.org/wiki/File:Rock-paper-scissors_(rock).png), [Sertion/Fluff의 손바닥](https://commons.wikimedia.org/wiki/File:Rock-paper-scissors_(paper).png) 자료를 사용한다. 공개 정지 사진의 성공은 사용자의 특정 접힌 손 동작이나 전체 실영상 정확도를 입증하지 않는다.
-
-## 이전 설계·검증 기록
-
-아래는 이전 구현의 기록이며 현재 휴대폰 모델·기준은 위 내용을 따른다.
-
 학습 탭에서 기존 스터디캠을 시작하면 모델 준비 후 자동 분석한다. 별도 피드백, 판정 확인, 사용자별 수동 보정은 없다. 최초 브라우저 카메라 접근 권한은 필요하다. 기존 수동 일시정지 버튼은 사용자가 원할 때 사용할 수 있으며 자동 판정이 이를 해제하지 않는다.
 
 ## 자동 판정

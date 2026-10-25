@@ -10,14 +10,13 @@ export function focusDebugRows(debug) {
         identity.status==='missing'?'얼굴 미감지 · 점수 없음':identity.status==='multiple'?'여러 얼굴 감지 · 점수 없음':'얼굴 비교 중 · 점수 대기';
       return {key,label,text,active:Number.isFinite(identity?.score)};
     }
-    const row = debug?.rows?.find(row => row.key === key);
+    const row = debug?.rows.find(row => row.key === key);
     if (!row) return { key, label, text: '분석 대기', active: false };
     if(key==='phone'&&debug?.phoneState){
       const state=debug.phoneState;
       const labels={searching:'전체 화면 탐색 중',candidate:'휴대폰 후보 재확인 중',confirmed:'반복 검출 · 경고·정지',missing:'일시 누락 · 재확인 중',released:'휴대폰 해제 · 복귀 확인',unavailable:'휴대폰 관측 불가'};
-      const evidence=state.trackId ? ` · 모델 점수 ${state.score.toFixed(3)} · 독립 양성 ${Math.min(2,state.positives)}/2` : '';
-      const phase=state.status==='candidate'&&state.positives>=2&&!state.contextVerified?'주변 화면 재검증 중':labels[state.status];
-      return {key,label,text:(debug.phoneObservation?.model?debug.phoneObservation.model.toUpperCase()+' · ':'')+(phase||'분석 대기')+evidence,active:state.confirmed};
+      const evidence=state.trackId ? ` · 모델 점수 ${state.score.toFixed(3)} · 독립 양성 ${state.positives}/2` : '';
+      return {key,label,text:(labels[state.status]||'분석 대기')+evidence,active:state.confirmed};
     }
     if (row.blocked) return { key, label, text: row.blocked, active: false };
     const evidence = key === 'phone' ? debug?.phoneEvidence : null;
@@ -42,20 +41,18 @@ export function paintCameraDebug(root, debug, state) {
     panel.innerHTML = '<div class="cam-debug-heading"><strong>감지 타이머</strong><span>개발 테스트</span></div>' +
       '<p class="cam-debug-summary" data-debug-summary></p><dl>' + Object.entries(LABELS).map(([key, label]) =>
         `<div data-debug-row="${key}"><dt>${label}</dt><dd></dd></div>`).join('') +
-      '</dl><p class="cam-debug-note" style="user-select:text;-webkit-user-select:text;overflow-wrap:anywhere">분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.</p>';
+      '</dl><p class="cam-debug-note">분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.</p>';
     root.querySelector('.cam-caption')?.after(panel);
     if (!panel.isConnected) root.append(panel);
   }
   const waiting = state.manuallyPaused || ['off', 'opening', 'error'].includes(state.status);
-  const snapshot = waiting||!debug?.rows ? null : debug;
+  const snapshot = waiting ? null : debug;
   const summary = state.manuallyPaused ? '수동 정지 · 분석 대기' : state.status === 'error' ? '인식 오류 · 시간 정지' :
     !snapshot ? '인식 준비 중 · 시간 정지' : state.tracking ? '학습 시간 측정 중' : snapshot.resumeRemainingMs > 0 ?
       `정상 행동 확인 · 재개까지 ${seconds(snapshot.resumeRemainingMs)}` : '학습 시간 정지 중';
   panel.querySelector('[data-debug-summary]').textContent = summary;
   const runtime = snapshot?.runtime;
-  const engine=debug?.engine;
-  const stageLabels={profile:'엔진 준비',face:'얼굴 모델 준비',pose:'자세 모델 준비',hand:'손 모델 준비',backend:'얼굴 계산 엔진 준비',phone:'휴대폰 모델 준비',identity:'본인 확인 준비','vision-files':'영상 계산 엔진 준비'};
-  panel.querySelector('.cam-debug-note').textContent = engine ? engine.code?`${engine.code} · ${engine.message}`:`${engine.build} · ${stageLabels[String(engine.phase).replace(/^init:/,'')]||'인식 엔진 준비 중'}` : runtime?.backend ?
+  panel.querySelector('.cam-debug-note').textContent = runtime?.backend ?
     `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 200/800ms 요청'}` :
     '분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.';
   for (const row of focusDebugRows(snapshot)) {

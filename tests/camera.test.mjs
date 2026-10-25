@@ -4,43 +4,14 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURATION_MS, paintAvatar } from '../camera-avatar.js';
 import { createFocusTracker } from '../camera-focus.js';
-import { cameraRuntimeProfile,cameraInitializationDiagnostic } from '../camera-runtime.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
-
-test('iOS camera starts light, waits for its larger startup budget and explains unsupported browsers without retrying',async()=>{
-  const workers=[],deadlines=[];
-  class Worker{constructor(){workers.push(this);}postMessage(data){this.init=data;}terminate(){this.terminated=true;}}
-  const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
-  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile:()=>cameraRuntimeProfile({userAgent:'iPhone',platform:'iPhone'}),
-    setTimeout:(_fn,ms)=>{deadlines.push(ms);return 0;},clearTimeout(){},clearInterval(){},performance:{now:()=>0},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
-  vm.runInContext(`${source}\nenabled=true;startRecognitionWorker(revision);globalThis.state=cameraState;`,context);
-  assert.equal(workers[0].init.light,true);assert.ok(deadlines.includes(120000));
-  workers[0].onmessage({data:{type:'error',stage:'init:profile',code:'unsupported-canvas',message:'unavailable'}});
-  assert.equal(workers.length,1);assert.equal(context.state().status,'error');assert.match(context.state().message,/최신 버전으로 업데이트/);
-});
-
-test('phone backpressure captures a new frame only after inference completes and transmits the clock origin',async()=>{
-  let now=0;const posted=[],video={setAttribute(){},readyState:2,currentTime:0};
-  const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener(){}};
-  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,setTimeout:()=>0,createImageBitmap:async()=>({close(){}}),performance:{now:()=>now,timeOrigin:1234},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
-  context.target={postMessage:data=>posted.push(data)};
-  vm.runInContext(`${source}\nenabled=ready=true;worker=target;globalThis.camera={frame,acceptResult,acceptPhoneObservation};`,context);
-  const c=context.camera;
-  await c.frame(0);assert.equal(posted.length,1);assert.equal(posted[0].clockOrigin,1234);
-  c.acceptResult({time:0,epoch:0,signals:{...healthySignals,phonePolicy:'tracked'},phonePending:true});
-  now=200;video.currentTime=.2;await c.frame(0);assert.equal(posted.length,1,'do not queue an old snapshot behind busy inference');
-  c.acceptPhoneObservation({epoch:0,observation:{version:3,id:1,frameId:0,observedAt:0,completedAt:200,status:'ok',region:{x:0,y:0,width:1,height:1},candidates:[]}});
-  now=400;video.currentTime=.4;await c.frame(0);assert.equal(posted.length,2);assert.equal(posted[1].time,400);
-});
 
 test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{
   const workers=[];
   class Worker{constructor(){workers.push(this);}postMessage(data){this.init=data;}terminate(){this.terminated=true;}}
   const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,setTimeout:()=>0,clearTimeout(){},performance:{now:()=>0},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({URL,Worker,document,crypto,Event,createFocusTracker,setTimeout:()=>0,clearTimeout(){},performance:{now:()=>0},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;startRecognitionWorker(revision);`,context);
   workers[0].onmessage({data:{type:'phone-observation',slow:true,epoch:0,observation:{epoch:0}}});
   assert.equal(workers.length,2);assert.equal(workers[0].terminated,true);
@@ -54,7 +25,7 @@ test('independent phone completion pauses immediately without releasing an in-fl
   let now=0;
   const document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener(){}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;globalThis.camera={acceptResult,acceptPhoneObservation,cameraState};globalThis.pending=()=>{inFlight=true;};globalThis.flight=()=>({inFlight,lastResult});`,context);
   const camera=context.camera,box=[.3,.5,.12,.2];
   const face=()=>camera.acceptResult({signals:{...healthySignals,phonePolicy:'tracked'},time:now,epoch:4});
@@ -70,7 +41,7 @@ test('manual pause during engine setup survives detection and visibility changes
   let now=0;
   const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;globalThis.camera={toggleCameraPause,cameraState,acceptResult,setStatus};`,context);
   const camera=context.camera;
   camera.toggleCameraPause();assert.equal(camera.cameraState().manuallyPaused,true);
@@ -86,7 +57,7 @@ test('manual pause during engine setup survives detection and visibility changes
 test('a live SP word companion permits real background face detection and expiry restores the visibility pause',async()=>{
   let now=1000;const handlers={},document={hidden:false,createElement:()=>({setAttribute(){}}),querySelector:()=>null,addEventListener:(name,handler)=>{handlers[name]=handler;}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
-  const context=vm.createContext({document,crypto,Event,createFocusTracker,cameraInitializationDiagnostic,cameraRuntimeProfile,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>now},facePose:()=>null,window:{addEventListener(){},dispatchEvent(){}}});
   vm.runInContext(`${source}\nenabled=true;globalThis.camera={setCameraCompanion,cameraState,acceptResult,cameraVisible};`,context);
   const camera=context.camera;camera.setCameraCompanion(30000);document.hidden=true;handlers.visibilitychange();
   camera.acceptResult({signals:healthySignals,time:now});now+=2000;camera.acceptResult({signals:healthySignals,time:now});assert.equal(camera.cameraState().tracking,true);

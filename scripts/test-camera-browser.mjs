@@ -7,10 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
 import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
-let chromium,webkit;
-try { ({ chromium,webkit } = require('playwright')); }
-catch { ({ chromium,webkit } = createRequire('C:/Users/tntdr/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/x.js')('playwright')); }
-const testWebKit=process.argv.includes('--webkit'),iosProfile=testWebKit||process.argv.includes('--ios-profile');
+let chromium;
+try { ({ chromium } = require('playwright')); }
+catch { ({ chromium } = createRequire('C:/Users/tntdr/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/x.js')('playwright')); }
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const server = createServer(async (request, response) => {
   try {
@@ -30,42 +29,11 @@ const server = createServer(async (request, response) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
-  browser = testWebKit?await webkit.launch({headless:true}):await chromium.launch({ headless:true, channel:'msedge', args:[
+  browser = await chromium.launch({ headless:true, channel:'msedge', args:[
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
   ] });
-  const page = await browser.newPage(iosProfile?{userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{});
-  const wasmRequests=[];page.on('request',request=>{if(/\.wasm(?:\?|$)/.test(request.url()))wasmRequests.push(request.url());});
+  const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}`);
-  console.log('Browser capabilities: '+JSON.stringify(await page.evaluate(async()=>{
-    const script=new Blob(["self.postMessage({canvas:typeof OffscreenCanvas,bitmap:typeof createImageBitmap,webgl:typeof WebGL2RenderingContext})"],{type:'text/javascript'});
-    const url=URL.createObjectURL(script),worker=new Worker(url);
-    try{return {pageCanvas:typeof OffscreenCanvas,worker:await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(Error(e.message));})};}
-    finally{worker.terminate();URL.revokeObjectURL(url);}
-  })));
-  if(process.argv.includes('--diagnostic-ui-only')){
-    await page.setViewportSize({width:390,height:844});
-    const result=await page.evaluate(async()=>{
-      const {paintCameraDebug}=await import('/camera-debug.js');
-      const root=document.createElement('section');document.querySelector('main').append(root);
-      paintCameraDebug(root,{engine:{build:'20261025-7',code:'C7-IDENTITY-STORAGE',phase:'identity',message:'IndexedDB database unavailable'}},{status:'error',tracking:false});
-      const panel=root.querySelector('[data-camera-debug]'),note=panel.querySelector('.cam-debug-note');
-      return {text:note.textContent,overflow:panel.scrollWidth>panel.clientWidth,selectable:getComputedStyle(note).userSelect};
-    });
-    assert.match(result.text,/C7-IDENTITY-STORAGE/);assert.match(result.text,/IndexedDB/);
-    assert.equal(result.overflow,false);assert.equal(result.selectable,'text');
-    console.log('iPhone-width error diagnostics: readable stage code and raw message, selectable text, no overflow');
-  }else if(process.argv.includes('--runtime-only')){
-    const result=await page.evaluate(()=>new Promise((resolve,reject)=>{
-      const worker=new Worker('/scripts/camera-runtime-smoke-worker.js');
-      const timeout=setTimeout(()=>{worker.terminate();reject(Error('WASM runtime smoke timeout'));},120000);
-      worker.onmessage=({data})=>{clearTimeout(timeout);worker.terminate();data.type==='error'?reject(Error(data.message)):resolve(data);};
-      worker.onerror=e=>{clearTimeout(timeout);worker.terminate();reject(Error(e.message));};
-      worker.postMessage({type:'run'});
-    }));
-    assert.equal(result.model,'yolov10n');assert.deepEqual(result.dims,[1,300,6]);
-    assert.match(result.bootstrap,/ort\.wasm\.min\.js$/);
-    console.log(`CPU-only ONNX runtime: ${JSON.stringify(result)}; this probe does not test MediaPipe or an actual iPhone`);
-  }else{
   const results = await page.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width=640; canvas.height=480;
     const context=canvas.getContext('2d'); context.fillStyle='#888'; context.fillRect(0,0,640,480);
@@ -78,11 +46,10 @@ try {
       function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
       worker.onerror=error=>finish(new Error(error.message));
       worker.onmessage=async({data})=>{
-        if(data.type==='error')finish(new Error(`${data.stage}: ${data.message}\n${data.detail||''}`));
+        if(data.type==='error')finish(new Error(`${data.stage}: ${data.message}`));
         if(data.type==='ready'){
-          const capturedAt=performance.now();
           const bitmap=await createImageBitmap(canvas);
-          worker.postMessage({type:'frame',bitmap,time:capturedAt,clockOrigin:performance.timeOrigin},[bitmap]);
+          worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
         }
         if(data.type==='result')faceResult=data;
         if(data.type==='phone-observation')phoneObservation=data.observation;
@@ -97,24 +64,21 @@ try {
     assert.equal(result.type,'result'); assert.equal(result.signals.reliable,true);
     assert.equal(result.signals.face,false); assert.equal(result.signals.body,false);
     assert.equal(result.signals.phoneUse,false); assert.ok(Number.isFinite(result.time));
-    assert.equal(result.backend,iosProfile?'cpu':'wasm');
+    assert.equal(result.backend,'wasm');
     assert.equal(result.phoneObservation.status,'ok');
     assert.equal(result.phoneObservation.observedAt,result.time);
     assert.ok(result.phoneObservation.completedAt>=result.phoneObservation.observedAt);
-    assert.equal(result.phoneObservation.model,iosProfile||mode==='light'?'yolov10n':'yolov10s');
-    if(iosProfile){assert.equal(result.modelMs.pose,0);assert.equal(result.modelMs.hand,0);}
-    console.log(`${mode}: real face/pose/hand/YOLO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
+    console.log(`${mode}: real face/pose/hand/COCO models loaded; WASM inference ${Math.round(result.inferenceMs)}ms`);
   }
   const tickGap=await page.evaluate(()=>window.cameraMaxTickGap);
   assert.ok(tickGap<500,`UI thread stalled for ${tickGap.toFixed(0)}ms during worker inference`);
   console.log(`UI timer during both worker modes: maximum gap ${tickGap.toFixed(0)}ms`);
-  if(process.argv.includes('--phone-fixture')||process.argv.includes('--hand-fixture')){
+  if(process.argv.includes('--phone-fixture')){
     // Mictlancihuatl / TheEgdeLord, CC BY-SA 4.0. Remote references; no images are bundled.
     // https://commons.wikimedia.org/wiki/File:Hand_holding_Smartphone.jpg
     // https://commons.wikimedia.org/wiki/File:Teenager_using_mobile_phone.jpg
     const challenging=process.argv.includes('--occluded-phone-fixture');
-    const negative=process.argv.includes('--hand-fixture');
-    const source=negative?'https://upload.wikimedia.org/wikipedia/commons/b/b5/Hand_in_closed_fist_black_background.jpg':challenging?'https://upload.wikimedia.org/wikipedia/commons/e/eb/Teenager_using_mobile_phone.jpg':
+    const source=challenging?'https://upload.wikimedia.org/wikipedia/commons/e/eb/Teenager_using_mobile_phone.jpg':
       'https://upload.wikimedia.org/wikipedia/commons/0/0b/Hand_holding_Smartphone.jpg';
     const phone=await page.evaluate(async({source,sequence})=>{
       const photo=new Image();photo.crossOrigin='anonymous';
@@ -126,9 +90,8 @@ try {
         const trace=[],samples=sequence?12:1;
         async function send(){
           const scale=Math.min(640/photo.naturalWidth,480/photo.naturalHeight);
-          const capturedAt=performance.now();
           const bitmap=await createImageBitmap(photo,{resizeWidth:Math.round(photo.naturalWidth*scale),resizeHeight:Math.round(photo.naturalHeight*scale)});
-          worker.postMessage({type:'frame',bitmap,time:capturedAt,clockOrigin:performance.timeOrigin},[bitmap]);
+          worker.postMessage({type:'frame',bitmap,time:performance.now()},[bitmap]);
         }
         const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Phone fixture timeout'));},120000);
         function finish(error,result){clearTimeout(timeout);worker.terminate();error?reject(error):resolve(result);}
@@ -148,17 +111,15 @@ try {
         worker.postMessage({type:'init'});
       });
     },{source,sequence:process.argv.includes('--phone-sequence')});
-    console.log('public '+(negative?'empty-hand':'phone')+' fixture evidence: '+JSON.stringify(phone));
+    console.log('public phone fixture evidence: '+JSON.stringify(phone));
     await page.screenshot({path:resolve(root,'.codex-phone-reference.png')});
     await page.locator('[data-phone-fixture]').evaluate(image=>image.remove());
-    if(negative){assert.equal(phone.confirmed,false,'An empty hand must not confirm a phone');assert.ok(phone.score<.55,'An empty hand must not produce strong phone evidence');}
-    else if(challenging && phone.score<.55) console.log('Known model limitation: small, mostly occluded phone remains undetected; UI exposes not-found evidence.');
+    if(challenging && phone.score<.35) console.log('Known model limitation: small, mostly occluded phone remains undetected; UI exposes not-found evidence.');
     else {
-      assert.ok(phone.score>=.55,'The real phone model did not detect the reference phone');
+      assert.ok(phone.score>=.35,'The real phone model did not detect the reference phone');
       if(process.argv.includes('--phone-sequence'))assert.equal(phone.confirmed,true,'Repeated real-model phone results must confirm the same phone');
     }
   }
-  if(!process.argv.includes('--models-only')){
   const controllerResult = await page.evaluate(async () => {
     const camera = await import('/camera.js?v=20261023-6');
     camera.openCameraFocus(document.querySelector('[data-camera-toggle]'));
@@ -218,13 +179,5 @@ try {
     await page.locator('[data-camera-debug]').scrollIntoViewIfNeeded();
     await page.screenshot({path:resolve(root,`.codex-focus-debug-${width}.png`),fullPage:true});
     console.log(`debug UI ${width}px: countdown visible, no horizontal overflow`);
-  }
-  }
-  }
-  if(iosProfile&&!process.argv.includes('--diagnostic-ui-only')){
-    assert.ok(wasmRequests.some(url=>url.includes('onnxruntime-web@1.17.3/dist/ort-wasm-simd.wasm')),JSON.stringify(wasmRequests));
-    assert.ok(!wasmRequests.some(url=>/onnxruntime.*(?:threaded|jsep)/.test(url)),JSON.stringify(wasmRequests));
-    assert.ok(!wasmRequests.some(url=>url.includes('tfjs-backend-wasm')),JSON.stringify(wasmRequests));
-    console.log('iOS runtime requests: non-threaded ONNX SIMD, no JSEP or additional TensorFlow WASM heap');
   }
 } finally { await browser?.close(); await new Promise(resolve=>server.close(resolve)); }

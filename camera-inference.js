@@ -1,6 +1,6 @@
 // Shared by worker and compatibility mode. Frames never leave the device.
 import { faceBounds, faceSearchRegion, restoreFaceCoordinates, sameFace } from './camera-framing.js';
-import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-7';
+import { createPhoneTracker, createPhoneScheduler, PHONE_LIMITS } from './camera-phone.js?v=20261025-8';
 export const VISION_VERSION = '0.10.21';
 const MODEL_ROOT = 'https://storage.googleapis.com/mediapipe-models';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -29,13 +29,12 @@ export function extractFocusSignals(faceResult, poseResult, handResult, objects,
   const eyesValid = faceValid && [133,362,160,158,153,144,385,387,373,380].every(i => finitePoint(face[i]));
   const irisValid = faceValid && [133,362,468,473].every(i => finitePoint(face[i]));
   const hands = (handResult.landmarks || []).flatMap(hand => hand.filter(finitePoint));
-  const phoneThreshold=o=>o.model?.startsWith('yolov10')?PHONE_LIMITS.create:.2;
-  const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? phoneThreshold(o) : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
+  const boxes = objects.filter(o => o.score >= (o.class === 'cell phone' ? .2 : .55)).map(o => ({ ...o, box: [o.bbox[0] / width, o.bbox[1] / height, o.bbox[2] / width, o.bbox[3] / height] }));
   const head = faceValid ? face[1] : null;
   const eyeMid = faceValid ? { x: (face[33].x + face[263].x) / 2, y: (face[33].y + face[263].y) / 2 } : null;
   const headDown = faceValid && (head.y - eyeMid.y) / Math.max(.01, distance(geometry[33], geometry[263])) > .65;
   const phones = objects.filter(o => o.class === 'cell phone' && Number.isFinite(o.score))
-    .map(o => ({ score: o.score, used: o.score >= phoneThreshold(o) }));
+    .map(o => ({ score: o.score, used: o.score >= .2 }));
   const phoneUse = phones.some(o => o.used);
   const bestPhone = phones.filter(o => o.used).sort((a,b) => b.score-a.score)[0] || phones.sort((a,b) => b.score-a.score)[0];
   const phoneEvidence = bestPhone ? { ...bestPhone, stage: bestPhone.used ? 'using' : 'weak' } :
@@ -118,56 +117,40 @@ export function phoneSearchRegions(poseResult, handResult, scan = 0) {
   return regions.length > 1 ? regions.slice(0, 2) :
     [regions[0] || phoneSearchRegion(poseResult, handResult), sweep];
 }
-export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, lowMemory = false, onStage = () => {}, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
+export async function createCameraInference(vision, cocoSsd, tf, canvas, { light = false, identityFactory, onPhoneObservation, phoneRedesign = true } = {}) {
   const resources = [];
   try {
-    const loadObjects=async()=>{
-      onStage('phone');
-      const objects=await cocoSsd.load({base:light?'lite_mobilenet_v2':'mobilenet_v2'});
-      resources.push(objects);return objects;
-    };
-    // Compile ONNX before allocating MediaPipe/identity heaps on iOS.
-    let objects=lowMemory?await loadObjects():null;
-    onStage('vision-files');
     const files = await vision.FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`);
-    // MediaPipe's Safari auto-canvas branch uses document even in a Worker.
-    // Supplying a canvas bypasses that branch; each model gets its own canvas.
-    const options = path => ({ ...(canvas ? { canvas } : typeof OffscreenCanvas==='function' ? {canvas:new OffscreenCanvas(1,1)} : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
-    onStage('face');
+    const options = path => ({ ...(canvas ? { canvas } : {}), baseOptions: { modelAssetPath: `${MODEL_ROOT}/${path}`, delegate: 'CPU' }, runningMode: 'VIDEO' });
     const face = await vision.FaceLandmarker.createFromOptions(files, {
       ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), numFaces: 2,
       minFaceDetectionConfidence: .25, minFacePresenceConfidence: .25, minTrackingConfidence: .25,
       outputFaceBlendshapes: true, outputFacialTransformationMatrixes: false,
     });
     resources.push(face);
-    const empty=()=>({landmarks:[]});
-    if(!lowMemory)onStage('pose');
-    const pose = lowMemory ? {detectForVideo:empty,close(){}} : await vision.PoseLandmarker.createFromOptions(files, {
+    const pose = await vision.PoseLandmarker.createFromOptions(files, {
       ...options('pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task'), numPoses: 1,
     });
     resources.push(pose);
-    if(!lowMemory)onStage('hand');
-    const hand = lowMemory ? {detectForVideo:empty,close(){}} : await vision.HandLandmarker.createFromOptions(files, {
+    const hand = await vision.HandLandmarker.createFromOptions(files, {
       ...options('hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'), numHands: 2,
     });
     resources.push(hand);
-    onStage('backend');
     let accelerated = false;
-    if (tf.wasm && !lowMemory) {
+    if (tf.wasm) {
       try { accelerated = await tf.setBackend('wasm'); } catch { /* Worker-only CPU fallback. */ }
     }
     if (!accelerated) await tf.setBackend('cpu');
     await tf.ready();
-    objects??=await loadObjects();
-    onStage('identity');
+    const objects = await cocoSsd.load({ base: light ? 'lite_mobilenet_v2' : 'mobilenet_v2' });
+    resources.push(objects);
     const identity=identityFactory?await identityFactory():null;
     if(identity)resources.push(identity);
-    onStage('canvases');
     const input = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(640, 480) : document.createElement('canvas');
     const context = input.getContext('2d', { willReadFrequently: true });
     let cachedObjects = [], objectTime = -Infinity, observedAt=-Infinity, observationId=0, deliveredId=0, phoneScan=0;
     let phoneTracker=createPhoneTracker(), phoneScheduler=createPhoneScheduler(), phoneEpoch=null, latestPhone=null,phoneLagCount=0;
-    let objectPending=null,objectEpoch=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
+    let objectPending=null,closed=false,objectWidth=1,objectHeight=1,poseTime=-Infinity,handTime=-Infinity,poseResult={landmarks:[]},handResult={landmarks:[]};
     const modelMs={face:0,pose:0,hand:0,objects:0};
     const studyMotion = createStudyMotionTracker();
     const faceContinuity = createFaceContinuity();
@@ -176,7 +159,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const faceContext = faceInput.getContext('2d');
     let closeup = null, lastBounds = null, lastFaceTime = -Infinity, scan = 0;
     return {
-      async detect(source, time, epoch = 0, clockOrigin) {
+      async detect(source, time, epoch = 0) {
         const startedAt = performance.now();
         if(phoneEpoch!==epoch){phoneEpoch=epoch;phoneTracker=createPhoneTracker();phoneScheduler=createPhoneScheduler();latestPhone=null;phoneLagCount=0;cachedObjects=[];observedAt=-Infinity;objectTime=-Infinity;}
         const width = source.videoWidth || source.width, height = source.videoHeight || source.height;
@@ -184,9 +167,9 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         let faceResult = face.detectForVideo(source, time);
         const fullFaceMs = performance.now() - began;
         const bounds = faceBounds(faceResult), count = faceResult.faceLandmarks?.length || 0;
-        if(!lowMemory&&time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
+        if(time-poseTime>=400){began=performance.now();poseResult=pose.detectForVideo(source,time);poseTime=time;modelMs.pose=performance.now()-began;}
         const faceStarted = performance.now();
-        if (!lowMemory && count < 2 && (!bounds || Math.max(bounds.width * width, bounds.height * height) < Math.min(width, height) * .22)) {
+        if (count < 2 && (!bounds || Math.max(bounds.width * width, bounds.height * height) < Math.min(width, height) * .22)) {
           if (!closeup) {
             closeup = await vision.FaceLandmarker.createFromOptions(files, {
               ...options('face_landmarker/face_landmarker/float16/1/face_landmarker.task'), runningMode: 'IMAGE', numFaces: 2,
@@ -205,10 +188,9 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         modelMs.face = fullFaceMs + performance.now() - faceStarted;
         if (faceResult.faceLandmarks?.length === 1) { lastBounds = faceBounds(faceResult); lastFaceTime = time; }
         const identityState=identity?await identity.check(source,faceResult,time):null;
-        if(!lowMemory&&time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
+        if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
         if (phoneRedesign && !objectPending) {
-          objectEpoch=epoch;
           const region=phoneScheduler.next(width,height,time,phoneTracker.targets(time),phoneSearchRegions(poseResult,handResult));
           const scale=Math.min(1,640/Math.max(region.width*width,region.height*height));
           const cropWidth=Math.max(1,Math.round(region.width*width*scale)),cropHeight=Math.max(1,Math.round(region.height*height*scale));
@@ -217,16 +199,16 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
           const pixels=context.getImageData(0,0,cropWidth,cropHeight),objectStarted=performance.now();
           const publish=(found,status)=>{
             if(closed||phoneEpoch!==epoch)return;
-            const completedAt=Number.isFinite(clockOrigin)?performance.timeOrigin+performance.now()-clockOrigin:time+performance.now()-startedAt;
+            const completedAt=time+performance.now()-startedAt;
             const candidates=found.filter(o=>o.class==='cell phone').map(o=>({score:o.score,box:[region.x+o.bbox[0]/cropWidth*region.width,region.y+o.bbox[1]/cropHeight*region.height,o.bbox[2]/cropWidth*region.width,o.bbox[3]/cropHeight*region.height]}));
-            latestPhone={version:3,model:objects.name||'test',id:++observationId,frameId:time,observedAt:time,completedAt,region,resolution:{width,height,inputSize:640},candidates,status,epoch};
+            latestPhone={version:2,id:++observationId,frameId:time,observedAt:time,completedAt,region,candidates,status,epoch};
             phoneTracker.observe(latestPhone,completedAt);
             phoneLagCount=completedAt-time>PHONE_LIMITS.maxAge?phoneLagCount+1:0;
             if(status==='ok'){
               cachedObjects=found.map(o=>({...o,bbox:[(region.x+o.bbox[0]/cropWidth*region.width)*width,(region.y+o.bbox[1]/cropHeight*region.height)*height,o.bbox[2]/cropWidth*region.width*width,o.bbox[3]/cropHeight*region.height*height]}));
               objectWidth=width;objectHeight=height;observedAt=time;
             }else {cachedObjects=[];observedAt=-Infinity;}
-            onPhoneObservation?.({type:'phone-observation',observation:latestPhone,epoch,diagnostics:phoneTracker.diagnostics(),state:phoneTracker.state(completedAt),search:phoneScheduler.diagnostics(),slow:objects.name!=='yolov10n'&&!light&&phoneLagCount>=2});
+            onPhoneObservation?.({type:'phone-observation',observation:latestPhone,epoch,diagnostics:phoneTracker.diagnostics(),state:phoneTracker.state(completedAt),search:phoneScheduler.diagnostics(),slow:!light&&phoneLagCount>=2});
           };
           objectPending=new Promise(resolve=>setTimeout(resolve,0)).then(async()=>{
             if(closed||phoneEpoch!==epoch)return;
@@ -269,7 +251,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         signals.studyActivity = studyMotion.update(signals.studyContext, signals.studyPoints, time);
         delete signals.studyPoints;
         return { type: 'result', time, signals, backend: tf.getBackend(), mode: light ? 'light' : 'standard', inferenceMs: performance.now()-startedAt,
-          modelMs:{...modelMs},objectAgeMs:ageMs,phonePending:Boolean(objectPending&&objectEpoch===epoch),landmarks: faceContinuity.update(faceResult,time) };
+          modelMs:{...modelMs},objectAgeMs:ageMs,landmarks: faceContinuity.update(faceResult,time) };
       },
       close() { closed=true;const dispose=()=>{for(const model of resources)(model.close||model.dispose).call(model);};if(objectPending)void objectPending.finally(dispose);else dispose(); },
     };

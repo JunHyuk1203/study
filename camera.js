@@ -1,13 +1,13 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-7';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-7';
-import { cameraRuntimeProfile,cameraInitializationDiagnostic } from './camera-runtime.js?v=20261025-7';
+import { createFocusTracker } from './camera-focus.js?v=20261025-8';
+import { paintCameraDebug } from './camera-debug.js?v=20261025-8';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
+// Rollback switch: false selects the previous search and temporal policy together.
+const phoneRedesign = true;
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
 let reason = null;
 let diagnostics = null;
-let engineDiagnostic=null;
 const video = document.createElement('video');
 video.autoplay = true;
 video.muted = true;
@@ -20,7 +20,7 @@ let stream, worker, loop, watchdog, loadingDeadline;
 let enabled = false, tracking = false, status = 'off', message = '얼굴 인식으로 학습 시작';
 let identityStatus=null;
 let identityPhase=null;
-let ready = false, inFlight = false, phoneBusy=false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
+let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime = -1, frameEpoch = 0;
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
@@ -131,7 +131,7 @@ function paint() {
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
   root.querySelector('[data-camera-resolution]').textContent = enabled && video.videoWidth ? 'AVATAR · 기기 내 인식' : '';
-  if (focusPanel) paintCameraDebug(root, {...diagnostics,engine:engineDiagnostic}, cameraState());
+  if (focusPanel) paintCameraDebug(root, diagnostics, cameraState());
 }
 function setStatus(next, text, active = false) {
   if(enabled&&identityPhase==='enrolling'&&!manuallyPaused&&['paused','scanning'].includes(next)){
@@ -155,11 +155,10 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   video.srcObject = null;
   video.remove(); avatarPose = null;
   fallbackAttempted = false;
-  focusTracker.reset(); diagnostics = null;engineDiagnostic=null; reason = null;identityStatus=identityPhase=null;
+  focusTracker.reset(); diagnostics = null; reason = null;identityStatus=identityPhase=null;
   setStatus(error ? 'error' : 'off', text);
 }
-function recognitionError(detail = '', displayMessage='인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요') {
-  engineDiagnostic=cameraInitializationDiagnostic(engineDiagnostic?.phase,detail);
+function recognitionError(detail = '') {
   ready = false; inFlight = false;
   worker?.terminate(); worker = null;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
@@ -167,11 +166,10 @@ function recognitionError(detail = '', displayMessage='인식 엔진을 준비�
   avatarPose = null;
   focusTracker.reset(); diagnostics = null; reason = 'unknown';
   console.error('Study camera initialization failed:', detail);
-  setStatus('error', `${displayMessage} · ${engineDiagnostic.code}`);
+  setStatus('error', '인식 엔진을 준비하지 못했습니다 · 종료 후 다시 시작해 주세요');
 }
 function acceptResult(data) {
   inFlight = false;
-  phoneBusy=Boolean(data.phonePending);
   const now = performance.now(); lastResult = now;
   latestFaceResult=data;
   if(data.signals?.phonePolicy==='tracked' && latestPhoneObservation && latestPhoneObservation.epoch===data.epoch)
@@ -179,7 +177,6 @@ function acceptResult(data) {
   applyResult(data,now);
 }
 function acceptPhoneObservation(data) {
-  phoneBusy=false;
   latestPhoneObservation=data.observation;
   latestPhoneSearch=data.search;
   // Phone completion must not release the face request or refresh the face watchdog.
@@ -196,38 +193,28 @@ function applyResult(data,now) {
   identityStatus=decision.identityWarning?'mismatch':null;
   if(data.signals?.identity?.enrolled===false)identityPhase='enrolling';
   else if(!stale&&data.signals?.identity)identityPhase=decision.identityWarning?'warning':!data.signals.identity.matched?'checking':'verified';
-  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, phoneModel:data.signals?.phoneObservation?.model, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs,phoneSearch:latestPhoneSearch } };
+  diagnostics = { ...focusTracker.getDebug(), runtime: { backend: data.backend, mode: data.mode, inferenceMs: data.inferenceMs, modelMs:data.modelMs, objectAgeMs:data.objectAgeMs,phoneSearch:latestPhoneSearch } };
   reason = decision.reason;
   setStatus(decision.status, decision.message, decision.tracking);
 }
 function startRecognitionWorker(token, light = false) {
-  const profile=cameraRuntimeProfile();
-  light ||= profile.light;
-  engineDiagnostic={build:'20261025-7',phase:'profile'};
-  phoneBusy=false;
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-7', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261025-8', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
     if (data.epoch != null && data.epoch !== frameEpoch) return;
-    if (data.type === 'error') {
-      engineDiagnostic={build:'20261025-7',phase:data.stage};
-      if(data.code==='unsupported-canvas')recognitionError(`${data.stage}: ${data.message}`,'이 브라우저는 카메라 분석을 지원하지 않습니다 · iOS 또는 브라우저를 최신 버전으로 업데이트해 주세요');
-      else recoverRecognition(token, `${data.stage}: ${data.message}`);
-      return;
-    }
-    if(data.type==='loading'){engineDiagnostic={build:'20261025-7',phase:data.stage};paint();}
-    if (data.type === 'ready') { ready = true;engineDiagnostic=null; clearTimeout(loadingDeadline); lastResult = performance.now(); }
+    if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
+    if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
     if (data.type === 'phone-observation') {
       acceptPhoneObservation(data);
       if(data.slow&&!fallbackAttempted)recoverRecognition(token,'Phone inference repeatedly exceeded its freshness deadline');
     }
   };
-  loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, profile.initializationMs);
-  target.postMessage({ type: 'init', light, identityKey:`${cameraController}:${token}` });
+  loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
+  target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}` });
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
@@ -247,7 +234,7 @@ function recoverRecognition(token, detail) {
 }
 async function frame(token, epoch = frameEpoch) {
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
-  if (ready && !inFlight && !phoneBusy && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+  if (ready && !inFlight && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     inFlight = true;
     try {
@@ -256,7 +243,7 @@ async function frame(token, epoch = frameEpoch) {
       const bitmap = await createImageBitmap(video);
       if (token !== revision || epoch !== frameEpoch) { bitmap.close(); return; }
       if (worker !== target || !ready) { bitmap.close(); inFlight = false; }
-      else target.postMessage({ type: 'frame', bitmap, time: capturedAt, clockOrigin:performance.timeOrigin, epoch }, [bitmap]);
+      else target.postMessage({ type: 'frame', bitmap, time: capturedAt, epoch }, [bitmap]);
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
@@ -278,7 +265,7 @@ function startCameraWatchdog(token) {
 function resumeCameraRecognition() {
   if (!enabled || document.hidden || !stream) return;
   const token = revision;
-  frameEpoch++; clearTimeout(loop); inFlight = false; phoneBusy=false; lastVideoTime = -1; lastResult = performance.now();
+  frameEpoch++; clearTimeout(loop); inFlight = false; lastVideoTime = -1; lastResult = performance.now();
   focusTracker.reset(true); diagnostics = null;
   setStatus('scanning', '얼굴을 다시 확인하는 중…');
   if (!worker) {
