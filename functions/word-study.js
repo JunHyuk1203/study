@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
-import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { FieldValue, getFirestore, Timestamp } from './platform-store.js';
+import { HttpsError, onCall } from './platform-http.js';
 import { checkpointCamera, WORD_LEASE_MS, WORD_PRESENCE_MS, STUDY_CONTRACT_VERSION, MAX_SESSION_MS } from './domain.js';
 import {settleWordStats} from './word-stats.js';
 import {expireUserSessions} from './session-lifecycle.js';
@@ -64,7 +64,7 @@ export const startWordStudy = onCall(options, async request => {
     }
     const activityRoom=await readActivityRoom(tx,db,uid,profile);
     const cameraId=cameraRef?interruptCamera(tx,cameraRef,camera,sessionRef.id,now,true):null;
-    const session = {uid,subjectId:subject.id,source:'superword',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraId,presenceUntilMs:now.toMillis()+WORD_PRESENCE_MS};
+    const session = {uid,subjectId:subject.id,source:'superword',verificationType:'word-activity',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraId,presenceUntilMs:now.toMillis()+WORD_PRESENCE_MS};
     if(counting)Object.assign(session,checkpointCamera({...session,startedAtMs:now.toMillis()},now.toMillis(),true,WORD_LEASE_MS));
     publishWordRoom(tx,activityRoom,uid,profile,session,now.toMillis(),true,camera);
     tx.create(sessionRef,session);

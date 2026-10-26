@@ -6,7 +6,8 @@ import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 
 import { initializeApp, deleteApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Timestamp } from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import { ensureProfile, finishStudySession, startStudySession, syncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies, prepareWordStudy,expireStudySessions,heartbeatStudySession } from '../functions/index.js';
+import { ensureProfile, finishStudySession, startStudySession as realStartStudySession, syncStudyCamera as realSyncStudyCamera, updateAccount, updateStudyPlan, startWordStudy, syncWordStudy, closeExpiredWordStudies, prepareWordStudy,expireStudySessions,heartbeatStudySession } from '../functions/index.js';
+import {signedFaceRequest} from './face-fixtures.mjs';
 import { splitStudyInterval } from '../functions/domain.js';
 import { spendFocusTime } from '../functions/focus-time.js';
 import { generateForUser } from '../functions/ai-service.js';
@@ -21,6 +22,8 @@ import {studyDate} from '../functions/report-math.js';
 import {purgeIdleRooms,ROOM_IDLE_MS} from '../functions/room-service.js';
 
 const projectId = 'demo-study';
+const startStudySession={run:async request=>realStartStudySession.run(request.data?.cameraMode?await signedFaceRequest(getFirestore('study-data'),request):request)};
+const syncStudyCamera={run:async request=>realSyncStudyCamera.run(await signedFaceRequest(getFirestore('study-data'),request))};
 function mockProvider(context, generate) {
   const original=globalThis.fetch;
   globalThis.fetch=async(url,options)=>{
@@ -205,7 +208,7 @@ test('custom subjects and goals are saved per account and only registered subjec
   assert.equal((await db.doc('users/plan-owner').get()).data().subjects.length,0);
 });
 
-test('session finish is idempotent and atomically updates statistics and ranking', async () => {
+test('manual session finish is idempotent and saves statistics without face rewards or rankings', async () => {
   const auth = { uid: 'study-owner', token: { email_verified: true } };
   const db = getFirestore(undefined, 'study-data');
   await ensureProfile.run({ auth, data: { displayName: '공부회원' } });
@@ -224,9 +227,9 @@ test('session finish is idempotent and atomically updates statistics and ranking
   assert.equal(summary.sessionCount, 1);
   assert.equal(summary.currentStreak, 1);
   const wallet = (await db.doc(`users/${auth.uid}/stats/focusTime`).get()).data();
-  assert.equal(wallet.balanceSeconds, first.creditedSeconds);
-  assert.equal(wallet.earnedSeconds, first.creditedSeconds);
-  assert.equal((await db.doc(`users/${auth.uid}/focusTimeTransactions/earn_${sessionId}`).get()).data().seconds, first.creditedSeconds);
+  assert.equal(wallet?.balanceSeconds||0,0);
+  assert.equal(wallet?.earnedSeconds||0,0);
+  assert.equal((await db.doc(`users/${auth.uid}/focusTimeTransactions/earn_${sessionId}`).get()).exists,false);
   const session = (await db.doc(`users/${auth.uid}/sessions/${sessionId}`).get()).data();
   assert.equal(session.status, 'finished');
   assert.equal((await db.doc(`users/${auth.uid}`).get()).data().activeSessionId, null);
@@ -237,8 +240,7 @@ test('session finish is idempotent and atomically updates statistics and ranking
       const path = `users/${auth.uid}/${collection}/${key}`;
       expected.set(path, (expected.get(path) ?? 0) + segment.seconds);
     }
-    const path = `leaderboards/${segment.week}/entries/${auth.uid}`;
-    expected.set(path, (expected.get(path) ?? 0) + segment.seconds);
+    assert.equal((await db.doc(`leaderboards/${segment.week}/entries/${auth.uid}`).get()).exists,false);
   }
   for (const [path, seconds] of expected) {
     const row = (await db.doc(path).get()).data();
@@ -760,8 +762,8 @@ test('word activity updates room study state and service presence without an ope
   await db.doc(`studyRooms/${roomId}`).update({members:{[uid]:{...room.members[uid],joinedAtMs:now-60000,sampledAtMs:now-5000,lastSeenMs:now-ROOM_IDLE_MS+1000}},deleteAfterMs:now+1000});
   await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:1,tracking:true,present:true}});
   room=(await db.doc(`studyRooms/${roomId}`).get()).data();
-  assert.equal(room.members[uid].status,'studying');assert.ok(room.members[uid].seconds>=5);assert.ok(room.deleteAfterMs>=now+ROOM_IDLE_MS);
-  const combined=(await snapshot(uid)).room.members[uid];assert.equal(combined.status,'studying');assert.equal(combined.subjectName,'영단어');assert.ok(combined.seconds>=5&&combined.seconds<10); // Excludes the camera session's pre-room total.
+  assert.equal(room.members[uid].status,'studying');assert.equal(room.members[uid].seconds,0);assert.ok(room.deleteAfterMs>=now+ROOM_IDLE_MS);
+  const combined=(await snapshot(uid)).room.members[uid];assert.equal(combined.status,'studying');assert.equal(combined.subjectName,'영단어');assert.equal(combined.seconds,0);assert.equal(combined.verificationType,'word-activity');
   await purgeIdleRooms(db,now+2000);assert.equal((await db.doc(`studyRooms/${roomId}`).get()).exists,true);
   await syncWordStudy.run({auth,data:{controllerId,sessionId:started.sessionId,sequence:2,tracking:false,present:true}});
   assert.equal((await db.doc(`studyRooms/${roomId}`).get()).data().members[uid].status,'resting');
@@ -838,7 +840,7 @@ test('room snapshot derives status from the server and excludes session time bef
   await db.doc(`users/${uid}`).update({activeSessionId:ref.id});
   const result=await snapshot(uid,{seconds:99999,status:'studying'}),member=result.room.members[uid];
   assert.equal(member.status,'studying');assert.equal(member.seconds,0);assert.equal(member.roomTimer,true);
-  assert.equal(member.sampledAtMs,member.lastSeenMs);assert.equal(member.countUntilMs,now+10000);
+  assert.equal(member.sampledAtMs,member.lastSeenMs);assert.equal(member.countUntilMs,member.lastSeenMs);
   assert.ok(result.serverNowMs>=member.sampledAtMs);
   await ref.update({activeSinceMs:null});assert.equal((await snapshot(uid)).room.members[uid].status,'resting');
   await social(uid,'close',{roomId});

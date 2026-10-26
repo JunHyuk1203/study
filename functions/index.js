@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { getFirestore, Timestamp } from './platform-store.js';
+import { onCall, HttpsError } from './platform-http.js';
+import { onSchedule } from './platform-scheduler.js';
 import { checkpointCamera, WORD_LEASE_MS, CAMERA_PRESENCE_MS, STUDY_CONTRACT_VERSION, MAX_SESSION_MS, validDisplayName, weekKey } from './domain.js';
 import { planSubjects } from './plan-domain.js';
 import { changePlan } from './plan-service.js';
@@ -11,6 +11,9 @@ import {roomRankings} from './room-study.js';
 import {dailyReport} from './report-service.js';
 import {finishSession as finishSessionRecord, expireUserSessions} from './session-lifecycle.js';
 import {cleanupExpiredSessions} from './session-cleanup.js';
+import {authorizeFaceStudy} from './face-service.js';
+import {assertStudyAccount} from './study-auth.js';
+export {getFaceEnrollmentStatus,beginDailyFaceAuth,completeDailyFaceAuth,beginFaceEnrollment,sealFaceKeyEnvelope,commitFaceEnrollment,beginFaceUnlock,unlockFaceKeyEnvelope,revokeFaceEnrollment,cancelFaceEnrollment,lockFaceEnrollment,cleanupFaceSecurityMetadata} from './face-api.js';
 export { searchSchools, saveSchool, getSchoolOverview, getUpcomingExams, chatWithStudy, getStudyBriefing, getAiUsage } from './integrations.js';
 export { startWordStudy, syncWordStudy } from './word-study.js';
 export {saveWordStudyLink,restoreWordStudyLink,removeWordStudyLink} from './word-link.js';
@@ -68,6 +71,7 @@ export const updateStudyPlan = onCall(options, request => changePlan(db,userId(r
 
 export const startStudySession = onCall(options, async (request) => {
   const uid = userId(request, true);
+  await assertStudyAccount(request);
   const subjectId = request.data?.subjectId;
   const cameraMode = request.data?.cameraMode === true;
   const controllerId = request.data?.controllerId;
@@ -78,12 +82,13 @@ export const startStudySession = onCall(options, async (request) => {
   let session;
   await db.runTransaction(async (transaction) => {
     const profile = await transaction.get(profileRef);
+    const faceAccess=cameraMode?await authorizeFaceStudy(transaction,db,uid,request.data):{verificationType:'manual'};
     if (!profile.exists) throw new HttpsError('failed-precondition', '계정 프로필을 먼저 생성해 주세요.');
     if (!planSubjects(profile.data()).some(row => row.id === subjectId)) throw new HttpsError('invalid-argument', '설정에 추가한 과목을 선택해 주세요.');
     if (profile.data().activeSessionId) throw new HttpsError('already-exists', '진행 중인 학습을 먼저 종료해 주세요.');
     if(profile.data().wordHandoffUntilMs>Date.now())throw new HttpsError('failed-precondition','단어앱 학습으로 전환 중입니다. 잠시 후 다시 시작해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
-    session = { uid, subjectId, status: 'active', contractVersion:STUDY_CONTRACT_VERSION,canResume:true,terminalReason:null,presenceUntilMs:now.toMillis()+(cameraMode?CAMERA_PRESENCE_MS:WORD_LEASE_MS),...(controllerId?{controllerId}:{}),
+    session = { uid, subjectId, ...faceAccess,status: 'active', contractVersion:STUDY_CONTRACT_VERSION,canResume:true,terminalReason:null,presenceUntilMs:now.toMillis()+(cameraMode?CAMERA_PRESENCE_MS:WORD_LEASE_MS),...(controllerId?{controllerId}:{}),
       ...(cameraMode ? { cameraMode: true, controllerId, sequence: 0, segments: [], accumulatedSeconds: 0, activeSinceMs: null, leaseUntilMs: null, cameraStatus: 'paused' } : {}) };
     transaction.create(sessionRef, { ...session, startedAt: now, createdAt: now });
     transaction.set(db.doc(`wordStudyLeases/${sessionRef.id}`),{uid,sessionId:sessionRef.id,expiresAtMs:session.presenceUntilMs});
@@ -95,6 +100,7 @@ export const startStudySession = onCall(options, async (request) => {
 
 export const syncStudyCamera = onCall(options, async request => {
   const uid = userId(request, true);
+  await assertStudyAccount(request);
   const { sessionId, controllerId, sequence, tracking, eventId, clientEpoch } = request.data || {};
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean') throw new HttpsError('invalid-argument', '카메라 상태가 올바르지 않습니다.');
   if(eventId!=null && (typeof eventId!=='string'||eventId.length>100||!Number.isSafeInteger(clientEpoch)||clientEpoch<0))throw new HttpsError('invalid-argument','카메라 이벤트가 올바르지 않습니다.');
@@ -104,13 +110,14 @@ export const syncStudyCamera = onCall(options, async request => {
     const session = record.data();
     if (!session || session.status !== 'active') throw new HttpsError('failed-precondition', '진행 중인 기록이 없습니다.',{terminalReason:'finished',canResume:false});
     if (!session.cameraMode || controllerId !== session.controllerId) throw new HttpsError('permission-denied', '학습을 시작한 카메라에서만 제어할 수 있습니다.');
+    const faceAccess=await authorizeFaceStudy(transaction,db,uid,request.data,session);
     if((session.presenceUntilMs??Infinity)<=Date.now())throw new HttpsError('failed-precondition','카메라 연결이 만료되었습니다.',{terminalReason:'presence-expired',canResume:false});
     if(eventId && session.lastEventId===eventId)return {ignored:true,session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()}};
     if (sequence <= session.sequence) return { ignored: true, session:{...session,startedAtMs:session.startedAt.toMillis(),serverNowMs:Date.now()} };
     const profile=(await transaction.get(db.doc(`users/${uid}`))).data();
     const activity=await readActivityRoom(transaction,db,uid,profile);
     const wordPaused=Boolean(session.wordSessionId && session.wordLeaseUntilMs>Date.now());
-    const update = {...checkpointCamera({ ...session, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking&&!wordPaused),wordPaused,...(!wordPaused?{wordSessionId:null,wordLeaseUntilMs:null}:{wordSessionId:session.wordSessionId,wordLeaseUntilMs:session.wordLeaseUntilMs})};
+    const update = {...checkpointCamera({ ...session,...faceAccess, startedAtMs: session.startedAt.toMillis() }, Date.now(), tracking&&!wordPaused),...faceAccess,wordPaused,...(!wordPaused?{wordSessionId:null,wordLeaseUntilMs:null}:{wordSessionId:session.wordSessionId,wordLeaseUntilMs:session.wordLeaseUntilMs})};
     const updatedAt = Timestamp.now();
     const presenceUntilMs=updatedAt.toMillis()+CAMERA_PRESENCE_MS;
     // Publish the confirmed state in the SAME transaction as the camera checkpoint.

@@ -1,4 +1,4 @@
-import {FieldValue} from 'firebase-admin/firestore';
+import {FieldValue} from './platform-store.js';
 
 export function remainingWordSegments(segments, settled=[]) {
   const previous=new Map(settled.map(row=>[row.date,row.seconds]));

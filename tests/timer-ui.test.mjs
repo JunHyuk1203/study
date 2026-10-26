@@ -5,8 +5,9 @@ import {readFile} from 'node:fs/promises';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 const toastSource=(await readFile(new URL('../notifications.js',import.meta.url),'utf8')).replace(/^export /gm,'');
-const source=(await readFile(new URL('../word-time.js',import.meta.url),'utf8')).replace(/^export /gm,'')+'\n'+cacheSource+'\n'+toastSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
-  .replace(/^import .*;\r?\n/gm,'').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
+// These VM tests isolate the timer transport; real async key proofs are tested in face-security/browser tests.
+const source='const faceStudyAuthorization=()=>({fixture:true});\n'+(await readFile(new URL('../word-time.js',import.meta.url),'utf8')).replace(/^export /gm,'')+'\n'+cacheSource+'\n'+toastSource+'\n'+(await readFile(new URL('../data.js',import.meta.url),'utf8'))
+  .replace(/^import .*;\r?\n/gm,'').replaceAll('await faceStudyAuthorization(','faceStudyAuthorization(').replace('export function getStudyData','function getStudyData').split(/\r?\ntry \{\r?\n  authServices/)[0];
 
 test('production import graph creates only one instance of each shared state module',async()=>{
   const versions=new Map(),visited=new Set();
@@ -172,7 +173,7 @@ test('failed camera session creation displays the error inside the focus screen'
   vm.runInContext(`${source}\nauthServices={auth:{currentUser:{getIdToken:async()=>{}}}};call=()=>async()=>{throw {code:'functions/unavailable'};};globalThis.message=cameraTimerMessage;`,context);
   for(const click of clicks)await click({target:{closest:selector=>selector==='[data-study-action]'?button:null}});
   assert.equal(camera.status,'error');
-  assert.match(context.message(camera),/저장 서비스에 연결하지 못했습니다/);
+  assert.match(context.message(camera),/(저장 서비스|자체 서버)에 연결하지 못했습니다/);
 });
 
 function cameraStartup(authReady) {
@@ -207,7 +208,7 @@ for(const failure of ['auth','storage'])test(`failed ${failure} initialization n
   t.context.user={uid:'owner',emailVerified:true};
   t.context.failConnection();await t.start();
   assert.equal(t.context.preview(),null);assert.equal(t.context.saved,0);
-  assert.equal(t.camera.status,'error');assert.match(t.camera.message,/저장 서비스에 연결하지 못했습니다/);
+  assert.equal(t.camera.status,'error');assert.match(t.camera.message,/(저장 서비스|자체 서버)에 연결하지 못했습니다/);
 });
 
 for(const user of [null,{uid:'owner',emailVerified:false}])test(`resolved ${user?'unverified member':'guest'} can still use camera preview`,async()=>{

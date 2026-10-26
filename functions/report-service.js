@@ -1,5 +1,5 @@
-import {Timestamp} from 'firebase-admin/firestore';
-import {HttpsError} from 'firebase-functions/v2/https';
+import {Timestamp} from './platform-store.js';
+import {HttpsError} from './platform-http.js';
 import {buildDailyReport, studyDate} from './report-math.js';
 import {MAX_SESSION_MS,splitStudyInterval} from './domain.js';
 

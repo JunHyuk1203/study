@@ -13,7 +13,7 @@ export const HEARTBEAT_MS = 5000;
 // Aggregate only server-observed active windows. An expired lease never credits the gap.
 export function checkpointCamera(session, nowMs, tracking, leaseMs = CAMERA_LEASE_MS) {
   const now = Math.floor(nowMs / 1000) * 1000;
-  const deadline = session.startedAtMs + MAX_SESSION_MS;
+  const deadline = Math.min(session.startedAtMs + MAX_SESSION_MS,session.faceAuthUntilMs??Infinity,session.faceLeaseUntilMs??Infinity);
   const buckets = new Map((session.segments || []).map(segment => [segment.date, { ...segment }]));
   let hourlySeconds = session.hourlySeconds || {};
   if (session.activeSinceMs != null) {

@@ -1,6 +1,6 @@
 import {createSocialCode,normalizeSocialCode,isShortSocialCode} from './social-code.js';
-import {FieldValue} from 'firebase-admin/firestore';
-import {HttpsError} from 'firebase-functions/v2/https';
+import {FieldValue} from './platform-store.js';
+import {HttpsError} from './platform-http.js';
 import {schoolRoomInfo} from './integrations-domain.js';
 import {roomStudyTotals,roomStudyMember,roomRankings} from './room-study.js';
 
@@ -224,8 +224,8 @@ export function publishRoomActivity(tx,activity,uid,profile,session,now,subjectN
   const {ref,room}=activity,previous=room.members[uid];
   const totals=roomStudyTotals(previous,room.studyTotals?.[uid],now);
   const studying=session?.status==='active'&&(!(session.cameraMode||session.activityMode)||session.activeSinceMs!=null);
-  const countUntilMs=studying?Math.min(session.presenceUntilMs,session.startedAt.toMillis()+12*3600000,session.cameraMode||session.activityMode?session.leaseUntilMs:session.presenceUntilMs):now;
-  const member={...roomStudyMember(previous,totals,now),displayName:profile.displayName||'공부 친구',lastSeenMs:now,statusUntilMs:studying?session.presenceUntilMs:now,countUntilMs,status:studying?'studying':'resting',subjectName,activitySource:source};
+  const countUntilMs=studying&&session.verificationType==='face-browser'?Math.min(session.presenceUntilMs,session.startedAt.toMillis()+12*3600000,session.cameraMode||session.activityMode?session.leaseUntilMs:session.presenceUntilMs,session.faceAuthUntilMs??now,session.faceLeaseUntilMs??now):now;
+  const member={...roomStudyMember(previous,totals,now),verificationType:session?.verificationType||'none',displayName:profile.displayName||'공부 친구',lastSeenMs:now,statusUntilMs:studying?session.presenceUntilMs:now,countUntilMs,status:studying?'studying':'resting',subjectName,activitySource:source};
   totals.displayName=member.displayName;
   const patch={members:{...room.members,[uid]:member},studyTotals:{...room.studyTotals,[uid]:totals},...(!isGeneralRoom(room,ref.id)?{deleteAfterMs:now+ROOM_IDLE_MS}:{})};
   tx.update(ref,patch);return patch;

@@ -5,6 +5,7 @@
   "main": "index.js",
   "engines": { "node": "22" },
   "dependencies": {
+    "pg": "^8.16.3",
     "firebase-admin": "14.5.0",
     "firebase-functions": "7.4.0"
   }

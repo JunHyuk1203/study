@@ -1,5 +1,5 @@
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { HttpsError } from 'firebase-functions/v2/https';
+import { FieldValue, Timestamp } from './platform-store.js';
+import { HttpsError } from './platform-http.js';
 
 // Called inside the study completion transaction; never accept a client duration.
 export function creditFocusTime(transaction, db, uid, sessionId, seconds, now) {

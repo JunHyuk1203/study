@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Timestamp } from 'firebase-admin/firestore';
-import { HttpsError } from 'firebase-functions/v2/https';
+import { Timestamp } from './platform-store.js';
+import { HttpsError } from './platform-http.js';
 import { briefingPeriod } from './briefing-period.js';
 
 export async function cachedBriefing({db, user, force = false, now = Date.now, generate}) {

@@ -11,3 +11,7 @@ node_modules/
 *-adminsdk-*.json
 service-account*.json
 dist/
+server/artifacts/
+server/launcher/bin/
+server/launcher/obj/
+.codex-*

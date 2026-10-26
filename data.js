@@ -3,6 +3,7 @@ import {wordLiveSeconds} from './word-time.js?v=20261022-1';
 import { readCache, statsRevision } from './client-cache.js?v=20261024-selfhost1';
 import { showToast } from './notifications.js?v=20261022-18';
 import { cameraController, cameraState, startCamera, stopCamera, openCameraFocus, closeCameraFocus, toggleCameraPause } from './camera.js?v=20261025-8';
+import {faceStudyAuthorization} from './face-session.js';
 
 const historicalSubjects = { korean: '국어', math: '수학', english: '영어', science: '과학', social: '사회' };
 function studySubjects() { return {other:'기타',...Object.fromEntries((state.profile?.subjects || []).map(row => [row.id,row.name]))}; }
@@ -399,7 +400,9 @@ async function syncCamera(force = false, wordChanged = false) {
   const sequence = transition.sequence ??= Math.max(cameraSyncSequence, session.sequence || 0) + 1;
   cameraSyncSequence=Math.max(cameraSyncSequence,sequence);
   try {
-    const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')({ ...transition, sequence, contractVersion:'2026-10-24' });
+    const syncData={...transition,sequence,contractVersion:'2026-10-24'};
+    if(session.cameraMode)syncData.faceAuthorization=await faceStudyAuthorization(syncData);
+    const result = await call(session.cameraMode?'syncStudyCamera':'heartbeatStudySession')(syncData);
     if(requestEpoch!==cameraSyncEpoch||state.profile?.activeSessionId!==sessionId)return;
     observeCameraReply(result?.data, sessionId);
     if(result?.data?.session?.canResume===false){await call('finishStudySession')({sessionId});if(requestEpoch===cameraSyncEpoch)leaveEndedStudy();return;}
@@ -611,13 +614,15 @@ document.addEventListener('click', async event => {
     if (starting) {
       const subjectId = document.querySelector('[data-study-subject]')?.value || 'other';
       const cameraMode = cameraState().enabled;
-      const result = await call('startStudySession')({ subjectId, cameraMode, controllerId: cameraController });
+      const startData={subjectId,cameraMode,controllerId:cameraController};
+      if(cameraMode)startData.faceAuthorization=await faceStudyAuthorization(startData);
+      const result = await call('startStudySession')(startData);
       if (result.data?.session) {
         state.profile = { ...state.profile, activeSessionId: result.data.sessionId };
         observeCameraReply(result.data, result.data.sessionId);
         if (cameraMode) {activeUnsubscribe?.();activeUnsubscribe=undefined;}
       }
-      notice(cameraMode ? '' : '학습을 시작했습니다. 종료를 누르면 기록이 저장됩니다.');
+      notice(cameraMode ? '' : '수동 학습을 시작했습니다. 얼굴 확인 보상과 순위에는 반영되지 않습니다.');
     } else {
       finishingSession = true;
       notice('서버에 저장 중…',false,false);

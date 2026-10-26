@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { HttpsError } from 'firebase-functions/v2/https';
-import { Timestamp } from 'firebase-admin/firestore';
+import { HttpsError } from './platform-http.js';
+import { Timestamp } from './platform-store.js';
 import { appendGoal, goalInput, planSubjects, subjectName } from './plan-domain.js';
 
 // Every write is scoped to the authenticated owner and serialized on their profile.

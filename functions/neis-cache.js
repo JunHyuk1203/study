@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { HttpsError } from 'firebase-functions/v2/https';
+import { HttpsError } from './platform-http.js';
 
 const rangeFields={SchoolSchedule:['AA_FROM_YMD','AA_TO_YMD','AA_YMD'],mealServiceDietInfo:['MLSV_FROM_YMD','MLSV_TO_YMD','MLSV_YMD']};
 for(const endpoint of ['elsTimetable','misTimetable','hisTimetable','spsTimetable'])rangeFields[endpoint]=['TI_FROM_YMD','TI_TO_YMD','ALL_TI_YMD'];

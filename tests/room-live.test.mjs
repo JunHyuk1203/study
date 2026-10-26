@@ -1,7 +1,8 @@
 import test,{before} from 'node:test';
 import assert from 'node:assert/strict';
 import {getFirestore} from '../functions/node_modules/firebase-admin/lib/firestore/index.js';
-import {ensureProfile,startStudySession,syncStudyCamera,finishStudySession,getStudySocial,updateStudySocial,expireStudySessions,startWordStudy,syncWordStudy} from '../functions/index.js';
+import {ensureProfile,startStudySession as realStartStudySession,syncStudyCamera as realSyncStudyCamera,finishStudySession,getStudySocial,updateStudySocial,expireStudySessions,startWordStudy,syncWordStudy} from '../functions/index.js';
+import {faceCallable} from './face-fixtures.mjs';
 import {memberStatus} from '../room-time.js';
 
 before(()=>{
@@ -9,6 +10,7 @@ before(()=>{
   assert.equal(process.env.GCLOUD_PROJECT,'demo-study');
 });
 const db=()=>getFirestore('study-data');
+const startStudySession=faceCallable(realStartStudySession,db),syncStudyCamera=faceCallable(realSyncStudyCamera,db);
 const controllerId='12345678-1234-1234-1234-123456789abc';
 const auth=uid=>({uid,token:{email_verified:true}});
 const social=(uid,action,data={})=>updateStudySocial.run({auth:auth(uid),data:{action,...data}});

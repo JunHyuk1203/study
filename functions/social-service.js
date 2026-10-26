@@ -1,6 +1,6 @@
 import {createSocialCode,normalizeSocialCode,isShortSocialCode} from './social-code.js';
-import {FieldValue} from 'firebase-admin/firestore';
-import {HttpsError} from 'firebase-functions/v2/https';
+import {FieldValue} from './platform-store.js';
+import {HttpsError} from './platform-http.js';
 import {schoolRoomInfo} from './integrations-domain.js';
 import {changeRoom,roomDirectory,syncRoom} from './room-service.js';
 

@@ -1,7 +1,7 @@
 import {getApps,initializeApp} from 'firebase-admin/app';
 import {getAuth} from 'firebase-admin/auth';
-import {getFirestore,Timestamp} from 'firebase-admin/firestore';
-import {onCall} from 'firebase-functions/v2/https';
+import {getFirestore,Timestamp} from './platform-store.js';
+import {onCall} from './platform-http.js';
 import {createWordLinkService} from './word-link-service.js';
 
 const studyApp=getApps().find(app=>app.name==='[DEFAULT]')??initializeApp();

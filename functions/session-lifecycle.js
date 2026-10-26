@@ -1,5 +1,5 @@
-import {FieldValue, Timestamp} from 'firebase-admin/firestore';
-import {HttpsError} from 'firebase-functions/v2/https';
+import {FieldValue, Timestamp} from './platform-store.js';
+import {HttpsError} from './platform-http.js';
 import {advanceStreak, checkpointCamera, MAX_SESSION_MS, WORD_LEASE_MS, splitStudyInterval} from './domain.js';
 import {creditFocusTime} from './focus-time.js';
 import {settleWordStats} from './word-stats.js';
@@ -49,10 +49,10 @@ export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) 
       transaction.set(db.doc(path), { uid, totalSeconds: FieldValue.increment(seconds), subjectSeconds: { [session.subjectId]: FieldValue.increment(seconds) }, updatedAt: now }, { merge: true });
     }
     if (creditedSeconds > 0) {
-      creditFocusTime(transaction, db, uid, sessionId, creditedSeconds, now);
+      if(session.verificationType==='face-browser')creditFocusTime(transaction, db, uid, sessionId, creditedSeconds, now);
       const streak = advanceStreak(summaryDoc.data() ?? {}, segments.map(segment => segment.date));
       transaction.set(summaryRef, { uid, totalSeconds: FieldValue.increment(creditedSeconds), sessionCount: FieldValue.increment(1), ...streak, updatedAt: now }, { merge: true });
-      for (const [week, seconds] of weeks) {
+      for (const [week, seconds] of session.verificationType==='face-browser'?weeks:[]) {
         const ranking = { uid, displayName: profile.displayName, totalSeconds: FieldValue.increment(seconds), updatedAt: now };
         transaction.set(db.doc(`leaderboards/${week}/entries/${uid}`), ranking, { merge: true });
         if (profile.schoolId) transaction.set(db.doc(`schoolLeaderboards/${profile.schoolId}/weeks/${week}/entries/${uid}`), ranking, { merge: true });

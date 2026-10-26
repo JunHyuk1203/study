@@ -1,0 +1,1 @@
+Run prepare-runtime.ps1 before publishing the distributable EXE.

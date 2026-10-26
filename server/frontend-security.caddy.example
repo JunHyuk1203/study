@@ -1,0 +1,16 @@
+# Serve only the fresh allowlisted output of prepare-frontend.ps1.
+# Set STUDY_FRONTEND_ROOT to that directory; never use the repository checkout.
+# This is a separate frontend host example, not the existing API Caddyfile.
+study.junhyuk.site {
+ root * {$STUDY_FRONTEND_ROOT}
+ header {
+  X-Content-Type-Options nosniff
+  X-Frame-Options DENY
+  Referrer-Policy no-referrer
+  Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+  Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com/firebasejs/13.0.0/ https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/ https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/ https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/; connect-src 'self' https://api.study.junhyuk.site https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/ https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/ https://cdn.jsdelivr.net/npm/@vladmandic/human@3.3.6/models/ https://storage.googleapis.com/tfjs-models/ https://storage.googleapis.com/mediapipe-models/; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self' blob:; frame-src https://study-junhyuk1203-20261021.firebaseapp.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+ }
+ @identity path /auth.js /face-*.js /camera-*.js /functions/face-protocol.js
+ header @identity Cache-Control no-cache
+ file_server
+}

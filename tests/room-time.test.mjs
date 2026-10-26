@@ -65,7 +65,7 @@ test('room sync preserves active camera status across a delayed credit heartbeat
 const at=text=>Date.parse(`${text}+09:00`);
 function count(member,totals,now,tracking=true,lease=10000) {
   const settled=roomStudyTotals(member,totals,now);
-  return {totals:settled,member:{...roomStudyMember(member,settled,now),status:tracking?'studying':'resting',countUntilMs:tracking?now+lease:now}};
+  return {totals:settled,member:{...roomStudyMember(member,settled,now),verificationType:'face-browser',status:tracking?'studying':'resting',countUntilMs:tracking?now+lease:now}};
 }
 test('room ledger excludes pre-join time, survives sessions and rejoining, and does not count absence or expired leases',()=>{
   const start=at('2026-10-23T12:00:00');

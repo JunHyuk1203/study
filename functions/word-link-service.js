@@ -1,4 +1,4 @@
-import {HttpsError} from 'firebase-functions/v2/https';
+import {HttpsError} from './platform-http.js';
 
 // Dependencies are injected so account ownership and restoration can be tested.
 export function createWordLinkService({db,verifyWordToken,getStudyUser,mintToken,now}) {

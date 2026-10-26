@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { defineSecret } from 'firebase-functions/params';
+import { getFirestore, Timestamp } from './platform-store.js';
+import { onCall, HttpsError } from './platform-http.js';
+import { defineSecret } from './platform-secrets.js';
 import { schoolCodes, classroom, neisRows, schoolRecord, chatContents, schoolDates, schoolCalendarRange } from './integrations-domain.js';
 import { generateForUser, usageFor } from './ai-service.js';
 import { schoolMonth, loadSchoolData, loadUpcomingExams } from './school-service.js';

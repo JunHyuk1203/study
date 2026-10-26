@@ -7,6 +7,28 @@ let resolved = false;
 
 export function getAuthUser() { return currentUser; }
 
+// A token refresh alone must never satisfy daily reauthentication.
+export async function reauthenticateFaceAccount({password='',getTotpCode}={}) {
+  const sdk=await authReady,user=getAuthUser();
+  if(!sdk||!user)throw new Error('계정으로 로그인해 주세요.');
+  const uid=user.uid;
+  try {
+    if(user.providerData.some(row=>row.providerId==='password'))await sdk.reauthenticateWithCredential(user,sdk.EmailAuthProvider.credential(user.email,password));
+    else if(user.providerData.some(row=>row.providerId==='google.com')){
+      const provider=new sdk.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});
+      await sdk.reauthenticateWithPopup(user,provider);
+    }else throw new Error('이 계정의 로그인 제공자는 얼굴 등록을 지원하지 않습니다.');
+  }catch(error){
+    if(error.code!=='auth/multi-factor-auth-required')throw new Error(friendlyError(error));
+    const resolver=sdk.getMultiFactorResolver(sdk.auth,error),hint=resolver.hints.find(row=>row.factorId===sdk.TotpMultiFactorGenerator.FACTOR_ID);
+    if(!hint||!getTotpCode)throw new Error('지원하는 TOTP 인증 수단이 필요합니다. 계정 관리자에게 문의해 주세요.');
+    const code=await getTotpCode();
+    await resolver.resolveSignIn(sdk.TotpMultiFactorGenerator.assertionForSignIn(hint.uid,code));
+  }
+  if(getAuthUser()?.uid!==uid)throw new Error('계정이 변경되었습니다. 다시 시작해 주세요.');
+  await user.getIdToken(true);
+}
+
 function message(text, error = false) {
   const status = document.querySelector('[data-auth-status]');
   if (!status) return;
@@ -161,6 +183,7 @@ document.addEventListener('click', async event => {
       await services.signInWithPopup(services.auth, provider);
       window.location.assign('account.html');
     } else if (action === 'logout') {
+      window.dispatchEvent(new Event('study:before-logout'));
       await services.signOut(services.auth);
       message('로그아웃했습니다.');
     } else if (action === 'verify-email') {

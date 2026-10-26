@@ -18,82 +18,64 @@ test('phone class survives a higher person score and retains sub-threshold diagn
   assert.equal(result.filter(item=>item.class==='cell phone').length,2);
   assert.ok(result[0].score>.34);assert.ok(result[1].score<.06);
 });
-test('enrolled local face descriptors reject another face without replacing the owner',()=>{
+test('encrypted-profile matcher keeps its owner and requires fresh observations',()=>{
   const owner=Array(1024).fill(0),other=[...owner];owner[0]=1;other[1]=1;
-  const matcher=createIdentityMatcher();
-  assert.equal(matcher.observe(owner).status,'enrolling');matcher.observe(owner);
+  const matcher=createIdentityMatcher(Array(12).fill(owner));
+  for(let i=0;i<4;i++)assert.equal(matcher.observe(owner).matched,false);
   assert.equal(matcher.observe(owner).matched,true);
   assert.equal(matcher.observe(other).status,'mismatch');
-  assert.equal(matcher.observe(owner).matched,true);
-  assert.deepEqual(createIdentityMatcher(matcher.samples).observe(other).matched,false);
-  for(const [score,expected] of [[.6499,false],[.65,true],[.6501,true]]){
-    const descriptor=Array(1024).fill(0);descriptor[0]=score;descriptor[1]=Math.sqrt(1-score*score);
-    assert.equal(matcher.observe(descriptor).matched,expected,`similarity ${score}`);
-  }
+  assert.deepEqual(matcher.samples,Array(12).fill(owner));
+  assert.equal(createIdentityMatcher().observe(owner).matched,false);
 });
-test('study continues while verifying identity and warns only after eight seconds',()=>{
+
+test('identity warning waits eight seconds while all unverified time is held',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,{...healthy,identity:{matched:true,status:'matched',enrolled:true}},0,2000);
-  for(let t=2200;t<10200;t+=200){
-    const result=tracker.update(wrong,t);assert.equal(result.status,'tracking');assert.equal(Boolean(result.identityWarning),false);
-  }
-  assert.equal(tracker.update(wrong,10199).tracking,true);
+  for(let t=2200;t<10200;t+=200){const result=tracker.update(wrong,t);assert.equal(result.tracking,false);assert.equal(Boolean(result.identityWarning),false);}
   assert.equal(tracker.update(wrong,10200).identityWarning,true);
   const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},10400);
   assert.equal(restored.status,'scanning');assert.equal(Boolean(restored.identityWarning),false);
   for(const status of ['enrolling','checking','missing','multiple']){
-    const enrollment=createFocusTracker();
     const signals={...healthy,face:status!=='missing',identity:{matched:false,status,enrolled:false}};
-    const result=advance(enrollment,signals,0,20000,200);
-    assert.equal(result.status,'scanning');assert.equal(result.identityWarning,false);assert.equal(result.message,'인식 중…');
+    assert.equal(createFocusTracker().update(signals,0).tracking,false);
   }
 });
-test('face loss has exactly five seconds of grace and any returning face restarts before owner verification',()=>{
-  const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
-  const owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
-  advance(tracker,owner,0,2000);
-  const absent={...healthy,face:false,identity:{matched:false,status:'missing',enrolled:true}};
-  assert.equal(advance(tracker,absent,2500,7000).tracking,true);
-  assert.equal(tracker.update(absent,7499).tracking,true);
-  assert.equal(tracker.update(absent,7500).tracking,false);
-  assert.equal(tracker.update(wrong,7700).tracking,true);
-  assert.equal(advance(tracker,wrong,7900,15500,200).tracking,true);
-  assert.equal(tracker.update(wrong,15699).tracking,true);
-  assert.equal(tracker.update(wrong,15700).identityWarning,true);
-});
-test('only a recognized owner clears the continuous study verification deadline',()=>{
+test('five second absence grace affects warning only and never credits an unknown returning face',()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
   const wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,owner,0,2000);
-  advance(tracker,wrong,2200,6000,200);
+  const absent={...healthy,face:false,identity:{matched:false,status:'missing',enrolled:true}};
+  assert.equal(advance(tracker,absent,2500,7000).tracking,false);
+  assert.equal(tracker.update(absent,7499).status,'scanning');
+  assert.equal(tracker.update(absent,7500).status,'paused');
+  assert.equal(tracker.update(wrong,7700).tracking,false);
+  assert.equal(advance(tracker,wrong,7900,15500,200).tracking,false);
+  assert.equal(tracker.update(wrong,15700).identityWarning,true);
+});
+test('only the recognized owner clears a continuous mismatch deadline',()=>{
+  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}},wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
+  advance(tracker,owner,0,2000);advance(tracker,wrong,2200,6000,200);
   tracker.update({...wrong,identity:{matched:false,status:'checking',enrolled:true}},6200);
   assert.equal(advance(tracker,wrong,6400,10200,200).identityWarning,true);
   assert.equal(Boolean(tracker.update(owner,10400).identityWarning),false);
   assert.equal(advance(tracker,owner,10600,12400,200).tracking,true);
-  assert.equal(advance(tracker,wrong,12600,20400,200).tracking,true);
+  assert.equal(advance(tracker,wrong,12600,20400,200).tracking,false);
   assert.equal(tracker.update(wrong,20600).identityWarning,true);
 });
-test('face returning inside grace resumes immediately without requiring owner motion',()=>{
-  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched'}};
-  advance(tracker,owner,0,2000);
-  advance(tracker,{...owner,face:false,identity:{matched:false,status:'missing'}},2500,5500);
-  assert.equal(tracker.update({...owner,identity:{matched:false,status:'mismatch'}},5700).tracking,true);
-  assert.equal(advance(tracker,owner,5900,8500,200).tracking,true);
-});
-for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`face grace keeps tracking for invalid or incomplete results: ${JSON.stringify(loss)}`,()=>{
+for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`invalid observations hold credit during face grace: ${JSON.stringify(loss)}`,()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
   advance(tracker,owner,0,2000);
-  assert.equal(advance(tracker,loss,2200,7000,200).tracking,true);
-  assert.equal(tracker.update(loss,7199).tracking,true);
+  assert.equal(advance(tracker,loss,2200,7000,200).tracking,false);
+  assert.equal(tracker.update(loss,7199).tracking,false);
   assert.equal(tracker.update(loss,7200).tracking,false);
   assert.equal(tracker.update(owner,7400).tracking,true);
 });
-test('an initial unverified face gets eight seconds only after study actually starts',()=>{
+test('an initial unverified face never starts credit',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'checking',enrolled:true}};
   assert.equal(tracker.update(wrong,0).tracking,false);
-  assert.equal(tracker.update(wrong,2000).tracking,true);
-  assert.equal(advance(tracker,wrong,2200,9800,200).tracking,true);
-  assert.equal(tracker.update(wrong,10000).identityWarning,true);
+  assert.equal(tracker.update(wrong,2000).tracking,false);
+  assert.equal(advance(tracker,wrong,2200,7800,200).tracking,false);
+  assert.equal(tracker.update(wrong,8000).identityWarning,true);
 });
 test('sleep and phone counters remain visible together with the idle timer',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
@@ -211,10 +193,10 @@ for (const [reason, signals, delay] of [
   const tracker = createFocusTracker();
   assert.equal(advance(tracker, healthy, 0, 2000).tracking, true);
   const pending = tracker.update(signals, 2500);
-  assert.equal(pending.tracking, true);
-  assert.equal(pending.status, 'tracking');
+  assert.equal(pending.tracking, reason!=='away');
+  assert.equal(pending.status, reason==='away'?'scanning':'tracking');
   const before=advance(tracker,signals,2750,2500+delay-250,250);
-  assert.equal(before.tracking,true);assert.notEqual(before.status,'paused');
+  assert.equal(before.tracking,reason!=='away');assert.notEqual(before.status,'paused');
   const warned = tracker.update(signals,2500+delay);
   assert.equal(warned.reason, reason);
   assert.equal(warned.status, 'paused');
@@ -367,14 +349,14 @@ test('small sustained neck turns and tilts release idle without waiting for larg
 test('phone confirmation takes priority when the phone covers the face', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const covered={...healthy,face:false,body:false,phoneUse:true};
-  assert.equal(tracker.update(covered,2250).tracking,true);
+  assert.equal(tracker.update(covered,2250).tracking,false);
   const state=tracker.update(covered,3000);
   assert.equal(state.reason,'phone');assert.equal(state.tracking,false);assert.equal(state.status,'paused');
 });
 test('missing/partial observations use bounded grace and long gaps cannot keep crediting time', () => {
   for (const signals of [null, {}, { ...healthy, reliable: false }]) {
     const tracker = createFocusTracker(); advance(tracker, healthy, 0, 2000);
-    assert.equal(tracker.update(signals, 2500).tracking, true);
+    assert.equal(tracker.update(signals, 2500).tracking, false);
     assert.equal(advance(tracker,signals,3000,7500).tracking,false);
   }
   const tracker = createFocusTracker(); advance(tracker, healthy, 0, 2000);
@@ -384,17 +366,17 @@ test('missing/partial observations use bounded grace and long gaps cannot keep c
 });
 test('face loss with visible shoulders uses the same uninterrupted five-second grace', () => {
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
-  assert.equal(tracker.update({...healthy,face:false,body:true},2500).tracking,true);
-  assert.equal(advance(tracker,{...healthy,face:false,body:false},3000,7000).tracking,true);
+  assert.equal(tracker.update({...healthy,face:false,body:true},2500).tracking,false);
+  assert.equal(advance(tracker,{...healthy,face:false,body:false},3000,7000).tracking,false);
   const paused=tracker.update({...healthy,face:false,body:true},7500);
   assert.equal(paused.reason,'away');assert.equal(paused.status,'paused');assert.equal(paused.tracking,false);
 });
-test('brief face losses neither stop tracking nor reset the idle observation clock', () => {
+test('brief face losses hold credit without resetting the idle observation clock', () => {
   const tracker=createFocusTracker();let state;
   for(let t=0;t<=23000;t+=500){
     const missing=t===10000||t===15000;
     state=tracker.update({...healthy,face:!missing,body:true},t);
-    if(t>=2000&&t<IDLE_AT)assert.equal(state.tracking,true);
+    if(t>=2000&&t<IDLE_AT)assert.equal(state.tracking,!missing);
   }
   assert.equal(state.reason,'idle');
 });
@@ -570,8 +552,8 @@ test('controller propagates behavior pauses, ignores stale results and auto resu
   assert.equal(send(2200,{...healthy,phoneUse:true}).tracking,true);
   assert.equal(send(3800,{...healthy,phoneUse:true}).reason,'phone');
   send(4000); assert.equal(send(6000).tracking,true);
-  assert.equal(send(9001,healthy,6000).tracking,true);
-  for(let t=9501;t<14001;t+=500)assert.equal(send(t,healthy,6000).tracking,true);
+  assert.equal(send(9001,healthy,6000).tracking,false);
+  for(let t=9501;t<14001;t+=500)assert.equal(send(t,healthy,6000).tracking,false);
   assert.equal(send(14001,healthy,6000).tracking,false);
   assert.ok(events>=5);
 });

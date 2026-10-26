@@ -64,6 +64,7 @@ export function createFocusTracker() {
       healthySince=now-FOCUS_LIMITS.resume;
       if(warning==='away')warning=null;
     }
+    if(visible&&!enrolling&&!ownerReady)identityFailureSince??=now;
     const identityWarning=Boolean(visible&&!enrolling&&!ownerReady&&identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity);
     if(warning==='identity'&&!identityWarning)warning=null;
     if (!valid || !ownerReady || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
@@ -78,17 +79,17 @@ export function createFocusTracker() {
       resumeOnFace ||= trackingNow;
       const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
       if(expired){healthySince=null;trackingNow=false;warning='away';identityFailureSince=null;}
-      return {tracking:trackingNow&&!warning,status:expired?'paused':trackingNow?'tracking':'scanning',reason:expired?'away':null,
+      return {tracking:false,status:expired?'paused':'scanning',reason:expired?'away':null,
         identityWarning:false,message:expired?FOCUS_MESSAGES.away:'얼굴 인식 유예 중 · 5초 안에 얼굴을 보여 주세요'};
     }
     if(!valid && identityKnown){
       healthySince=null;trackingNow=false;warning=null;
       return {tracking:false,status:'scanning',reason:'identity',identityWarning:false,message:'인식 중…'};
     }
-    if(valid && identity && (enrolling || identityWarning)){
+    if(valid && identity && (enrolling || !ownerReady)){
       healthySince=null;trackingNow=false;warning=identityWarning?'identity':null;
       return {tracking:false,status:identityWarning?'paused':'scanning',reason:'identity',identityWarning,
-        message:identityWarning?'등록한 얼굴과 다릅니다 · 본인이 돌아오면 자동 재개됩니다':'인식 중…'};
+        message:identityWarning?'등록한 얼굴과 다릅니다 · 본인이 돌아오면 자동 재개됩니다':'본인 확인 중 · 학습시간 보류'};
     }
     const sleepConfirmed=visible&&signals.eyesClosed&&elapsedFor('sleep')>=FOCUS_LIMITS.sleep;
     const awayConfirmed=valid&&!signals.face&&elapsedFor('away')>=FOCUS_LIMITS.away;

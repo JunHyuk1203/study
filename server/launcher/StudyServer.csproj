@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeFrameworkVersion>8.0.32</RuntimeFrameworkVersion>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+    <AssemblyName>StudyServer</AssemblyName>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <EmbeddedResource Include="..\artifacts-placeholder.txt" Condition="!Exists('..\artifacts\payload.zip')" />
+    <EmbeddedResource Include="..\artifacts\payload.zip" LogicalName="study-payload.zip" Condition="Exists('..\artifacts\payload.zip')" />
+    <EmbeddedResource Include="..\artifacts\embedded-settings.json" LogicalName="study-private-settings.json" Condition="'$(IncludePrivateSettings)' == 'true'" />
+  </ItemGroup>
+</Project>

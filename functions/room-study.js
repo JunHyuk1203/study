@@ -9,7 +9,7 @@ export function roomStudyTotals(member,previous={},now=Date.now()) {
     const saved=previous[period]?.key===key?previous[period].ms||0:0;
     const from=Math.max(member?.sampledAtMs??now,member?.joinedAtMs??now,Date.parse(`${start}T00:00:00+09:00`));
     const until=Math.min(now,member?.countUntilMs??from);
-    const pending=member?.roomTimer&&member.status==='studying'?Math.max(0,until-from):0;
+    const pending=member?.roomTimer&&member.status==='studying'&&member.verificationType==='face-browser'?Math.max(0,until-from):0;
     totals[period]={key,ms:saved+pending};
   }
   return totals;

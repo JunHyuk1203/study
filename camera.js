@@ -1,6 +1,7 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
 import { createFocusTracker } from './camera-focus.js?v=20261025-8';
 import { paintCameraDebug } from './camera-debug.js?v=20261025-8';
+import {prepareFaceSession,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 // Rollback switch: false selects the previous search and temporal policy together.
@@ -148,6 +149,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   revision++;
   frameEpoch++;
   enabled = false; ready = false; inFlight = false; manuallyPaused = false;
+  if(typeof lockFaceSession==='function')lockFaceSession(text);
   lastVideoTime = -1;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
   worker?.terminate(); worker = null;
@@ -199,13 +201,17 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261025-8', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261026-face1', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
     if (token !== revision || worker !== target) return;
     if (data.epoch != null && data.epoch !== frameEpoch) return;
-    if (data.type === 'error') { recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
+    if(data.type==='face-rpc'){
+      void handleFaceWorkerRPC(data.action,data.data).then(result=>{if(worker===target&&token===revision)target.postMessage({type:'face-rpc-result',id:data.id,result});}).catch(error=>{if(worker===target&&token===revision)target.postMessage({type:'face-rpc-result',id:data.id,error:error.message||'얼굴 보안 요청에 실패했습니다.'});});return;
+    }
+    if(data.type.startsWith('face-')){handleFaceWorkerEvent(data);return;}
+    if (data.type === 'error') { if(typeof handleFaceWorkerEvent==='function')handleFaceWorkerEvent({type:'face-progress',state:'RECOVERY_REQUIRED',label:data.message||'얼굴 확인에 실패했습니다. 취소 후 다시 시도해 주세요.'});recoverRecognition(token, `${data.stage}: ${data.message}`); return; }
     if (data.type === 'ready') { ready = true; clearTimeout(loadingDeadline); lastResult = performance.now(); }
     if (data.type === 'result') acceptResult(data);
     if (data.type === 'phone-observation') {
@@ -214,7 +220,7 @@ function startRecognitionWorker(token, light = false) {
     }
   };
   loadingDeadline = setTimeout(() => { if (worker === target) recoverRecognition(token, 'Worker initialization timed out'); }, 60000);
-  target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}` });
+  target.postMessage({ type: 'init', light, phoneRedesign, identityKey:`${cameraController}:${token}`,faceSecurity:typeof faceWorkerContext==='function'?faceWorkerContext():null });
 }
 function recoverRecognition(token, detail) {
   if (token !== revision || !enabled) return;
@@ -284,10 +290,13 @@ export async function startCamera() {
   enabled = true;
   setStatus('opening', '카메라 권한을 확인하는 중…');
   try {
+    await prepareFaceSession();
+    if(token!==revision)return false;
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
     const incoming = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 24 } } });
     if (token !== revision) { incoming.getTracks().forEach(track => track.stop()); return false; }
     stream = incoming; video.srcObject = stream;
+    attachFacePreview(stream);
     document.body.append(video);
     for (const track of stream.getVideoTracks()) {
       track.addEventListener('ended', () => { if (token === revision) stopCamera('카메라 연결이 끊겼습니다. 다시 켜 주세요.', true); });
@@ -308,7 +317,7 @@ export async function startCamera() {
   } catch (error) {
     if (token !== revision) return false;
     const messages = { NotAllowedError: '카메라 권한을 허용한 뒤 다시 켜 주세요.', NotFoundError: '연결된 웹캠을 찾지 못했습니다.', NotReadableError: '다른 앱의 카메라 사용을 종료하고 다시 켜 주세요.' };
-    stopCamera(messages[error.name] || '카메라를 켜지 못했습니다. HTTPS와 브라우저 권한을 확인해 주세요.', true);
+    stopCamera(messages[error.name] || error.message || '카메라를 켜지 못했습니다. HTTPS와 브라우저 권한을 확인해 주세요.', true);
     return false;
   }
 }
@@ -323,6 +332,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) resumeCameraRecognition();
 });
 window.addEventListener('pageshow', event => { if (event.persisted) resumeCameraRecognition(); });
+window.addEventListener('study:face-locked',event=>{if(enabled)stopCamera(event.detail?.reason||'계정과 얼굴을 다시 확인해 주세요.',true);});
 window.addEventListener('study:navigated', () => {
   if (!document.querySelector('.app > main [data-camera]') && enabled) stopCamera();
   if (!document.querySelector('.app > main [data-camera]') && focusPanel) void closeCameraFocus();

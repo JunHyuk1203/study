@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
-import { HttpsError } from 'firebase-functions/v2/https';
+import { getFirestore, Timestamp, FieldValue } from './platform-store.js';
+import { HttpsError } from './platform-http.js';
 import { allowance, MODELS, parseExchangeRate, tokenCost } from './ai-budget.js';
 import { schoolDates } from './integrations-domain.js';
 const db=getFirestore(getApps()[0]??initializeApp(),'study-data');
