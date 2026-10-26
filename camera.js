@@ -5,6 +5,8 @@ import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
+export const CAMERA_INFERENCE_INTERVAL_MS=100;
+let lastFrameRequestAt=-Infinity;
 // Rollback switch: false selects the previous search and temporal policy together.
 const phoneRedesign = true;
 let latestFaceResult=null,latestPhoneObservation=null,latestPhoneSearch=null;
@@ -246,9 +248,10 @@ function recoverRecognition(token, detail) {
 }
 async function frame(token, epoch = frameEpoch) {
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
-  if (ready && !inFlight && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+  if (ready && !inFlight && cameraVisible() && video.readyState >= 2 && video.currentTime !== lastVideoTime && performance.now()-lastFrameRequestAt>=CAMERA_INFERENCE_INTERVAL_MS) {
     lastVideoTime = video.currentTime;
     inFlight = true;
+    lastFrameRequestAt=performance.now();
     try {
       const target = worker;
       const capturedAt=performance.now();
@@ -259,7 +262,7 @@ async function frame(token, epoch = frameEpoch) {
     } catch (error) { inFlight = false; void recoverRecognition(token, error.message); }
   }
   if (!enabled || token !== revision || epoch !== frameEpoch) return;
-  loop = setTimeout(() => frame(token, epoch), 200);
+  loop = setTimeout(() => frame(token, epoch), CAMERA_INFERENCE_INTERVAL_MS);
 }
 function startCameraWatchdog(token) {
   clearInterval(watchdog);
