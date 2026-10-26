@@ -306,6 +306,7 @@ function cameraPageHidden(){return document.hidden;}
 function cameraTimerMessage(camera) {
   if (finishingSession) return '서버에 저장 중…';
   if(camera.enabled&&camera.identityPhase==='enrolling'&&!camera.manuallyPaused)return '얼굴 등록 중…';
+  if(camera.enabled&&camera.identityPhase==='loading'&&!camera.manuallyPaused)return '저장된 얼굴 정보 불러오는 중…';
   if (wordAppInUse()) return 'SP word 사용 중 · 얼굴인식 학습시간 일시정지';
   if (camera.manuallyPaused) return '사용자가 수동으로 일시정지했습니다 · 재개 버튼을 눌러 주세요';
   if (cameraSyncFailed) return '서버 연결을 확인하는 중 · 학습 시간 적립 일시정지';
@@ -381,7 +382,7 @@ function paintTimer() {
 async function syncCamera(force = false, wordChanged = false) {
   const session = state.active;
   if (!session || session.activityMode || session.controllerId !== cameraController || !call || busy) return;
-  if(session.cameraMode&&!cameraState().enabled)return;
+  if(session.cameraMode&&(!cameraState().enabled||cameraState().enrollmentOnly))return;
   const sessionId = state.profile?.activeSessionId;
   if (!sessionId) return;
   if (cameraSyncId !== sessionId) { cameraSyncId = sessionId; cameraSyncSequence = 0; cameraLastSync = 0; cameraLastTracking = null; cameraSyncFailed = false;cameraSyncFailures=0;cameraRetryAt=0;cameraLastAttemptTracking=null;cameraTransitions=[]; }

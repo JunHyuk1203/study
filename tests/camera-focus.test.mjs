@@ -53,7 +53,7 @@ test('missing faces and unknown returning faces share one uninterrupted ten seco
   const expired=tracker.update(wrong,12500);assert.equal(expired.identityWarning,true);assert.equal(expired.tracking,false);
 });
 test('only the recognized owner clears a continuous mismatch deadline',()=>{
-  const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}},wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
+  const tracker=createFocusTracker(),owner={...healthy,studyActivity:true,identity:{matched:true,status:'matched',enrolled:true}},wrong={...healthy,studyActivity:true,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,owner,0,2000);advance(tracker,wrong,2200,6000,200);
   tracker.update({...wrong,identity:{matched:false,status:'checking',enrolled:true}},6200);
   assert.equal(advance(tracker,wrong,6400,12200,200).identityWarning,true);
@@ -79,6 +79,17 @@ test('learning can start before the first match but an unrecognized face pauses 
   assert.equal(tracker.update(wrong,9999).tracking,true);
   assert.equal(tracker.update(wrong,10000).identityWarning,true);
 });
+test('idle and gaze observation continue after identity failure pauses the timer',()=>{
+  const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,enrolled:true,status:'mismatch'}};
+  for(let now=0;now<=16000;now+=200)tracker.update(wrong,now);
+  const idle=tracker.getDebug().rows.find(row=>row.key==='idle');
+  assert.equal(idle.active,true);assert.equal(idle.blocked,null);assert.ok(idle.elapsedMs>=15000);
+  assert.equal(tracker.getDebug().gaze.tracking,true);
+  assert.equal(tracker.update(wrong,16200).tracking,false);
+  const moving={...wrong,activityVector:[.7,.5,.5,.5,0,.4,0,0,0]};advance(tracker,moving,16400,17200,200);
+  assert.ok(tracker.getDebug().rows.find(row=>row.key==='idle').elapsedMs<15000);
+});
+
 test('sleep and phone counters remain visible together with the idle timer',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);
   const both={...healthy,eyesClosed:true,phoneUse:true};tracker.update(both,2200);tracker.update(both,3000);

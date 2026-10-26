@@ -557,6 +557,8 @@ test('camera setup and synchronization use a normal pending state while real fai
   vm.runInContext('paintTimer();',context);
   assert.equal(classes.has('camera-pending'),true);assert.equal(classes.has('camera-paused'),false);
   assert.equal(message.textContent,'얼굴 등록 중…');
+  camera.identityPhase='loading';vm.runInContext('paintTimer();',context);
+  assert.equal(message.textContent,'저장된 얼굴 정보 불러오는 중…');
 });
 
 test('normal camera termination shows saving without paused error styling until the server replies',async()=>{

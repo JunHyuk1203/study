@@ -15,11 +15,25 @@ test('camera startup waits for encrypted profile readiness without requiring a f
   const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>0},window:{addEventListener(){},dispatchEvent(){}},
     navigator:{mediaDevices:{getUserMedia:async()=>stream}},prepareFaceSession:async()=>{},attachFacePreview(){},
     waitForFaceSessionReady:()=>{waiting=true;return new Promise(resolve=>{finishVerification=resolve;});}});
-  vm.runInContext(`${source}\nstartRecognitionWorker=()=>{};startCameraWatchdog=()=>{};frame=async()=>{};globalThis.startCamera=startCamera;`,context);
+  vm.runInContext(`${source}\nstartRecognitionWorker=()=>{};startCameraWatchdog=()=>{};frame=async()=>{};globalThis.startCamera=startCamera;globalThis.state=cameraState;`,context);
   const start=context.startCamera().then(result=>{finished=true;return result;});
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(waiting,true);assert.equal(finished,false);
+  assert.equal(waiting,true);assert.equal(finished,false);assert.equal(context.state().identityPhase,'loading');
   finishVerification(true);assert.equal(await start,true);
+});
+
+test('account settings reenrollment replaces the profile without starting a study session',async()=>{
+  const clicks=[],settings={open:true,close(){this.open=false;}},button={disabled:false};let options,toast;
+  const video={setAttribute(){},remove(){}};
+  const document={hidden:false,createElement:()=>video,querySelector:selector=>selector==='#account-settings'?settings:null,addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>0},clearTimeout(){},clearInterval(){},showToast:text=>{toast=text;},window:{addEventListener(){},dispatchEvent(){}}});
+  context.saveOptions=value=>{options=value;};
+  vm.runInContext(`${source}\nstartCamera=async options=>{saveOptions(options);enabled=true;return true;};`,context);
+  for(const click of clicks)await click({target:{closest:selector=>selector==='[data-face-reenroll]'?button:null}});
+  assert.equal(options.replace,true);assert.equal(options.registrationOnly,true);assert.equal(settings.open,false);assert.equal(button.disabled,false);assert.match(toast,/재등록이 완료/);
+  const html=await readFile(new URL('../account.html',import.meta.url),'utf8');
+  assert.match(html,/<dialog[^>]*id="account-settings"[\s\S]*data-face-reenroll[\s\S]*<\/dialog>/);
 });
 
 test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{

@@ -1,6 +1,7 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261026-face6';
+import { createFocusTracker } from './camera-focus.js?v=20261026-face7';
 import { paintCameraDebug } from './camera-debug.js?v=20261025-8';
+import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
@@ -25,6 +26,7 @@ let ready = false, inFlight = false, lastResult = 0, revision = 0, lastVideoTime
 let focusPanel, focusOrigin, previousFocus;
 let morphFrame;
 let manuallyPaused = false;
+let enrollmentOnly=false;
 let companionUntil=0;
 function cameraVisible(){return !document.hidden || performance.now()<companionUntil;}
 export function setCameraCompanion(durationMs){
@@ -32,7 +34,7 @@ export function setCameraCompanion(durationMs){
   if(enabled && !cameraVisible())setStatus('paused','화면을 벗어났습니다 · 일시정지');
 }
 export const cameraController = crypto.randomUUID();
-export function cameraState() { return { enabled, tracking, status, message, reason, manuallyPaused, identityPhase }; }
+export function cameraState() { return { enabled, tracking, status, message, reason, manuallyPaused, identityPhase,enrollmentOnly }; }
 export function toggleCameraPause() {
   if (!enabled) return;
   manuallyPaused = !manuallyPaused;
@@ -152,6 +154,7 @@ export function stopCamera(text = '얼굴 인식으로 학습 시작', error = f
   revision++;
   frameEpoch++;
   enabled = false; ready = false; inFlight = false; manuallyPaused = false;
+  enrollmentOnly=false;
   if(typeof lockFaceSession==='function')lockFaceSession(text);
   lastVideoTime = -1;
   clearTimeout(loop); clearInterval(watchdog); clearTimeout(loadingDeadline);
@@ -286,15 +289,16 @@ function resumeCameraRecognition() {
   startCameraWatchdog(token);
   void frame(token);
 }
-export async function startCamera() {
+export async function startCamera({replace=false,registrationOnly=false}={}) {
   if (enabled) return false;
   const token = ++revision;
-  identityPhase='enrolling';identityStatus=null;
+  identityPhase='loading';identityStatus=null;enrollmentOnly=registrationOnly;
   enabled = true;
   setStatus('opening', '카메라 권한을 확인하는 중…');
   try {
-    await prepareFaceSession();
+    const face=await prepareFaceSession({replace});
     if(token!==revision)return false;
+    identityPhase=face?.ticket?'enrolling':'loading';
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
     const incoming = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 24 } } });
     if (token !== revision) { incoming.getTracks().forEach(track => track.stop()); return false; }
@@ -338,6 +342,17 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pageshow', event => { if (event.persisted) resumeCameraRecognition(); });
 window.addEventListener('study:face-locked',event=>{if(enabled)stopCamera(event.detail?.reason||'계정과 얼굴을 다시 확인해 주세요.',true);});
 window.addEventListener('study:face-capture',()=>{if(enabled&&worker)worker.postMessage({type:'face-capture'});});
+document.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-face-reenroll]');if(!button||button.disabled)return;
+  button.disabled=true;
+  const settings=document.querySelector('#account-settings');if(settings?.open)settings.close();
+  if(enabled)stopCamera();
+  try{
+    const saved=await startCamera({replace:true,registrationOnly:true});
+    if(saved){stopCamera('얼굴 재등록이 완료됐습니다.');showToast('얼굴 재등록이 완료됐습니다.');}
+    else showToast(message||'얼굴 재등록을 취소했습니다.');
+  }finally{button.disabled=false;}
+});
 window.addEventListener('study:navigated', () => {
   if (!document.querySelector('.app > main [data-camera]') && enabled) stopCamera();
   if (!document.querySelector('.app > main [data-camera]') && focusPanel) void closeCameraFocus();

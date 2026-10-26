@@ -69,8 +69,8 @@ export function createFocusTracker() {
     if(identityKnown&&!enrolling&&!ownerReady)identityFailureSince??=now;
     const identityWarning=Boolean(identityKnown&&!enrolling&&!ownerReady&&identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity);
     if(warning==='identity'&&!identityWarning)warning=null;
-    if (!valid || !ownerReady || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
-    const observeIdle=visible && ownerReady && !signals.eyesClosed;
+    if (!valid || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
+    const observeIdle=visible && !signals.eyesClosed;
     if(!observeIdle)idle.pauseGaze();
     const idleState = observeIdle ? idle.update(signals, now) : idle.state(now);
     const elapsedFor=key=>behaviorSince[key]===null?0:now-behaviorSince[key];
@@ -136,7 +136,7 @@ export function createFocusTracker() {
     const idleState = idle.state(lastTime);
     const ready = lastSignals?.reliable && lastSignals.face;
     const idleBlocked = !ready ? '얼굴 확인 필요' : lastSignals.studyActivity ? '학습 동작 감지' :
-      !lastSignals.activityVector ? '얼굴 방향 확인 필요' : lastSignals.identity&&!lastSignals.identity.matched ? '본인 확인 필요' : null;
+      !lastSignals.activityVector ? '얼굴 방향 확인 필요' : null;
     const rows = ['sleep', 'phone', 'away', 'idle'].map(key => {
       const active = key === 'idle' ? Boolean(idleState.eligible && !idleBlocked) : behaviorSince[key]!==null;
       const elapsedMs = active ? key === 'idle' ? idleState.elapsedMs : Math.max(0, lastTime - behaviorSince[key]) : 0;

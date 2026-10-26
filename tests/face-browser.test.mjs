@@ -22,7 +22,7 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
   const service=createFaceService({db,kms,projectId:'demo-study'});
   const profile=await mkdtemp(join(tmpdir(),'study-face-browser-'));
   let context;
-  let delaySeal=false,releaseSeal,onSeal,failCommitOnce=false;
+  let delaySeal=false,releaseSeal,onSeal,failCommitOnce=false,onCancel;
   const actionCounts=new Map();
   const failures=[];
   async function open(){
@@ -31,7 +31,8 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
       actionCounts.set(action,(actionCounts.get(action)||0)+1);
       if(action==='sealFaceKeyEnvelope'&&delaySeal){delaySeal=false;await new Promise(resolve=>{releaseSeal=resolve;onSeal?.();});}
       if(action==='commitFaceEnrollment'&&failCommitOnce){failCommitOnce=false;throw Error('일시적 서버 저장 실패 테스트');}
-      return service(action,{auth:{uid,token:{email_verified:true,auth_time:authTime,firebase:{sign_in_provider:'password'}}},data});
+      const result=await service(action,{auth:{uid,token:{email_verified:true,auth_time:authTime,firebase:{sign_in_provider:'password'}}},data});
+      if(action==='cancelFaceEnrollment')onCancel?.();return result;
     });
     await context.exposeFunction('faceReauth',()=>{authTime=Math.floor(Date.now()/1000);authCount++;});
     await context.route('**/*',async route=>{
@@ -124,11 +125,22 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     assert.equal((await db.runTransaction(tx=>authorizeFaceStudy(tx,db,'owner',{controllerId:'controller',tracking:true,sequence:1,faceAuthorization:signed}))).verificationType,'face-browser');
     await context.close();page=await open();await page.click('#start');await page.waitForFunction(()=>window.finished);assert.equal(await page.locator('input[type=password]').count(),0);assert.equal(await page.locator('.face-enrollment').count(),0);await runVault(page);assert.equal(authCount,1);
     const restored=await page.evaluate(()=>({id:window.api.faceWorkerContext().binding.profileId,ciphertext:window.api.faceWorkerContext().record.ciphertext}));assert.equal(restored.id,original.id);assert.equal(restored.ciphertext,original.ciphertext);
+    const replace=async()=>{
+      await page.evaluate(()=>{window.api.lockFaceSession();window.finished=false;window.error=null;window.pending=window.api.prepareFaceSession({replace:true}).then(()=>{window.finished=true;}).catch(error=>{window.error=error.message;});});
+      await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
+      assert.equal(await page.evaluate(()=>window.api.faceWorkerContext().record),null);
+      assert.equal(rows.get('faceSecurity/owner').active.profileId,original.id);
+    };
+    await replace();const cancelled=new Promise(resolve=>{onCancel=resolve;});
+    await page.getByRole('button',{name:'취소',exact:true}).click();await cancelled;onCancel=null;
+    assert.equal(rows.get('faceSecurity/owner').active.profileId,original.id);
+    await replace();await runVault(page);
+    const replacedId=rows.get('faceSecurity/owner').active.profileId;assert.notEqual(replacedId,original.id);
     await page.evaluate(()=>{window.testUid='other';window.dispatchEvent(new Event('study:auth-changed'));});assert.equal(await page.evaluate(()=>window.api.faceWorkerContext()),null);
     await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').waitFor();
     const box=await page.locator('.face-enrollment').boundingBox();assert.ok(box.width<=390&&box.height<=844);
     await page.screenshot({path:resolve(root,'.codex-face-enrollment-mobile.png')});
-    await page.getByRole('button',{name:'취소',exact:true}).click();await page.waitForFunction(()=>window.error);assert.equal(await page.locator('.face-enrollment').count(),0);assert.equal(rows.get('faceSecurity/owner').active.profileId,original.id);
+    await page.getByRole('button',{name:'취소',exact:true}).click();await page.waitForFunction(()=>window.error);assert.equal(await page.locator('.face-enrollment').count(),0);assert.equal(rows.get('faceSecurity/owner').active.profileId,replacedId);
     await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
     await page.evaluate(()=>{window.verificationResult=null;window.verificationWait=window.api.waitForFaceVerification().then(result=>{window.verificationResult=result;});window.failStorage=true;});await runVault(page,true);assert.equal(rows.get('faceSecurity/other').active,undefined);assert.equal(await page.evaluate(()=>window.api.faceSessionState().verified),false);
     await page.evaluate(()=>window.api.handleFaceWorkerEvent({type:'face-progress',state:'RECOVERY_REQUIRED',label:'저장 실패. 취소 후 다시 시도해 주세요.'}));assert.equal(await page.getByRole('button',{name:'취소',exact:true}).isEnabled(),true);await page.getByRole('button',{name:'취소',exact:true}).click();

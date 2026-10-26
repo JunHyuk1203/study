@@ -128,7 +128,7 @@ async function askReauthentication({enrolling,replace,keys,uid,installationId,re
     (passwordAccount?password:button).focus();
   });
 }
-export async function prepareFaceSession(){
+export async function prepareFaceSession({replace=false}={}){
   if(!await authReady||!getAuthUser())throw new Error('로그인 후 이용해 주세요.');
   if(location.origin!==FACE_ORIGIN||!crypto.subtle||!globalThis.indexedDB)throw new Error('정식 HTTPS 학습 사이트와 보안 저장소를 지원하는 브라우저가 필요합니다.');
   const attempt=++epoch,uid=getAuthUser().uid;verified=false;profileReady=false;
@@ -143,8 +143,9 @@ export async function prepareFaceSession(){
   const pending=pendingId?await faceStore('profiles','readonly',faceRecordKey(uid,installationId,pendingId)):null;
   // Server confirmation wins over a lost commit response. Uncommitted candidates never unlock.
   if(!record&&pending?.binding.profileId===status.active?.profileId)record=pending;
-  const recovering=Boolean(keys&&pending&&pending.binding.profileId===status.pending?.profileId&&pending.ticketId===status.pending.id);
-  const enrolling=(!record||!keys)&&!recovering;
+  const recovering=!replace&&Boolean(keys&&pending&&pending.binding.profileId===status.pending?.profileId&&pending.ticketId===status.pending.id);
+  const enrolling=replace||(!record||!keys)&&!recovering;
+  if(enrolling)record=null;
   if(!keys){keys=await createBrowserFaceKeys();await faceStore('keys','readwrite',keyId,keys);keys=await faceStore('keys','readonly',keyId);if(!keys?.signingKey||!keys.wrappingKey)throw new Error('이 브라우저는 보안 키 저장을 지원하지 않습니다.');}
   let grant=status.grant;
   if(enrolling||!grant)makeDialog();
@@ -157,6 +158,7 @@ export async function prepareFaceSession(){
   }
   let ticket=null;
   if(enrolling){
+    if(replace&&status.pending){const signature=await signFace(keys,'cancel',uid,installationId,status.pending.id);await invoke('cancelFaceEnrollment',{installationId,ticketId:status.pending.id,signature});}
     await clearLegacyFaceProfile();
     const persisted=await navigator.storage?.persist?.().catch(()=>false)||false;
     await faceStore('settings','readwrite',`${keyId}:consent`,{policyVersion:FACE_POLICY,persisted,acceptedAt:Date.now()});
