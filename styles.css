@@ -112,7 +112,15 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .cam-close[hidden]{display:none}
 .cam-live{position:absolute;left:16px;bottom:15px;font:10px monospace;letter-spacing:1px;color:white;text-shadow:0 1px 3px #000}
 .cam-status{font-size:12px;font-weight:650;color:var(--cam-color);margin:14px 0 5px}
-.cam-caption{font-size:10px;line-height:1.7;color:var(--muted);margin:0}
+.cam-caption{display:flex;align-items:flex-start;gap:6px;font-size:10px;line-height:1.7;color:var(--muted);margin:0}
+.protector-debug-toggle{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:22px;height:22px;margin-top:0;border:1px solid var(--border);border-radius:6px;background:var(--paper);color:var(--green);font:inherit;font-size:14px;cursor:pointer}
+.protector-debug-toggle:focus-visible,.camera-debug-close:focus-visible{outline:3px solid #779378;outline-offset:3px}
+.camera-debug-dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;box-sizing:border-box;padding:24px;border:1px solid var(--border);border-radius:20px;background:var(--paper);color:var(--text);box-shadow:0 20px 80px #17251930}
+.camera-debug-dialog::backdrop{background:#17251966;backdrop-filter:blur(4px)}
+.camera-debug-dialog-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px}.camera-debug-dialog-heading h2{margin:0;font-size:20px}
+.camera-debug-close{width:34px;height:34px;flex-shrink:0;border:1px solid var(--border);border-radius:50%;background:transparent;color:var(--text);font-size:22px;cursor:pointer}
+.camera-debug-dialog .cam-debug{margin:0;padding:0;border:0;background:transparent}
+.camera-debug-dialog .cam-debug dl>div{grid-template-columns:110px minmax(0,1fr)}
 .protector-info{margin-top:3px}
 .protector-info summary{display:flex;align-items:center;gap:5px;width:fit-content;max-width:100%;list-style:none;cursor:pointer}
 .protector-info summary::-webkit-details-marker{display:none}
@@ -389,15 +397,14 @@ html,body{height:100%;overflow:hidden;overscroll-behavior:none}
   .timer{font-size:calc(34 * var(--gui))}
   .cam-viewport{width:calc(76 * var(--gui));height:calc(76 * var(--gui))}
   .focus-header,.focus-content{max-width:calc(1000 * var(--gui))}
-  .focus-content{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);grid-template-rows:auto auto auto auto auto minmax(0,1fr);gap:calc(20 * var(--gui)) calc(36 * var(--gui));align-items:start}
+  .focus-content{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);grid-template-rows:auto auto auto minmax(0,1fr) auto;gap:calc(20 * var(--gui)) calc(36 * var(--gui));align-items:start}
   .camera-focus .cam-viewport,.camera-focus .is-open .cam-viewport{grid-column:1;grid-row:1 / 6;height:calc(520 * var(--gui))}
   .camera-focus .cam-status,.camera-focus .cam-timer,.camera-focus .cam-caption,.camera-focus .auth-status{grid-column:2;margin:0}
   .camera-focus .cam-status{grid-row:1}
   .camera-focus .cam-timer{grid-row:2}
-  .camera-focus .auth-status{grid-row:3}
-  .camera-focus .cam-caption{grid-row:4}
-  .camera-focus .cam-debug{grid-column:2;grid-row:5;margin:0}
-  .camera-focus .room-focus-peers{grid-column:2;grid-row:6;min-width:0;margin:0;padding-top:16px}
+  .camera-focus .auth-status{grid-row:5}
+  .camera-focus .cam-caption{grid-row:3}
+  .camera-focus .room-focus-peers{grid-column:2;grid-row:4;min-width:0;margin:0;padding-top:4px}
 }
 @media(min-width:1440px){
   .app{max-width:none;width:100%}

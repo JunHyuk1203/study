@@ -1,5 +1,6 @@
 const LABELS = { sleep: '수면·졸음', phone: '휴대폰', away: '자리 이탈', idle: '멍때림 추정', identity: '본인 얼굴 유사도' };
 const seconds = ms => `${(Math.max(0, ms) / 1000).toFixed(ms > 0 && ms < 1000 ? 2 : 1)}초`;
+let dialogSequence=0;
 
 export function focusDebugRows(debug) {
   return Object.entries(LABELS).map(([key, label]) => {
@@ -35,6 +36,13 @@ export function focusDebugRows(debug) {
 export function paintCameraDebug(root, debug, state) {
   let panel = root.querySelector('[data-camera-debug]');
   if (!panel) {
+    const dialog=document.createElement('dialog');dialog.className='camera-debug-dialog';dialog.dataset.cameraDebugDialog='';dialog.id=`camera-debug-${++dialogSequence}`;dialog.setAttribute('aria-label','개발자 값');
+    const heading=document.createElement('div');heading.className='camera-debug-dialog-heading';
+    const title=document.createElement('h2');title.textContent='개발자 값';
+    const close=document.createElement('button');close.type='button';close.className='camera-debug-close';close.textContent='×';close.setAttribute('aria-label','개발자 값 팝업 닫기');close.addEventListener('click',()=>dialog.close());heading.append(title,close);dialog.append(heading);
+    const trigger=document.createElement('button');trigger.type='button';trigger.className='protector-debug-toggle';trigger.dataset.cameraDebugOpen='';trigger.textContent='↗';trigger.title='개발자 값 보기';trigger.setAttribute('aria-label','개발자 값 팝업 열기');trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-controls',dialog.id);trigger.setAttribute('aria-expanded','false');
+    trigger.addEventListener('click',()=>{if(!dialog.open){dialog.showModal();trigger.setAttribute('aria-expanded','true');}});
+    dialog.addEventListener('close',()=>{trigger.setAttribute('aria-expanded','false');trigger.focus();});
     panel = document.createElement('aside');
     panel.className = 'cam-debug'; panel.dataset.cameraDebug = '';
     panel.setAttribute('aria-label', '개발 테스트용 행동 감지 타이머');
@@ -42,8 +50,8 @@ export function paintCameraDebug(root, debug, state) {
       '<p class="cam-debug-summary" data-debug-summary></p><dl>' + Object.entries(LABELS).map(([key, label]) =>
         `<div data-debug-row="${key}"><dt>${label}</dt><dd></dd></div>`).join('') +
       '</dl><p class="cam-debug-note">분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.</p>';
-    root.querySelector('.cam-caption')?.after(panel);
-    if (!panel.isConnected) root.append(panel);
+    dialog.append(panel);root.append(dialog);
+    (root.querySelector('.cam-caption')||root).append(trigger);
   }
   const waiting = state.manuallyPaused || ['off', 'opening', 'error'].includes(state.status);
   const snapshot = waiting ? null : debug;
@@ -53,7 +61,7 @@ export function paintCameraDebug(root, debug, state) {
   panel.querySelector('[data-debug-summary]').textContent = summary;
   const runtime = snapshot?.runtime;
   panel.querySelector('.cam-debug-note').textContent = runtime?.backend ?
-    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 200/800ms 요청'}` :
+    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 100ms 추론 요청 간격'}` :
     '분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.';
   for (const row of focusDebugRows(snapshot)) {
     const element = panel.querySelector(`[data-debug-row="${row.key}"]`);

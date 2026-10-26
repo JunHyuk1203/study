@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
 import { createFocusTracker } from './camera-focus.js?v=20261026-face7';
-import { paintCameraDebug } from './camera-debug.js?v=20261025-8';
+import { paintCameraDebug } from './camera-debug.js?v=20261026-ui21';
 import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
@@ -363,6 +363,7 @@ window.addEventListener('study:navigated', () => {
 });
 document.addEventListener('keydown', event => {
   if (!focusPanel) return;
+  if(focusPanel.querySelector('[data-camera-debug-dialog][open]'))return;
   if (event.key === 'Tab') {
     const buttons = [...focusPanel.querySelectorAll('button:not(:disabled)')];
     const index = buttons.indexOf(document.activeElement);

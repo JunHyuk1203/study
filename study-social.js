@@ -159,7 +159,7 @@ function paintDock() {
   if(!state.room||!getAuthUser()){dock?.remove();return;}
   const focus=document.querySelector('.camera-focus .focus-content');
   if(focus) {
-    if(!dock||!focus.contains(dock)){dock?.remove();dock=el('section','room-focus-peers');dock.dataset.roomDock='';focus.append(dock);}
+    if(!dock||!focus.contains(dock)){dock?.remove();dock=el('section','room-focus-peers');dock.dataset.roomDock='';const caption=focus.querySelector('.cam-caption');if(caption)caption.after(dock);else focus.append(dock);}
     dock.replaceChildren(el('h3','',`${state.room.title} · ${state.room.memberIds.length}명`),roomLeaders(state.room),peerCards(state.room,true));
   } else if(!document.querySelector('[data-room-panel]')) {
     if(!dock||dock.tagName!=='A'){dock?.remove();dock=el('a','room-dock');dock.dataset.roomDock='';dock.href='study.html#study-room';document.body.append(dock);}
