@@ -125,8 +125,28 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     assert.equal((await db.runTransaction(tx=>authorizeFaceStudy(tx,db,'owner',{controllerId:'controller',tracking:true,sequence:1,faceAuthorization:signed}))).verificationType,'face-browser');
     await context.close();page=await open();await page.click('#start');await page.waitForFunction(()=>window.finished);assert.equal(await page.locator('input[type=password]').count(),0);assert.equal(await page.locator('.face-enrollment').count(),0);await runVault(page);assert.equal(authCount,1);
     const restored=await page.evaluate(()=>({id:window.api.faceWorkerContext().binding.profileId,ciphertext:window.api.faceWorkerContext().record.ciphertext}));assert.equal(restored.id,original.id);assert.equal(restored.ciphertext,original.ciphertext);
+    // Expired daily authentication must reuse the saved profile without enrollment warnings.
+    rows.get('faceSecurity/owner').grant.expiresAtMs=Date.now()-1;
+    const enrollmentsBeforeReauth=actionCounts.get('beginFaceEnrollment');
+    await page.evaluate(()=>window.api.lockFaceSession());await page.click('#start');
+    await page.locator('.face-enrollment input[type=checkbox]').waitFor();
+    assert.equal(await page.locator('#face-enrollment-title').textContent(),'계정 재인증');
+    assert.equal(await page.locator('.face-steps').textContent(),'계정 재인증 → 기존 얼굴로 확인 → 학습 시작');
+    assert.equal(await page.locator('.face-warning').count(),0);
+    assert.match(await page.locator('.face-enrollment').textContent(),/기존 얼굴 등록을 유지/);
+    await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');
+    await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
+    assert.equal(await page.locator('.face-enrollment').count(),0);await runVault(page);
+    assert.equal(actionCounts.get('beginFaceEnrollment'),enrollmentsBeforeReauth);
+    assert.equal(await page.evaluate(()=>window.api.faceWorkerContext().binding.profileId),original.id);
+    assert.equal(await page.evaluate(()=>window.api.faceWorkerContext().record.ciphertext),original.ciphertext);
+    assert.equal(authCount,2);
     const replace=async()=>{
       await page.evaluate(()=>{window.api.lockFaceSession();window.finished=false;window.error=null;window.pending=window.api.prepareFaceSession({replace:true}).then(()=>{window.finished=true;}).catch(error=>{window.error=error.message;});});
+      await page.locator('.face-warning').waitFor();
+      assert.equal(await page.locator('#face-enrollment-title').textContent(),'얼굴 등록');
+      assert.match(await page.locator('.face-steps').textContent(),/촬영 준비 → 얼굴 등록/);
+      assert.match(await page.locator('.face-warning').textContent(),/새 등록을 취소하면 기존 등록은 유지/);
       await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
       assert.equal(await page.evaluate(()=>window.api.faceWorkerContext().record),null);
       assert.equal(rows.get('faceSecurity/owner').active.profileId,original.id);

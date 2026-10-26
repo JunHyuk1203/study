@@ -21,11 +21,11 @@ function setPhase(value,label) {
   const cancel=dialog?.querySelector('[data-face-cancel]');if(cancel)cancel.disabled=value==='ENROLLMENT_COMMITTING';
   const capture=dialog?.querySelector('[data-face-capture]');if(capture){capture.disabled=value==='ENROLLMENT_COMMITTING'||capture.dataset.capturing==='true';if(['VERIFYING','VERIFIED'].includes(value))capture.hidden=true;}
 }
-function makeDialog(){
+function makeDialog({enrolling=false}={}){
   ensureStyle();closeDialog();previousFocus=document.activeElement;
   dialog=element('dialog',null,'face-enrollment');dialog.setAttribute('aria-labelledby','face-enrollment-title');
-  dialog.append(element('h2','계정과 얼굴 확인'));dialog.firstChild.id='face-enrollment-title';
-  dialog.append(element('p','계정 확인 → 촬영 준비 → 얼굴 등록 → 저장 완료','face-steps'));
+  dialog.append(element('h2',enrolling?'얼굴 등록':'계정 재인증'));dialog.firstChild.id='face-enrollment-title';
+  dialog.append(element('p',enrolling?'계정 확인 → 촬영 준비 → 얼굴 등록 → 저장 완료':'계정 재인증 → 기존 얼굴로 확인 → 학습 시작','face-steps'));
   const account=element('p',getAuthUser()?.email||'','face-account');dialog.append(account);
   const status=element('p','계정을 확인하고 있습니다.');status.dataset.faceStatus='';status.setAttribute('role','status');status.setAttribute('aria-live','polite');dialog.append(status);
   const cancel=element('button','취소');cancel.type='button';cancel.dataset.faceCancel='';
@@ -95,10 +95,10 @@ export function lockFaceSession(reason='얼굴 확인을 다시 시작해 주세
   window.dispatchEvent(new CustomEvent('study:face-locked',{detail:{reason}}));
 }
 async function askReauthentication({enrolling,replace,keys,uid,installationId,revoke=false}) {
-  const root=dialog||makeDialog();
+  const root=dialog||makeDialog({enrolling});
   setPhase('DAILY_REAUTH_REQUIRED',enrolling?'계정을 다시 인증한 뒤 이 브라우저에 얼굴을 등록합니다.':'오늘 첫 학습을 위해 계정을 다시 인증해 주세요.');
   const description=element('p',enrolling?'사진과 영상은 저장하지 않습니다. 얼굴 비교 정보는 이 브라우저에 암호화해 보관합니다. 사이트 데이터를 삭제하면 복구할 수 없습니다. 일반 웹캠의 얼굴 확인은 실명 확인이나 Face ID 수준의 위조 탐지를 보장하지 않습니다.':'기존 얼굴 등록을 유지하며 오늘의 계정 인증만 갱신합니다.');root.append(description);
-  if(replace)root.append(element('p','이 브라우저의 정보가 없거나 손상되었습니다. 새 등록을 완료하면 이전 브라우저의 활성 등록이 교체됩니다. 기존 얼굴과 불일치했다는 이유로 자동 교체하지 않습니다.','face-warning'));
+  if(enrolling&&replace)root.append(element('p','새 얼굴 등록을 완료하면 기존 활성 등록이 교체됩니다. 새 등록을 취소하면 기존 등록은 유지됩니다. 기존 얼굴과 불일치했다는 이유로 자동 교체하지 않습니다.','face-warning'));
   const consent=element('label'),checkbox=element('input');checkbox.type='checkbox';consent.append(checkbox,document.createTextNode(enrolling?'안내를 확인했으며 얼굴 비교 정보의 암호화 저장에 동의합니다.':'오늘의 계정 재인증을 진행합니다.'));root.append(consent);
   const passwordAccount=getAuthUser().providerData.some(row=>row.providerId==='password');
   const passwordLabel=element('label','비밀번호'),password=element('input');password.type='password';password.autocomplete='current-password';password.setAttribute('aria-label','계정 비밀번호');if(passwordAccount)root.append(passwordLabel,password);
@@ -148,7 +148,7 @@ export async function prepareFaceSession({replace=false}={}){
   if(enrolling)record=null;
   if(!keys){keys=await createBrowserFaceKeys();await faceStore('keys','readwrite',keyId,keys);keys=await faceStore('keys','readonly',keyId);if(!keys?.signingKey||!keys.wrappingKey)throw new Error('이 브라우저는 보안 키 저장을 지원하지 않습니다.');}
   let grant=status.grant;
-  if(enrolling||!grant)makeDialog();
+  if(enrolling||!grant)makeDialog({enrolling});
   if(enrolling||!grant)grant=await askReauthentication({enrolling,replace:Boolean(status.active),keys,uid,installationId});
   if(attempt!==epoch||getAuthUser()?.uid!==uid)throw new Error('얼굴 확인이 취소되었습니다.');
   if(recovering){
