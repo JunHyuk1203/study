@@ -81,15 +81,18 @@ export function createEnrollmentCollector() {
   };
 }
 export function faceImageQuality(image) {
-  let sum=0,sum2=0,edges=0,dark=0,bright=0,left=0,right=0,count=0;
+  let sum=0,sum2=0,dark=0,bright=0,left=0,right=0,count=0;
   const {data,width,height}=image,gray=(x,y)=>{const i=(y*width+x)*4;return .2126*data[i]+.7152*data[i+1]+.0722*data[i+2];};
-  for(let y=40;y<Math.min(height-1,180);y+=2)for(let x=48;x<Math.min(width-1,176);x+=2){const value=gray(x,y);sum+=value;sum2+=value*value;dark+=value<25;bright+=value>240;edges+=Math.abs(4*value-gray(x-1,y)-gray(x+1,y)-gray(x,y-1)-gray(x,y+1));if(x<112)left+=value;else right+=value;count++;}
+  for(let y=40;y<Math.min(height-1,180);y+=2)for(let x=48;x<Math.min(width-1,176);x+=2){const value=gray(x,y);sum+=value;sum2+=value*value;dark+=value<25;bright+=value>240;if(x<112)left+=value;else right+=value;count++;}
   if(!count)return '카메라 영상 품질을 확인할 수 없습니다';
   const mean=sum/count;
   if(mean<45||dark/count>.45)return '얼굴 앞쪽을 조금 더 밝게 해 주세요';
   if(mean>215||bright/count>.3)return '얼굴에 비치는 강한 빛이나 안경 반사를 줄여 주세요';
   if(Math.abs(left-right)/Math.max(1,sum)>.3)return '창문을 등지지 않도록 위치를 바꿔 주세요';
-  if(sum2/count-mean*mean<100||edges/count<7)return '얼굴을 가리는 물체를 치우고 잠시 움직이지 말아 주세요';
+  // Smooth skin, webcam denoising and resampling reduce local edges without hiding a face.
+  // Only a nearly uniform frame is rejected here; landmarks and descriptor consistency
+  // provide the remaining face checks instead of inferring occlusion from texture.
+  if(sum2/count-mean*mean<16)return '얼굴의 윤곽을 구분하기 어렵습니다. 카메라 초점과 조명을 확인해 주세요';
   return null;
 }
 export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {

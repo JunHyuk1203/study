@@ -5,7 +5,7 @@ import {createFaceService,authorizeFaceStudy,envelopeHash,faceDayEnd,seoulDay} f
 import {FACE_MODEL,FACE_PREPROCESS,FACE_SCHEMA,FACE_ORIGIN,studyNonce} from '../functions/face-protocol.js';
 import {createBrowserFaceKeys} from '../face-storage.js';
 import {signFace,encryptFaceSamples,decryptFaceSamples} from '../face-crypto.js';
-import {createIdentityMatcher,createEnrollmentCollector,faceDirection,faceImageQuality,faceFrameGeometry,createFacePoseCalibration} from '../camera-identity.js';
+import {createIdentityMatcher,createEnrollmentCollector,faceDirection,faceImageQuality,faceFrameGeometry,createFacePoseCalibration,createLocalFaceGuard} from '../camera-identity.js';
 import {checkpointCamera} from '../functions/domain.js';
 import {createStudyRevocationCheck} from '../functions/study-auth.js';
 
@@ -144,6 +144,47 @@ test('registration calibrates a steady comfortable front pose once and keeps dir
   assert.equal(calibration.observe({yaw:5,pitch:14},4500).ready,false);
   assert.equal(calibration.observe({yaw:15,pitch:14},5000).ready,false);
 });
+function smoothFaceImage(){
+  const data=new Uint8ClampedArray(224*224*4);
+  const spot=(x,y,cx,cy,sx,sy)=>Math.exp(-.5*((x-cx)**2/sx**2+(y-cy)**2/sy**2));
+  for(let y=0;y<224;y++)for(let x=0;x<224;x++){
+    const value=135-45*spot(x,y,76,85,12,5)-45*spot(x,y,148,85,12,5)-28*spot(x,y,112,150,25,6)+15*spot(x,y,112,119,10,17),index=(y*224+x)*4;
+    data[index]=data[index+1]=data[index+2]=value;data[index+3]=255;
+  }
+  return {data,width:224,height:224};
+}
+
+test('soft webcam texture can pass quality while blank, dark and overexposed frames are held',()=>{
+  assert.equal(faceImageQuality(smoothFaceImage()),null);
+  const solid=value=>({data:new Uint8ClampedArray(224*224*4).fill(value),width:224,height:224});
+  assert.match(faceImageQuality(solid(128)),/윤곽/);
+  assert.match(faceImageQuality(solid(20)),/밝게/);
+  assert.match(faceImageQuality(solid(245)),/강한 빛/);
+});
+
+test('soft webcam frames progress through real guard calibration and frontal enrollment',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'OffscreenCanvas'),events=[],image=smoothFaceImage();
+  const context={setTransform(){},fillRect(){},drawImage(){},getImageData:()=>image};
+  globalThis.OffscreenCanvas=class{getContext(){return context;}};
+  let guard;
+  try{
+    const input={toFloat(){return this;},expandDims(){return this;},dispose(){}};
+    const tf={loadGraphModel:async()=>({execute:()=>({data:async()=>owner,dispose(){}}),dispose(){}}),tidy:fn=>fn(),browser:{fromPixels:()=>input}};
+    guard=await createLocalFaceGuard(tf,{uid:'owner',ticket:{id:'enrollment-test'}},()=>{throw Error('No server call should be made before all directions are collected');},event=>events.push(event));
+    const face=Array.from({length:478},()=>({x:.5,y:160/480}));
+    for(const i of [33,133])face[i]={x:280/640,y:160/480};
+    for(const i of [362,263])face[i]={x:360/640,y:160/480};
+    face[1]={x:.5,y:198.4/480};
+    let state;
+    for(let time=0;time<=4500;time+=500)state=await guard.check({width:640,height:480},{faceLandmarks:[face]},time);
+    assert.equal(state.progress,4);assert.equal(state.enrolled,false);
+    assert.equal(events.filter(event=>event.type==='face-progress').at(-1).direction,'left');
+    assert.ok(!events.some(event=>event.label?.includes('가리는 물체')));
+  }finally{
+    guard?.close();if(previous)Object.defineProperty(globalThis,'OffscreenCanvas',previous);else delete globalThis.OffscreenCanvas;
+  }
+});
+
 test('quality, multi-face and repeated-frame holds cannot add enrollment samples',()=>{
   const c=createEnrollmentCollector();for(let time=0;time<2000;time+=500)c.observe(owner,{time,direction:'front'});
   const before=c.observe(owner,{time:2000,direction:'front'}).progress;
