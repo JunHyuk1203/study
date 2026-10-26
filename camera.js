@@ -204,7 +204,7 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261026-face4', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261026-face5', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -337,6 +337,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pageshow', event => { if (event.persisted) resumeCameraRecognition(); });
 window.addEventListener('study:face-locked',event=>{if(enabled)stopCamera(event.detail?.reason||'계정과 얼굴을 다시 확인해 주세요.',true);});
+window.addEventListener('study:face-capture',()=>{if(enabled&&worker)worker.postMessage({type:'face-capture'});});
 window.addEventListener('study:navigated', () => {
   if (!document.querySelector('.app > main [data-camera]') && enabled) stopCamera();
   if (!document.querySelector('.app > main [data-camera]') && focusPanel) void closeCameraFocus();

@@ -5,7 +5,7 @@ import {createFaceService,authorizeFaceStudy,envelopeHash,faceDayEnd,seoulDay} f
 import {FACE_MODEL,FACE_PREPROCESS,FACE_SCHEMA,FACE_ORIGIN,studyNonce} from '../functions/face-protocol.js';
 import {createBrowserFaceKeys} from '../face-storage.js';
 import {signFace,encryptFaceSamples,decryptFaceSamples} from '../face-crypto.js';
-import {createIdentityMatcher,createEnrollmentCollector,faceDirection,faceImageQuality,faceFrameGeometry,createFacePoseCalibration,createLocalFaceGuard} from '../camera-identity.js';
+import {createIdentityMatcher,createEnrollmentCollector,faceImageQuality,faceFrameGeometry,createLocalFaceGuard} from '../camera-identity.js';
 import {checkpointCamera} from '../functions/domain.js';
 import {createStudyRevocationCheck} from '../functions/study-auth.js';
 
@@ -98,25 +98,29 @@ test('server Seoul date and midnight clip credit even after delayed sync and fin
   const session={startedAtMs:midnight-20000,activeSinceMs:midnight-5000,leaseUntilMs:midnight+20000,faceAuthUntilMs:midnight,faceLeaseUntilMs:midnight+60000};
   for(const now of [midnight,midnight+60000,midnight+86400000]){const result=checkpointCamera(session,now,true);assert.equal(result.accumulatedSeconds,5);assert.equal(result.activeSinceMs,null);assert.equal(result.canResume,false);}
 });
-test('collector requires all five directions, stable quality and an independent final frame',()=>{
+test('collector takes each pose only after confirmation and requires a separate save confirmation',()=>{
   const collector=createEnrollmentCollector();let time=0,result,target=0;
+  assert.equal(collector.observe(owner,{time:time+=500,direction:'front'}).progress,0);
   for(const [direction,count]of [['front',4],['left',2],['right',2],['up',2],['down',2]]){
-    target+=count;for(let i=0;i<15;i++){result=collector.observe(owner,{time:time+=500,direction});if(result.progress>=target)break;}
+    assert.equal(collector.confirm(),true);assert.equal(collector.confirm(),false);
+    target+=count;for(let i=0;i<15;i++){result=collector.observe(owner,{time:time+=500,direction:'front'});if(result.progress>=target)break;}
     assert.equal(result.direction,{4:'left',6:'right',8:'up',10:'down',12:'front'}[target]);
+    assert.equal(collector.observe(owner,{time:time+=500}).progress,target);
   }
   assert.equal(result.progress,12);assert.equal(result.complete,false);
   assert.equal(collector.observe(owner,{time:time+=500,direction:'left'}).complete,false);
+  collector.confirm();
   assert.equal(collector.observe(owner,{time:time+=500,direction:'front',quality:false}).complete,false);
-  collector.observe(owner,{time:time+=500,direction:'front'});collector.observe(owner,{time:time+=500,direction:'front'});
   assert.equal(collector.observe(owner,{time:time+=500,direction:'front'}).complete,true);
   assert.equal(collector.observe(other,{time:time+=500,direction:'front'}).reset,undefined);
 });
 
 test('enrollment preserves collected samples when a later descriptor changes',()=>{
   const collector=createEnrollmentCollector();let result;
+  collector.confirm();
   for(let time=0;time<=3000;time+=500)result=collector.observe(owner,{time,direction:'front'});
   assert.equal(result.progress,4);
-  result=collector.observe(other,{time:3500,direction:'left'});
+  collector.confirm();result=collector.observe(other,{time:3500,direction:'left'});
   assert.equal(result.progress,5);assert.equal(result.counts[0],4);assert.equal(result.counts[1],1);
   assert.equal(result.reset,undefined);assert.deepEqual(result.samples[0],owner);assert.deepEqual(result.samples[4],other);
 });
@@ -134,25 +138,11 @@ test('automatic face framing aligns translated, resized and tilted faces without
     const face=makeFace(x,y,size,angle),framing=faceFrameGeometry(face,1280,720);assert.ok(framing);
     const [a,b,c,d,e,f]=framing.transform;
     assert.ok(Math.abs(a*x+c*y+e-112)<1e-8);assert.ok(Math.abs(b*x+d*y+f-85)<1e-8);
-    assert.ok(Math.abs(framing.yaw)<1e-8);assert.ok(Math.abs(framing.pitch)<1e-8);
   }
   assert.equal(faceFrameGeometry(makeFace(640,240,15,0),1280,720),null);
   assert.equal(faceFrameGeometry(makeFace(15,200,100,0),1280,720),null);
 });
 
-test('registration calibrates a steady comfortable front pose once and keeps directional movement relative to it',()=>{
-  const calibration=createFacePoseCalibration();
-  assert.equal(calibration.observe({yaw:5,pitch:14},0).ready,false);
-  assert.equal(calibration.observe({yaw:5,pitch:14},500).ready,false);
-  assert.equal(calibration.observe({yaw:5,pitch:14},1000).direction,'front');
-  assert.equal(calibration.observe({yaw:21,pitch:14},1500).direction,'left');
-  assert.equal(calibration.observe({yaw:-11,pitch:14},2000).direction,'right');
-  assert.equal(calibration.observe({yaw:5,pitch:3},2500).direction,'up');
-  assert.equal(calibration.observe({yaw:5,pitch:25},3000).direction,'down');
-  calibration.reset();assert.equal(calibration.observe({yaw:35,pitch:14},4000).ready,false);
-  assert.equal(calibration.observe({yaw:5,pitch:14},4500).ready,false);
-  assert.equal(calibration.observe({yaw:15,pitch:14},5000).ready,false);
-});
 function smoothFaceImage(){
   const data=new Uint8ClampedArray(224*224*4);
   const spot=(x,y,cx,cy,sx,sy)=>Math.exp(-.5*((x-cx)**2/sx**2+(y-cy)**2/sy**2));
@@ -171,7 +161,7 @@ test('soft webcam texture can pass quality while blank, dark and overexposed fra
   assert.match(faceImageQuality(solid(245)),/강한 빛/);
 });
 
-test('soft webcam frames progress through real guard calibration and frontal enrollment',async()=>{
+test('soft webcam frames wait for confirmation and then collect frontal enrollment',async()=>{
   const previous=Object.getOwnPropertyDescriptor(globalThis,'OffscreenCanvas'),events=[],image=smoothFaceImage();
   const context={setTransform(){},fillRect(){},drawImage(){},getImageData:()=>image};
   globalThis.OffscreenCanvas=class{getContext(){return context;}};
@@ -180,6 +170,7 @@ test('soft webcam frames progress through real guard calibration and frontal enr
     const input={toFloat(){return this;},expandDims(){return this;},dispose(){}};
     const tf={loadGraphModel:async()=>({execute:()=>({data:async()=>owner,dispose(){}}),dispose(){}}),tidy:fn=>fn(),browser:{fromPixels:()=>input}};
     guard=await createLocalFaceGuard(tf,{uid:'owner',ticket:{id:'enrollment-test'}},()=>{throw Error('No server call should be made before all directions are collected');},event=>events.push(event));
+    guard.confirmCapture();
     const face=Array.from({length:478},()=>({x:.5,y:160/480}));
     for(const i of [33,133])face[i]={x:280/640,y:160/480};
     for(const i of [362,263])face[i]={x:360/640,y:160/480};
@@ -195,12 +186,11 @@ test('soft webcam frames progress through real guard calibration and frontal enr
 });
 
 test('quality, multi-face and repeated-frame holds cannot add enrollment samples',()=>{
-  const c=createEnrollmentCollector();for(let time=0;time<2000;time+=500)c.observe(owner,{time,direction:'front'});
+  const c=createEnrollmentCollector();c.confirm();for(let time=0;time<2000;time+=500)c.observe(owner,{time,direction:'front'});
   const before=c.observe(owner,{time:2000,direction:'front'}).progress;
   assert.equal(c.observe(owner,{time:2000,direction:'front'}).progress,before);
   assert.equal(c.observe(owner,{time:2500,direction:'front',quality:false}).progress,before);
   assert.equal(c.observe(owner,{time:3000,direction:'front',multiple:true}).progress,0);
-  assert.equal(faceDirection(16,0),'left');assert.equal(faceDirection(-16,0),'right');assert.equal(faceDirection(0,-11),'up');assert.equal(faceDirection(0,11),'down');
   assert.match(faceImageQuality({data:new Uint8ClampedArray(224*224*4),width:224,height:224}),/밝게/);
 });
 test('matcher never auto-enrolls, requires 4/5 votes, rejects one lucky maximum and keeps templates',()=>{

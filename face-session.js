@@ -19,6 +19,7 @@ function setPhase(value,label) {
   if(status&&status.textContent!==label)status.textContent=label;
   if(dialog)dialog.dataset.phase=value;
   const cancel=dialog?.querySelector('[data-face-cancel]');if(cancel)cancel.disabled=value==='ENROLLMENT_COMMITTING';
+  const capture=dialog?.querySelector('[data-face-capture]');if(capture){capture.disabled=value==='ENROLLMENT_COMMITTING'||capture.dataset.capturing==='true';if(['VERIFYING','VERIFIED'].includes(value))capture.hidden=true;}
 }
 function makeDialog(){
   ensureStyle();closeDialog();previousFocus=document.activeElement;
@@ -39,7 +40,10 @@ function addPreview(){
   const ring=element('div',null,'face-ring');ring.setAttribute('role','progressbar');ring.setAttribute('aria-label','얼굴 등록 진행률');ring.setAttribute('aria-valuemin','0');ring.setAttribute('aria-valuemax','12');ring.setAttribute('aria-valuenow','0');guide.append(ring);
   const directions=element('p','정면 ○ · 왼쪽 ○ · 오른쪽 ○ · 위 ○ · 아래 ○','face-directions');directions.dataset.faceDirections='';
   dialog.insertBefore(guide,dialog.querySelector('[data-face-cancel]'));dialog.insertBefore(directions,dialog.querySelector('[data-face-cancel]'));
-  const hint=element('p','얼굴 전체가 카메라에 나오면 크기·위치를 자동으로 맞춥니다. 안내가 바뀔 때만 고개를 조금 움직이고 잠시 멈춰 주세요.','face-preview-hint');dialog.insertBefore(hint,dialog.querySelector('[data-face-cancel]'));
+  const hint=element('p','크기·위치는 자동으로 맞춥니다. 안내된 방향으로 고개를 돌린 뒤 확인 버튼을 누르세요. 촬영 중에는 잠시 그대로 있어 주세요.','face-preview-hint');dialog.insertBefore(hint,dialog.querySelector('[data-face-cancel]'));
+  const capture=element('button','자세 확인 · 촬영');capture.type='button';capture.dataset.faceCapture='';capture.disabled=true;capture.hidden=!session?.ticket;
+  capture.addEventListener('click',()=>{if(capture.disabled)return;capture.disabled=true;capture.dataset.capturing='true';window.dispatchEvent(new Event('study:face-capture'));});
+  dialog.insertBefore(capture,dialog.querySelector('[data-face-cancel]'));
 }
 export function attachFacePreview(stream){
   addPreview();const video=dialog?.querySelector('video'),canvas=dialog?.querySelector('canvas');if(!video||!canvas)return;
@@ -151,7 +155,7 @@ export async function prepareFaceSession(){
     ({ticket}=await invoke('beginFaceEnrollment',{installationId,idempotencyKey,signature}));
   }
   session={uid,installationId,keys,grant,record,ticket,binding:record?.binding||ticket.binding};
-  setPhase(enrolling?'ENROLLING':'VERIFYING',enrolling?'카메라를 편하게 바라봐 주세요. 얼굴 크기와 위치를 자동으로 맞춥니다':'기존에 등록한 얼굴을 확인합니다. 정면을 봐 주세요.');addPreview();
+  setPhase(enrolling?'ENROLLING':'VERIFYING',enrolling?'정면을 바라본 뒤 자세 확인 · 촬영 버튼을 눌러 주세요':'기존에 등록한 얼굴을 확인합니다. 정면을 봐 주세요.');addPreview();
   lastProgressAt=performance.now();lastProgress=-1;
   progressTimer=setInterval(()=>{if(dialog&&phase==='ENROLLING'&&performance.now()-lastProgressAt>45000)setPhase('ENROLLING','촬영이 진행되지 않습니다. 조명·거리·카메라 속도를 확인하거나 취소 후 다시 시도해 주세요. 고개를 움직이기 어렵다면 관리자에게 문의해 주세요.');},5000);
   const now=performance.now(),serverNowMs=grant.serverNowMs||status.serverNowMs,duration=grant.expiresAtMs-serverNowMs;
@@ -175,6 +179,8 @@ export function handleFaceWorkerEvent(data){
   if(data.type==='face-progress'){
     if(data.progress!==undefined&&data.progress!==lastProgress){lastProgress=data.progress;lastProgressAt=performance.now();}
     setPhase(data.state,data.label||'얼굴 정보를 안전하게 저장하고 있어요');
+    const capture=dialog?.querySelector('[data-face-capture]');
+    if(capture){if(data.manualCapture!==undefined)capture.hidden=!data.manualCapture;if(data.canCapture!==undefined){capture.dataset.capturing=String(!data.canCapture);capture.disabled=!data.canCapture||data.state==='ENROLLMENT_COMMITTING';}if(data.captureLabel)capture.textContent=data.captureLabel;}
     const ring=dialog?.querySelector('[role="progressbar"]');if(ring&&data.progress!==undefined){ring.setAttribute('aria-valuenow',String(data.progress));ring.style.setProperty('--face-progress',String(data.progress/12));}
     const directions=dialog?.querySelector('[data-face-directions]');if(directions&&data.counts)directions.textContent=['정면','왼쪽','오른쪽','위','아래'].map((label,i)=>`${label} ${data.counts[i]>=(i?2:4)?'✓':'○'}`).join(' · ');
   }

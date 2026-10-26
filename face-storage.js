@@ -3,15 +3,19 @@ export const faceRecordKey=(uid,installationId,profileId)=>`${uid}:${installatio
 // Request success is insufficient: quota/commit errors arrive on the transaction.
 export async function faceStore(store,mode,key,value) {
   return new Promise((resolve,reject)=>{
+    let db,tx,settled=false;
+    const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);db?.close();if(error)reject(error);else resolve(value);};
+    const timer=setTimeout(()=>{try{tx?.abort();}catch{}finish(new Error('브라우저 저장소 응답이 없습니다. 다른 학습 탭을 닫고 저장을 다시 시도해 주세요.'));},15000);
     const opening=indexedDB.open(FACE_DB,1);
     opening.onupgradeneeded=()=>{for(const name of ['profiles','keys','settings'])opening.result.createObjectStore(name);};
-    opening.onerror=()=>reject(new Error('브라우저 보안 저장소를 열지 못했습니다.'));
-    opening.onblocked=()=>reject(new Error('다른 탭을 닫고 다시 시도해 주세요.'));
+    opening.onerror=()=>finish(new Error('브라우저 보안 저장소를 열지 못했습니다.'));
+    opening.onblocked=()=>finish(new Error('다른 탭을 닫고 다시 시도해 주세요.'));
     opening.onsuccess=()=>{
-      const db=opening.result,tx=db.transaction(store,mode),table=tx.objectStore(store);
+      db=opening.result;if(settled){db.close();return;}
+      tx=db.transaction(store,mode);const table=tx.objectStore(store);
       const operation=mode==='readonly'?table.get(key):value===undefined?table.delete(key):table.put(value,key);
-      tx.oncomplete=()=>{db.close();resolve(operation.result);};
-      tx.onabort=tx.onerror=()=>{db.close();reject(new Error('암호화 정보 저장에 실패했습니다. 저장 공간과 사이트 권한을 확인해 주세요.'));};
+      tx.oncomplete=()=>finish(null,operation.result);
+      tx.onabort=tx.onerror=()=>finish(new Error('암호화 정보 저장에 실패했습니다. 저장 공간과 사이트 권한을 확인해 주세요.'));
     };
   });
 }

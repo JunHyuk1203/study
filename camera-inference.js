@@ -159,6 +159,7 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
     const faceContext = faceInput.getContext('2d');
     let closeup = null, lastBounds = null, lastFaceTime = -Infinity, scan = 0;
     return {
+      confirmFaceCapture(){return identity?.confirmCapture?.()||false;},
       async detect(source, time, epoch = 0) {
         const startedAt = performance.now();
         if(phoneEpoch!==epoch){phoneEpoch=epoch;phoneTracker=createPhoneTracker();phoneScheduler=createPhoneScheduler();latestPhone=null;phoneLagCount=0;cachedObjects=[];observedAt=-Infinity;objectTime=-Infinity;}

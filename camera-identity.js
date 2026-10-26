@@ -24,14 +24,6 @@ export function createIdentityMatcher(saved=[]) {
   };
 }
 export const FACE_DIRECTIONS=[{name:'front',count:4,label:'정면을 편하게 바라봐 주세요'},{name:'left',count:2,label:'고개를 조금만 왼쪽으로 돌려 주세요'},{name:'right',count:2,label:'고개를 조금만 오른쪽으로 돌려 주세요'},{name:'up',count:2,label:'턱을 조금만 올려 주세요'},{name:'down',count:2,label:'턱을 조금만 내려 주세요'}];
-export function faceDirection(yaw,pitch) {
-  if(Math.abs(yaw)<=8&&Math.abs(pitch)<=8)return 'front';
-  if(Math.abs(pitch)<=12&&yaw>=12&&yaw<=22)return 'left';
-  if(Math.abs(pitch)<=12&&yaw<=-12&&yaw>=-22)return 'right';
-  if(Math.abs(yaw)<=10&&pitch<=-8&&pitch>=-15)return 'up';
-  if(Math.abs(yaw)<=10&&pitch>=8&&pitch<=15)return 'down';
-  return null;
-}
 // Align to the eyes, independent of where the face appears in the camera frame.
 export function faceFrameGeometry(face,width,height){
   if(!face||!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)return null;
@@ -40,42 +32,30 @@ export function faceFrameGeometry(face,width,height){
   const left=eye(33,133),right=eye(362,263),dx=right.x-left.x,dy=right.y-left.y,size=Math.hypot(dx,dy),angle=Math.atan2(dy,dx);
   if(size<22||Math.abs(angle)>.4)return null;
   const scale=224/(size*3),cos=Math.cos(angle)*scale,sin=Math.sin(angle)*scale,midX=(left.x+right.x)/2,midY=(left.y+right.y)/2;
-  const nx=face[1].x*width-midX,ny=face[1].y*height-midY;
-  return {width,height,transform:[cos,-sin,sin,cos,112-cos*midX-sin*midY,85+sin*midX-cos*midY],yaw:(nx*Math.cos(angle)+ny*Math.sin(angle))/size*65,pitch:((-nx*Math.sin(angle)+ny*Math.cos(angle))/size-.48)*45};
-}
-export function createFacePoseCalibration(){
-  let baseline=null,points=[];
-  return {
-    reset(){baseline=null;points=[];},
-    observe({yaw,pitch},time){
-      if(!Number.isFinite(yaw)||!Number.isFinite(pitch)||!Number.isFinite(time))return {ready:false};
-      if(!baseline){
-        if(Math.abs(yaw)>25||Math.abs(pitch)>30){points=[];return {ready:false,label:'고개를 정면으로 두고 카메라를 편하게 바라봐 주세요'};}
-        if(points.length&&(time-points.at(-1).time>1800||Math.abs(yaw-points[0].yaw)>4||Math.abs(pitch-points[0].pitch)>4))points=[];
-        points.push({yaw,pitch,time});
-        if(points.length<3||time-points[0].time<1000)return {ready:false,label:'편한 정면 자세를 확인하고 있어요. 잠시 그대로 있어 주세요'};
-        baseline={yaw:points.reduce((sum,p)=>sum+p.yaw,0)/points.length,pitch:points.reduce((sum,p)=>sum+p.pitch,0)/points.length};points=[];
-      }
-      return {ready:true,direction:faceDirection(yaw-baseline.yaw,pitch-baseline.pitch)};
-    },
-  };
+  return {width,height,transform:[cos,-sin,sin,cos,112-cos*midX-sin*midY,85+sin*midX-cos*midY]};
 }
 export function createEnrollmentCollector() {
-  let samples=[],counts=[0,0,0,0,0],last=-Infinity,stableSince=null,previous=-Infinity;
-  const reset=()=>{samples=[];counts=[0,0,0,0,0];last=-Infinity;stableSince=null;};
+  let samples=[],counts=[0,0,0,0,0],last=-Infinity,captureStep=null;
+  const step=()=>counts.findIndex((count,i)=>count<FACE_DIRECTIONS[i].count);
+  const reset=()=>{samples=[];counts=[0,0,0,0,0];last=-Infinity;captureStep=null;};
+  const status=()=>{
+    const next=step(),direction=next<0?'front':FACE_DIRECTIONS[next].name;
+    return {progress:samples.length,counts:[...counts],direction,manualCapture:true,canCapture:captureStep===null,
+      captureLabel:next<0?'정면 확인 및 저장':'자세 확인 · 촬영',
+      label:next<0?'정면으로 돌아온 뒤 정면 확인 및 저장을 눌러 주세요':`${FACE_DIRECTIONS[next].label} · ${counts[next]}/${FACE_DIRECTIONS[next].count}${captureStep===null?' · 준비되면 확인 버튼을 눌러 주세요':' · 촬영 중입니다. 잠시 그대로 있어 주세요'}`};
+  };
   return {
-    reset,
-    observe(values,{time,direction,quality=true,multiple=false}={}) {
+    reset,status,
+    confirm(){if(captureStep!==null)return false;captureStep=step();return true;},
+    observe(values,{time,quality=true,multiple=false}={}) {
       if(multiple)reset();
-      const descriptor=normalized(values),step=counts.findIndex((count,i)=>count<FACE_DIRECTIONS[i].count);
-      const response=()=>{const next=counts.findIndex((count,i)=>count<FACE_DIRECTIONS[i].count);return {samples:samples.map(row=>[...row]),progress:samples.length,counts:[...counts],direction:next<0?'front':FACE_DIRECTIONS[next].name,label:next<0?'마지막으로 정면을 다시 봐 주세요':`${FACE_DIRECTIONS[next].label} · ${counts[next]}/${FACE_DIRECTIONS[next].count}`};};
-      if(!quality||!descriptor||!Number.isFinite(time)||time-previous>1800){stableSince=null;previous=time;return {...response(),complete:false};}
-      previous=time;stableSince??=time;
-      if(time-stableSince<1000||time-last<400||direction!==(step<0?'front':FACE_DIRECTIONS[step].name))return {...response(),complete:false};
+      const descriptor=normalized(values),response=()=>({...status(),samples:samples.map(row=>[...row]),complete:false});
+      if(!quality||!descriptor||!Number.isFinite(time)||time-last<400||captureStep===null)return response();
       last=time;
-      if(step<0)return {...response(),complete:true};
-      samples.push(descriptor);counts[step]++;
-      return {...response(),complete:false};
+      if(captureStep<0){captureStep=null;return {...response(),complete:true};}
+      samples.push(descriptor);counts[captureStep]++;
+      if(counts[captureStep]>=FACE_DIRECTIONS[captureStep].count)captureStep=null;
+      return response();
     },
   };
 }
@@ -99,36 +79,47 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
   let matcher=createIdentityMatcher(await vault.load()||[]),collector=matcher.enrolled?null:createEnrollmentCollector();
   const model=await tf.loadGraphModel(MODEL);
   const canvas=new OffscreenCanvas(224,224),context=canvas.getContext('2d',{willReadFrequently:true});
-  const poseCalibration=createFacePoseCalibration();
-  let lastCheck=-Infinity,current={matched:false,status:matcher.enrolled?'checking':'enrolling'},closed=false;
+  let lastCheck=-Infinity,current={matched:false,status:matcher.enrolled?'checking':'enrolling'},closed=false,saving=false,saveError='';
   const state=()=>({...current,enrolled:matcher.enrolled});
-  const hold=(label,multiple=false)=>{matcher.reset();collector?.observe(null,{time:lastCheck,quality:false,multiple});current={matched:false,status:'quality-hold',label};notify({type:'face-progress',state:'QUALITY_HOLD',label,...(multiple&&collector?{progress:0,counts:[0,0,0,0,0]}:{})});return state();};
+  const progress=(extra={})=>notify({type:'face-progress',state:'ENROLLING',...collector?.status(),...extra});
+  const hold=(label,multiple=false)=>{matcher.reset();collector?.observe(null,{time:lastCheck,quality:false,multiple});current={matched:false,status:'quality-hold',label};progress({state:'QUALITY_HOLD',label});return state();};
+  if(collector)progress();
   return {
+    confirmCapture(){if(closed||saving||!collector)return false;saveError='';const accepted=collector.confirm();progress();return accepted;},
     async check(source,result,time){
       if(closed)return {matched:false,status:'locked',enrolled:false};
+      // Keep frame replies flowing while storage/KMS requests are pending.
+      if(saving)return state();
+      if(saveError)return state();
       const faces=result.faceLandmarks||[],face=faces[0];
-      if(faces.length!==1||!face?.[473]){if(faces.length>1)poseCalibration.reset();return hold(faces.length>1?'화면에 한 사람만 나오게 해 주세요':'얼굴 전체가 카메라에 나오게 해 주세요. 크기와 위치는 자동으로 맞춥니다',faces.length>1);}
+      if(faces.length!==1||!face?.[473])return hold(faces.length>1?'화면에 한 사람만 나오게 해 주세요':'얼굴 전체가 카메라에 나오게 해 주세요. 크기와 위치는 자동으로 맞춥니다',faces.length>1);
       if(time-lastCheck<500)return state();
-      const gap=time-lastCheck;lastCheck=time;
+      lastCheck=time;
       const width=source.videoWidth||source.width,height=source.videoHeight||source.height;
       const framing=faceFrameGeometry(face,width,height);
       if(!framing)return hold('얼굴 전체가 보이게 하고 너무 멀리 앉지 말아 주세요. 크기와 위치는 자동으로 맞춥니다');
       notify({type:'face-framing',framing});
-      if(gap>1800&&Number.isFinite(gap))return hold('인식 속도가 느립니다. 다른 앱을 닫고 잠시 기다려 주세요');
       context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
       context.setTransform(...framing.transform);context.drawImage(source,0,0);context.setTransform(1,0,0,1,0,0);
       const image=context.getImageData(0,0,224,224),quality=faceImageQuality(image);
       if(quality)return hold(quality);
-      const pose=collector?poseCalibration.observe(framing,time):null;
-      if(pose&&!pose.ready)return hold(pose.label||'정면 자세를 확인하고 있습니다');
       const input=tf.tidy(()=>tf.browser.fromPixels(image).toFloat().expandDims(0));let descriptor;
       try {
         descriptor=model.execute(input,'global_pooling/Mean');const values=await descriptor.data();
         if(collector){
-          const observed=collector.observe(values,{time,direction:pose.direction});
+          const observed=collector.observe(values,{time});
           current={matched:false,status:'enrolling',progress:observed.progress};
-          notify({type:'face-progress',state:'ENROLLING',progress:observed.progress,counts:observed.counts,direction:observed.direction,label:observed.progress===12?'정면을 다시 봐 주세요':observed.label});
-          if(observed.complete){const restored=await vault.save(observed.samples);matcher=createIdentityMatcher(restored);collector.reset();collector=null;current={matched:false,status:'checking'};}
+          progress();
+          if(observed.complete){
+            saving=true;current={matched:false,status:'saving',progress:12};
+            void vault.save(observed.samples).then(restored=>{
+              if(closed)return;matcher=createIdentityMatcher(restored);collector.reset();collector=null;current={matched:false,status:'checking'};
+              notify({type:'face-progress',state:'VERIFYING',manualCapture:false,label:'저장이 완료됐습니다. 정면을 바라보면 얼굴 확인이 끝납니다.'});
+            }).catch(error=>{
+              if(closed)return;saveError=error.message||'얼굴 정보를 저장하지 못했습니다.';current={matched:false,status:'save-error',progress:12};
+              progress({state:'RECOVERY_REQUIRED',label:`저장 실패: ${saveError}`,canCapture:true,captureLabel:'저장 다시 시도'});
+            }).finally(()=>{saving=false;});
+          }
         }else current=matcher.observe(values);
         if(current.matched)notify({type:'face-verified'});
         return state();
