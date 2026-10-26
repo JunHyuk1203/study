@@ -5,7 +5,7 @@ import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
-export const CAMERA_INFERENCE_INTERVAL_MS=100;
+export const CAMERA_INFERENCE_INTERVAL_MS=300;
 let lastFrameRequestAt=-Infinity;
 // Rollback switch: false selects the previous search and temporal policy together.
 const phoneRedesign = true;

@@ -61,7 +61,7 @@ export function paintCameraDebug(root, debug, state) {
   panel.querySelector('[data-debug-summary]').textContent = summary;
   const runtime = snapshot?.runtime;
   panel.querySelector('.cam-debug-note').textContent = runtime?.backend ?
-    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 100ms 추론 요청 간격'}` :
+    `${runtime.mode === 'light' ? '경량' : '표준'} Worker · ${runtime.backend.toUpperCase()}${Number.isFinite(runtime.inferenceMs) ? ` · 추론 ${Math.round(runtime.inferenceMs)}ms` : ''}${snapshot.phoneState ? ` · 휴대폰 지연 p50/p95 ${Math.round(snapshot.phoneDiagnostics.p50)}/${Math.round(snapshot.phoneDiagnostics.p95)}ms · 폐기 ${snapshot.phoneDiagnostics.discarded}회` : ' · 300ms 추론 요청 간격'}` :
     '분석 프레임 기준 · 경고와 시간 정지는 동시에 적용됩니다.';
   for (const row of focusDebugRows(snapshot)) {
     const element = panel.querySelector(`[data-debug-row="${row.key}"]`);

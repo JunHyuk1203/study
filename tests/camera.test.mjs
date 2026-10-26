@@ -36,7 +36,7 @@ test('account settings reenrollment replaces the profile without starting a stud
   assert.match(html,/<dialog[^>]*id="account-settings"[\s\S]*data-face-reenroll[\s\S]*<\/dialog>/);
 });
 
-test('inference requests are at least 100ms apart and never overlap a pending frame',async()=>{
+test('inference requests are at least 300ms apart and never overlap a pending frame',async()=>{
   let now=0;const sent=[],delays=[],video={readyState:2,currentTime:0,setAttribute(){}};
   const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener(){}};
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
@@ -44,10 +44,11 @@ test('inference requests are at least 100ms apart and never overlap a pending fr
   vm.runInContext(`${source}\nenabled=ready=true;worker={postMessage:send};globalThis.runFrame=()=>frame(revision);globalThis.ack=()=>{inFlight=false;};`,context);
   await context.runFrame();assert.equal(sent.length,1);
   context.ack();now=50;video.currentTime=.05;await context.runFrame();assert.equal(sent.length,1);
-  now=100;video.currentTime=.1;await context.runFrame();assert.equal(sent.length,2);
-  now=200;video.currentTime=.2;await context.runFrame();assert.equal(sent.length,2);
+  now=299;video.currentTime=.299;await context.runFrame();assert.equal(sent.length,1);
+  now=300;video.currentTime=.3;await context.runFrame();assert.equal(sent.length,2);
+  now=600;video.currentTime=.6;await context.runFrame();assert.equal(sent.length,2);
   context.ack();await context.runFrame();assert.equal(sent.length,3);
-  assert.deepEqual(sent.map(data=>data.time),[0,100,200]);assert.ok(delays.every(delay=>delay===100));
+  assert.deepEqual(sent.map(data=>data.time),[0,300,600]);assert.ok(delays.every(delay=>delay===300));
 });
 
 test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{
