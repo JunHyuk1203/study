@@ -1,0 +1,78 @@
+STUDY Source-Available View-Only License 1.0
+
+Copyright (c) 2026 JunHyuk1203. All rights reserved.
+
+1. Scope
+
+This notice applies to the original source code, documentation, designs, and
+other original materials in this repository to the extent that JunHyuk1203
+owns, or is authorized to license, the applicable rights (the "Materials").
+Third-party materials are excluded as described in section 5.
+
+2. Public viewing only
+
+The Materials are made publicly visible solely for inspection. Public access
+does not make this project open source and does not grant a general right to
+use the Materials. Except for the limited exceptions in section 4, all rights
+are reserved. Any additional permission requires the applicable copyright
+holder's prior written authorization.
+
+3. No reuse or redistribution
+
+Without that prior written authorization, you may not:
+
+- Copy, download for reuse, reproduce, or distribute the Materials, in whole
+  or in part, including by mirroring, republishing, or sharing source files
+  or compiled copies.
+- Modify, adapt, translate, remix, or create derivative works from the
+  Materials, including secondary creations, ports, or modified versions.
+- Build, execute, deploy, self-host, or otherwise use the Materials to operate
+  your own software, website, application, service, or product.
+- Incorporate the Materials into another project, package, dataset, model
+  training or fine-tuning process, or other work.
+- Use or exploit the Materials commercially, including selling, licensing,
+  monetizing, providing paid services, or using them for a business.
+- Sublicense the Materials, offer them under another license, or remove or
+  misrepresent their authorship, copyright, or rights notices.
+
+These restrictions apply to personal, educational, research, nonprofit, and
+other noncommercial reuse as well as commercial reuse. Attribution alone
+does not grant permission.
+
+4. Necessary exceptions
+
+Nothing in this notice restricts rights that applicable law does not permit
+the copyright holder to restrict, or rights necessarily granted under the
+applicable terms of a hosting platform. In particular, GitHub's applicable
+Terms of Service permit viewing and forking public repositories within its
+service. This notice does not purport to remove those platform rights, and
+does not independently grant any further reuse rights.
+
+Users may receive, temporarily cache, and execute browser-delivered assets
+solely as necessary to use the official hosted service provided or authorized
+by the copyright holder, subject to that service's terms. This does not grant
+permission to extract, repurpose, redistribute, or self-host the Materials.
+
+The copyright holder retains the right to use and license their own work.
+This notice does not revoke valid rights previously granted to a recipient
+under a separate license or agreement.
+
+5. Third-party rights
+
+Third-party libraries, dependencies, runtimes, models, assets, and materials
+with their own notices remain governed by their respective licenses. This
+notice does not claim ownership of or replace those licenses, and does not
+restrict rights granted by their copyright holders. Preserve their applicable
+license and attribution notices. See also server/THIRD-PARTY-NOTICES.md and
+the original notices distributed with each component.
+
+6. No warranty
+
+THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NONINFRINGEMENT. TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE
+COPYRIGHT HOLDERS SHALL NOT BE LIABLE FOR CLAIMS, DAMAGES, OR OTHER LIABILITY
+ARISING FROM THE MATERIALS OR THEIR USE.
+
+For additional permissions, contact the repository owner:
+https://github.com/JunHyuk1203

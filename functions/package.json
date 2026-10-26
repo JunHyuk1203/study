@@ -1,6 +1,7 @@
 {
   "name": "study-backend",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "index.js",
   "engines": { "node": "22" },

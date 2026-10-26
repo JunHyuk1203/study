@@ -1,5 +1,13 @@
 # STUDY.
 
+## 소스 공개 범위와 이용 제한
+
+**열람용 소스 공개 프로젝트입니다. 오픈소스 사용 허가는 부여하지 않습니다.**
+
+사전 서면 허가 없이 이 프로젝트의 자체 코드·문서·디자인을 복제·수정·재배포하거나 2차 창작·타 프로젝트 편입·자체 호스팅·상업적 이용에 사용하는 것을 금지합니다. 개인·교육·연구·비영리 목적의 재사용과 AI 학습용 편입도 허용하지 않으며, 출처를 표시해도 허가를 대신할 수 없습니다. 자세한 적용 범위와 예외는 [LICENSE](LICENSE)를 따릅니다.
+
+GitHub 공개 저장소 약관이 허용하는 GitHub 내 열람·포크와 법률상 제한할 수 없는 권리는 예외입니다. 공식 웹서비스의 정상적인 이용은 가능하며, 제3자 구성요소에는 각자의 기존 라이선스가 적용됩니다. 배포 런타임 관련 고지는 [제3자 고지](server/THIRD-PARTY-NOTICES.md)를 참고하세요.
+
 ## 자체 서버 구현 (2026-10-24)
 
 개발 파일을 전체 백업한 뒤 Windows용 자체 API·PostgreSQL 서버와 `StudyServer.exe`를 구현하고 로컬 실행 검증을 마쳤습니다. 웹 호스팅은 GitHub Pages, 로그인·계정 인증은 Firebase Auth를 유지합니다. 기존 Firestore 데이터는 이전하지 않고 새 DB로 시작합니다. 현재 PC의 Firebase 연결·API 키는 암호화 사전 설정을 완료했습니다. 최신 EXE는 `server/artifacts/ready/StudyServer.exe`이며, 직접 할 최초 네트워크 작업은 [USER-STEPS](server/USER-STEPS.md)에 정리했습니다. 실행·백업 방법은 [Windows 서버 안내](server/README.md), 검증 범위는 [검증 결과](server/VALIDATION.md)를 참고하세요. 아래 Firebase 운영 설명은 이전 배포의 기록입니다.

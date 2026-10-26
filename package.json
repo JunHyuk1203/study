@@ -1,6 +1,7 @@
 {
   "name": "study-ui",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "test:selfhost": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File server/test-selfhost.ps1",
