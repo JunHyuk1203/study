@@ -7,11 +7,12 @@ import {FACE_POLICY,FACE_ORIGIN,studyNonce} from './functions/face-protocol.js';
 let session=null,dialog=null,previousFocus=null,expiryTimer=null,hiddenTimer=null,progressTimer=null,epoch=0,verified=false;
 let phase='SIGNED_OUT',lastProgress=-1,lastProgressAt=0;
 let channel;
+let previewFrame=null,previewFraming=null;
 const element=(tag,text,className)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;};
 const invoke=async(name,data)=>{const response=await serverCallable(name) (data);return response.data;};
 const broadcast=()=>{channel??=typeof BroadcastChannel==='function'?new BroadcastChannel('study-face-policy-v1'):null;return channel;};
 function ensureStyle(){if(!document.querySelector('[data-face-style]')){const link=document.createElement('link');link.rel='stylesheet';link.href=new URL('./face-enrollment.css',import.meta.url).href;link.dataset.faceStyle='';document.head.append(link);}}
-function closeDialog(){clearInterval(progressTimer);progressTimer=null;dialog?.close();dialog?.remove();dialog=null;previousFocus?.focus();previousFocus=null;}
+function closeDialog(){clearInterval(progressTimer);progressTimer=null;cancelAnimationFrame(previewFrame);previewFrame=null;previewFraming=null;dialog?.close();dialog?.remove();dialog=null;previousFocus?.focus();previousFocus=null;}
 function setPhase(value,label) {
   phase=value;
   const status=dialog?.querySelector('[data-face-status]');
@@ -34,11 +35,29 @@ function makeDialog(){
 function addPreview(){
   if(!dialog||dialog.querySelector('.face-preview'))return;
   const guide=element('div',null,'face-preview'),video=element('video');video.autoplay=true;video.muted=true;video.playsInline=true;video.setAttribute('aria-hidden','true');guide.append(video);
+  const canvas=element('canvas');canvas.width=canvas.height=224;canvas.setAttribute('aria-hidden','true');guide.append(canvas);
   const ring=element('div',null,'face-ring');ring.setAttribute('role','progressbar');ring.setAttribute('aria-label','얼굴 등록 진행률');ring.setAttribute('aria-valuemin','0');ring.setAttribute('aria-valuemax','12');ring.setAttribute('aria-valuenow','0');guide.append(ring);
   const directions=element('p','정면 ○ · 왼쪽 ○ · 오른쪽 ○ · 위 ○ · 아래 ○','face-directions');directions.dataset.faceDirections='';
   dialog.insertBefore(guide,dialog.querySelector('[data-face-cancel]'));dialog.insertBefore(directions,dialog.querySelector('[data-face-cancel]'));
+  const hint=element('p','얼굴 전체가 카메라에 나오면 크기·위치를 자동으로 맞춥니다. 안내가 바뀔 때만 고개를 조금 움직이고 잠시 멈춰 주세요.','face-preview-hint');dialog.insertBefore(hint,dialog.querySelector('[data-face-cancel]'));
 }
-export function attachFacePreview(stream){addPreview();const video=dialog?.querySelector('video');if(video){video.srcObject=stream;void video.play().catch(()=>{});}}
+export function attachFacePreview(stream){
+  addPreview();const video=dialog?.querySelector('video'),canvas=dialog?.querySelector('canvas');if(!video||!canvas)return;
+  video.srcObject=stream;void video.play().catch(()=>{});cancelAnimationFrame(previewFrame);
+  const context=canvas.getContext('2d');
+  let lastVideoTime=-1;
+  const draw=()=>{
+    if(!dialog||!canvas.isConnected)return;
+    if(video.readyState>=2&&video.currentTime!==lastVideoTime){
+      lastVideoTime=video.currentTime;
+      context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
+      if(previewFraming){const {transform:t,width,height}=previewFraming;context.setTransform(t[0]*width/video.videoWidth,t[1]*width/video.videoWidth,t[2]*height/video.videoHeight,t[3]*height/video.videoHeight,t[4],t[5]);}
+      else{const scale=224/Math.min(video.videoWidth,video.videoHeight);context.setTransform(scale,0,0,scale,(224-video.videoWidth*scale)/2,(224-video.videoHeight*scale)/2);}
+      context.drawImage(video,0,0);context.setTransform(1,0,0,1,0,0);
+    }
+    previewFrame=requestAnimationFrame(draw);
+  };draw();
+}
 export function faceWorkerContext(){return session;}
 export function faceSessionState(){return {phase,verified,profileId:session?.binding?.profileId};}
 export function waitForFaceVerification(){
@@ -132,7 +151,7 @@ export async function prepareFaceSession(){
     ({ticket}=await invoke('beginFaceEnrollment',{installationId,idempotencyKey,signature}));
   }
   session={uid,installationId,keys,grant,record,ticket,binding:record?.binding||ticket.binding};
-  setPhase(enrolling?'ENROLLING':'VERIFYING',enrolling?'얼굴을 안내선 안에 맞춰 주세요':'기존에 등록한 얼굴을 확인합니다. 정면을 봐 주세요.');addPreview();
+  setPhase(enrolling?'ENROLLING':'VERIFYING',enrolling?'카메라를 편하게 바라봐 주세요. 얼굴 크기와 위치를 자동으로 맞춥니다':'기존에 등록한 얼굴을 확인합니다. 정면을 봐 주세요.');addPreview();
   lastProgressAt=performance.now();lastProgress=-1;
   progressTimer=setInterval(()=>{if(dialog&&phase==='ENROLLING'&&performance.now()-lastProgressAt>45000)setPhase('ENROLLING','촬영이 진행되지 않습니다. 조명·거리·카메라 속도를 확인하거나 취소 후 다시 시도해 주세요. 고개를 움직이기 어렵다면 관리자에게 문의해 주세요.');},5000);
   const now=performance.now(),serverNowMs=grant.serverNowMs||status.serverNowMs,duration=grant.expiresAtMs-serverNowMs;
@@ -152,6 +171,7 @@ export async function handleFaceWorkerRPC(action,data){
 }
 export function handleFaceWorkerEvent(data){
   if(!session)return;
+  if(data.type==='face-framing'){previewFraming=data.framing;return;}
   if(data.type==='face-progress'){
     if(data.progress!==undefined&&data.progress!==lastProgress){lastProgress=data.progress;lastProgressAt=performance.now();}
     setPhase(data.state,data.label||'얼굴 정보를 안전하게 저장하고 있어요');

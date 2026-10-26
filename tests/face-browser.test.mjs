@@ -48,6 +48,16 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     let page=await open();await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
     await page.evaluate(()=>{window.verificationResult=null;window.verificationWait=window.api.waitForFaceVerification().then(result=>{window.verificationResult=result;});});
     assert.equal(await page.evaluate(()=>window.verificationResult),null);
+    // A generated video tests live framing without opening a physical camera.
+    await page.evaluate(()=>{
+      const source=document.createElement('canvas');source.width=640;source.height=480;
+      const context=source.getContext('2d');context.fillStyle='#18243b';context.fillRect(0,0,640,480);context.fillStyle='#cf6953';context.beginPath();context.ellipse(320,260,80,100,0,0,Math.PI*2);context.fill();
+      window.previewStream=source.captureStream(5);window.api.attachFacePreview(window.previewStream);
+      window.api.handleFaceWorkerEvent({type:'face-framing',framing:{width:640,height:480,transform:[1,0,0,1,-208,-155]}});
+    });
+    await page.waitForFunction(()=>{const canvas=document.querySelector('.face-preview canvas');return canvas?.getContext('2d').getImageData(112,112,1,1).data[0]>180;});
+    await page.screenshot({path:resolve(root,'.codex-face-autoframe-preview.png')});
+    await page.evaluate(()=>window.previewStream.getTracks().forEach(track=>track.stop()));
     await runVault(page);await page.waitForFunction(()=>!document.querySelector('.face-enrollment'));
     assert.equal(await page.evaluate(()=>window.verificationResult),true);
     const original=await page.evaluate(async()=>{const s=window.api.faceWorkerContext();const {faceStore,faceRecordKey}=await import('/face-storage.js');const record=await faceStore('profiles','readonly',faceRecordKey(s.uid,s.installationId,s.binding.profileId));return {id:s.binding.profileId,ciphertext:record.ciphertext,hasSamples:'samples'in record,hasLocalKey:'wrappedKey'in record,extractable:s.keys.wrappingKey.extractable,state:window.api.faceSessionState()};});

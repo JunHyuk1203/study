@@ -5,7 +5,7 @@ import {createFaceService,authorizeFaceStudy,envelopeHash,faceDayEnd,seoulDay} f
 import {FACE_MODEL,FACE_PREPROCESS,FACE_SCHEMA,FACE_ORIGIN,studyNonce} from '../functions/face-protocol.js';
 import {createBrowserFaceKeys} from '../face-storage.js';
 import {signFace,encryptFaceSamples,decryptFaceSamples} from '../face-crypto.js';
-import {createIdentityMatcher,createEnrollmentCollector,faceDirection,faceImageQuality} from '../camera-identity.js';
+import {createIdentityMatcher,createEnrollmentCollector,faceDirection,faceImageQuality,faceFrameGeometry,createFacePoseCalibration} from '../camera-identity.js';
 import {checkpointCamera} from '../functions/domain.js';
 import {createStudyRevocationCheck} from '../functions/study-auth.js';
 
@@ -102,6 +102,7 @@ test('collector requires all five directions, stable quality and an independent 
   const collector=createEnrollmentCollector();let time=0,result,target=0;
   for(const [direction,count]of [['front',4],['left',2],['right',2],['up',2],['down',2]]){
     target+=count;for(let i=0;i<15;i++){result=collector.observe(owner,{time:time+=500,direction});if(result.progress>=target)break;}
+    assert.equal(result.direction,{4:'left',6:'right',8:'up',10:'down',12:'front'}[target]);
   }
   assert.equal(result.progress,12);assert.equal(result.complete,false);
   assert.equal(collector.observe(owner,{time:time+=500,direction:'left'}).complete,false);
@@ -109,6 +110,39 @@ test('collector requires all five directions, stable quality and an independent 
   collector.observe(owner,{time:time+=500,direction:'front'});collector.observe(owner,{time:time+=500,direction:'front'});
   assert.equal(collector.observe(owner,{time:time+=500,direction:'front'}).complete,true);
   assert.equal(collector.observe(other,{time:time+=500,direction:'front'}).reset,true);
+});
+
+test('automatic face framing aligns translated, resized and tilted faces without asking for a fixed outline',()=>{
+  const makeFace=(cx,cy,size,angle)=>{
+    const face=Array.from({length:478},()=>({x:cx/1280,y:cy/720}));
+    const point=(x,y)=>({x:(cx+size*(x*Math.cos(angle)-y*Math.sin(angle)))/1280,y:(cy+size*(x*Math.sin(angle)+y*Math.cos(angle)))/720});
+    for(const i of [33,133])face[i]=point(-.5,0);
+    for(const i of [362,263])face[i]=point(.5,0);
+    face[1]=point(0,.48);face[10]=point(0,-.8);face[152]=point(0,1.3);face[234]=point(-1,.4);face[454]=point(1,.4);
+    return face;
+  };
+  for(const [x,y,size,angle]of [[640,240,130,0],[340,200,65,.2],[850,250,150,-.2]]){
+    const face=makeFace(x,y,size,angle),framing=faceFrameGeometry(face,1280,720);assert.ok(framing);
+    const [a,b,c,d,e,f]=framing.transform;
+    assert.ok(Math.abs(a*x+c*y+e-112)<1e-8);assert.ok(Math.abs(b*x+d*y+f-85)<1e-8);
+    assert.ok(Math.abs(framing.yaw)<1e-8);assert.ok(Math.abs(framing.pitch)<1e-8);
+  }
+  assert.equal(faceFrameGeometry(makeFace(640,240,15,0),1280,720),null);
+  assert.equal(faceFrameGeometry(makeFace(15,200,100,0),1280,720),null);
+});
+
+test('registration calibrates a steady comfortable front pose once and keeps directional movement relative to it',()=>{
+  const calibration=createFacePoseCalibration();
+  assert.equal(calibration.observe({yaw:5,pitch:14},0).ready,false);
+  assert.equal(calibration.observe({yaw:5,pitch:14},500).ready,false);
+  assert.equal(calibration.observe({yaw:5,pitch:14},1000).direction,'front');
+  assert.equal(calibration.observe({yaw:21,pitch:14},1500).direction,'left');
+  assert.equal(calibration.observe({yaw:-11,pitch:14},2000).direction,'right');
+  assert.equal(calibration.observe({yaw:5,pitch:3},2500).direction,'up');
+  assert.equal(calibration.observe({yaw:5,pitch:25},3000).direction,'down');
+  calibration.reset();assert.equal(calibration.observe({yaw:35,pitch:14},4000).ready,false);
+  assert.equal(calibration.observe({yaw:5,pitch:14},4500).ready,false);
+  assert.equal(calibration.observe({yaw:15,pitch:14},5000).ready,false);
 });
 test('quality, multi-face and repeated-frame holds cannot add enrollment samples',()=>{
   const c=createEnrollmentCollector();for(let time=0;time<2000;time+=500)c.observe(owner,{time,direction:'front'});
