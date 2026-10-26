@@ -15,7 +15,7 @@ self.onmessage = async ({ data }) => {
       const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs');
       const { createCameraInference } = await import('./camera-inference.js?v=20261025-8');
       const { createStudyObjectDetector } = await import('./camera-objects.js?v=20261024-11');
-      const { createLocalFaceGuard } = await import('./camera-identity.js?v=20261026-face3');
+      const { createLocalFaceGuard } = await import('./camera-identity.js?v=20261026-face4');
       detector = await createCameraInference(vision, {load:options=>createStudyObjectDetector(self.tf,options)}, self.tf, undefined,
         { light: data.light, phoneRedesign:data.phoneRedesign!==false, onPhoneObservation:message=>self.postMessage(message), identityFactory:()=>createLocalFaceGuard(self.tf,data.faceSecurity,faceRPC,message=>self.postMessage(message)) });
       self.postMessage({ type: 'ready' });

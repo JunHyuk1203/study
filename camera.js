@@ -204,7 +204,7 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261026-face3', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261026-face4', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {

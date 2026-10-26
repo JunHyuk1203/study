@@ -72,7 +72,6 @@ export function createEnrollmentCollector() {
       if(!quality||!descriptor||!Number.isFinite(time)||time-previous>1800){stableSince=null;previous=time;return {...response(),complete:false};}
       previous=time;stableSince??=time;
       if(time-stableSince<1000||time-last<400||direction!==(step<0?'front':FACE_DIRECTIONS[step].name))return {...response(),complete:false};
-      if(samples.some(sample=>similarity(sample,descriptor)<.85)){reset();return {...response(),progress:0,complete:false,reset:true};}
       last=time;
       if(step<0)return {...response(),complete:true};
       samples.push(descriptor);counts[step]++;
@@ -90,8 +89,7 @@ export function faceImageQuality(image) {
   if(mean>215||bright/count>.3)return '얼굴에 비치는 강한 빛이나 안경 반사를 줄여 주세요';
   if(Math.abs(left-right)/Math.max(1,sum)>.3)return '창문을 등지지 않도록 위치를 바꿔 주세요';
   // Smooth skin, webcam denoising and resampling reduce local edges without hiding a face.
-  // Only a nearly uniform frame is rejected here; landmarks and descriptor consistency
-  // provide the remaining face checks instead of inferring occlusion from texture.
+  // Only a nearly uniform frame is rejected here. Do not infer occlusion from texture.
   if(sum2/count-mean*mean<16)return '얼굴의 윤곽을 구분하기 어렵습니다. 카메라 초점과 조명을 확인해 주세요';
   return null;
 }
@@ -129,7 +127,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
         if(collector){
           const observed=collector.observe(values,{time,direction:pose.direction});
           current={matched:false,status:'enrolling',progress:observed.progress};
-          notify({type:'face-progress',state:'ENROLLING',progress:observed.progress,counts:observed.counts,direction:observed.direction,label:observed.reset?'얼굴이 변경되어 처음부터 다시 확인합니다':observed.progress===12?'정면을 다시 봐 주세요':observed.label});
+          notify({type:'face-progress',state:'ENROLLING',progress:observed.progress,counts:observed.counts,direction:observed.direction,label:observed.progress===12?'정면을 다시 봐 주세요':observed.label});
           if(observed.complete){const restored=await vault.save(observed.samples);matcher=createIdentityMatcher(restored);collector.reset();collector=null;current={matched:false,status:'checking'};}
         }else current=matcher.observe(values);
         if(current.matched)notify({type:'face-verified'});

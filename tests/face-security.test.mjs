@@ -109,7 +109,16 @@ test('collector requires all five directions, stable quality and an independent 
   assert.equal(collector.observe(owner,{time:time+=500,direction:'front',quality:false}).complete,false);
   collector.observe(owner,{time:time+=500,direction:'front'});collector.observe(owner,{time:time+=500,direction:'front'});
   assert.equal(collector.observe(owner,{time:time+=500,direction:'front'}).complete,true);
-  assert.equal(collector.observe(other,{time:time+=500,direction:'front'}).reset,true);
+  assert.equal(collector.observe(other,{time:time+=500,direction:'front'}).reset,undefined);
+});
+
+test('enrollment preserves collected samples when a later descriptor changes',()=>{
+  const collector=createEnrollmentCollector();let result;
+  for(let time=0;time<=3000;time+=500)result=collector.observe(owner,{time,direction:'front'});
+  assert.equal(result.progress,4);
+  result=collector.observe(other,{time:3500,direction:'left'});
+  assert.equal(result.progress,5);assert.equal(result.counts[0],4);assert.equal(result.counts[1],1);
+  assert.equal(result.reset,undefined);assert.deepEqual(result.samples[0],owner);assert.deepEqual(result.samples[4],other);
 });
 
 test('automatic face framing aligns translated, resized and tilted faces without asking for a fixed outline',()=>{
