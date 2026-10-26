@@ -165,15 +165,19 @@ test('failed camera session creation displays the error inside the focus screen'
   const user={uid:'owner',emailVerified:true};
   const context=vm.createContext({
     cameraController:'controller',cameraState:()=>camera,getAuthUser:()=>user,authReady:Promise.resolve(true),
-    openCameraFocus(){},startCamera:async()=>true,
+    openCameraFocus(){},startCamera:async()=>{context.cameraStarts=(context.cameraStarts||0)+1;return true;},
     stopCamera:(message,error)=>{camera.enabled=false;camera.tracking=false;camera.status=error?'error':'off';camera.message=message;},
     document:{querySelectorAll:()=>[],querySelector:()=>null,addEventListener:(name,handler)=>{if(name==='click')clicks.push(handler);}},
     window:{addEventListener(){},setInterval(){},dispatchEvent(){}},Event:class {},
   });
-  vm.runInContext(`${source}\nauthServices={auth:{currentUser:{getIdToken:async()=>{}}}};call=()=>async()=>{throw {code:'functions/unavailable'};};globalThis.message=cameraTimerMessage;`,context);
+  vm.runInContext(`${source}\nauthServices={auth:{currentUser:{getIdToken:async()=>{}}}};call=()=>async()=>{throw {code:'functions/invalid-argument',message:'카메라 제어 ID가 올바르지 않습니다.'};};globalThis.startError=()=>cameraStartError;`,context);
   for(const click of clicks)await click({target:{closest:selector=>selector==='[data-study-action]'?button:null}});
-  assert.equal(camera.status,'error');
-  assert.match(context.message(camera),/(저장 서비스|자체 서버)에 연결하지 못했습니다/);
+  assert.equal(camera.enabled,true);assert.equal(camera.status,'tracking');
+  assert.match(context.startError(),/학습 시작 요청 실패: 카메라 제어 ID가 올바르지 않습니다/);
+  assert.equal(context.cameraStarts,1);
+  vm.runInContext(`call=()=>async()=>({data:{sessionId:'new-session',session:{sequence:0}}});`,context);
+  for(const click of clicks)await click({target:{closest:selector=>selector==='[data-study-action]'?button:null}});
+  assert.equal(context.cameraStarts,1);assert.equal(context.startError(),'');
 });
 
 function cameraStartup(authReady) {

@@ -39,6 +39,7 @@ let activeUnsubscribe;
 let activeId;
 const dataRequests = new Map();
 let busy = false;
+let cameraStartError = '';
 let finishingSession = false;
 let cameraSyncBusy = false, cameraLastSync = 0, cameraLastTracking = null, cameraSyncId = null, cameraSyncFailed = false;
 let cameraSyncFailures = 0, cameraRetryAt = 0, cameraLastAttemptTracking = null;
@@ -159,6 +160,8 @@ function notice(text, error = false, transient = !error) {
   paint();
 }
 function errorText(error) {
+  // Keep actionable service/local errors instead of disguising every failure as a network outage.
+  if(typeof error?.message==='string'&&error.message&&error.message!=='INTERNAL')return error.message;
   const messages = {
     'functions/unauthenticated': '다시 로그인해 주세요.',
     'functions/failed-precondition': '계정 화면에서 이메일 인증을 완료한 뒤 돌아와 주세요.',
@@ -341,7 +344,7 @@ function paintTimer() {
     button.setAttribute('aria-label', camera.manuallyPaused ? '학습 재개' : '학습 수동 일시정지');
     button.title = camera.manuallyPaused ? '학습 재개' : '학습 수동 일시정지';
   }
-  for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId || previewSession || camera.enabled) : !(state.profile?.activeSessionId || previewSession || camera.enabled));
+  for (const button of document.querySelectorAll('[data-study-action]')) button.disabled = busy || (button.dataset.studyAction === 'start' ? Boolean(state.profile?.activeSessionId || previewSession || camera.enabled&&!cameraStartError) : !(state.profile?.activeSessionId || previewSession || camera.enabled));
   // The focus window must remain dismissible even after camera startup fails.
   if (!busy || camera.status === 'opening' && !state.profile?.activeSessionId) for (const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')) button.disabled = false;
   for (const button of document.querySelectorAll('[data-existing-session]')) button.hidden = !state.profile?.activeSessionId;
@@ -361,6 +364,8 @@ function paintTimer() {
   if (previewSession) textAll('[data-timer-state]', camera.tracking ? '체험 학습 중 · 계정 기록 저장 안 됨' : cameraTimerMessage(camera));
   if (camera.manuallyPaused&&!session?.activityMode) textAll('[data-timer-state]', cameraTimerMessage(camera));
   if (finishingSession) textAll('[data-timer-state]', '서버에 저장 중…');
+  if(cameraStartError&&camera.enabled&&!state.profile?.activeSessionId)textAll('[data-timer-state]',`${cameraStartError} · 학습 시작 버튼으로 다시 시도해 주세요.`);
+  for(const button of document.querySelectorAll('[data-camera-retry]'))button.hidden=!cameraStartError||!camera.enabled||Boolean(state.profile?.activeSessionId);
   if(cameraHandoffDisplay){
     for(const button of document.querySelectorAll('.camera-focus [data-study-action="stop"]')){button.disabled=false;button.textContent='닫기';}
     textAll('.camera-focus [data-active-timer]',clock(cameraHandoffDisplay.seconds));
@@ -585,12 +590,15 @@ document.addEventListener('click', async event => {
     stopCamera(); previewSession = null; await closeCameraFocus(); paintTimer(); return;
   }
   busy = true;
+  const retryCameraStart=cameraStart&&cameraState().enabled&&Boolean(cameraStartError);
+  cameraStartError='';
+  let startStage='계정 확인';
   paintTimer();
   try {
     if (cameraStart) {
       cameraHandoffDisplay=null;
       openCameraFocus(button);
-      if (!await startCamera()) return;
+      if (!retryCameraStart&&!await startCamera()) return;
     }
     // A missing user/callable during startup is still loading, not guest mode.
     if (starting && !await authReady) throw { code: 'functions/unavailable' };
@@ -615,7 +623,9 @@ document.addEventListener('click', async event => {
       const subjectId = document.querySelector('[data-study-subject]')?.value || 'other';
       const cameraMode = cameraState().enabled;
       const startData={subjectId,cameraMode,controllerId:cameraController};
+      startStage='얼굴 인증 서명';
       if(cameraMode)startData.faceAuthorization=await faceStudyAuthorization(startData);
+      startStage='학습 시작 요청';
       const result = await call('startStudySession')(startData);
       if (result.data?.session) {
         state.profile = { ...state.profile, activeSessionId: result.data.sessionId };
@@ -639,8 +649,10 @@ document.addEventListener('click', async event => {
       await closeCameraFocus();
     }
   } catch (error) {
-    if (cameraStart || !starting) stopCamera(errorText(error), true);
-    notice(errorText(error), true);
+    const message=errorText(error);
+    if(cameraStart&&startStage!=='계정 확인'&&cameraState().enabled&&!state.profile?.activeSessionId)cameraStartError=`${startStage} 실패: ${message}${error?.code?` (${error.code})`:''}`;
+    else if (cameraStart || !starting) stopCamera(message, true);
+    notice(cameraStartError||message, true);
   }
   finally { finishingSession = false; busy = false; paintTimer(); void syncCamera(); }
 });

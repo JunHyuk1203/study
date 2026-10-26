@@ -48,6 +48,9 @@ export function openCameraFocus(origin) {
   focusPanel = template.content.firstElementChild.cloneNode(true);
   const subject = document.querySelector('[data-study-subject]');
   focusPanel.querySelector('[data-focus-subject]').textContent = subject?.selectedOptions[0]?.textContent || '학습';
+  const retry=document.createElement('button');retry.type='button';retry.textContent='학습 시작 다시 시도';retry.hidden=true;
+  retry.dataset.studyAction='start';retry.dataset.cameraToggle='';retry.dataset.cameraRetry='';
+  focusPanel.querySelector('.timer-panel').append(retry);
   document.body.append(focusPanel);
   document.querySelector('.app').inert = true;
   document.documentElement.classList.add('camera-focus-open');
