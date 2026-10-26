@@ -46,7 +46,10 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
   }
   try{
     let page=await open();await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
+    await page.evaluate(()=>{window.verificationResult=null;window.verificationWait=window.api.waitForFaceVerification().then(result=>{window.verificationResult=result;});});
+    assert.equal(await page.evaluate(()=>window.verificationResult),null);
     await runVault(page);await page.waitForFunction(()=>!document.querySelector('.face-enrollment'));
+    assert.equal(await page.evaluate(()=>window.verificationResult),true);
     const original=await page.evaluate(async()=>{const s=window.api.faceWorkerContext();const {faceStore,faceRecordKey}=await import('/face-storage.js');const record=await faceStore('profiles','readonly',faceRecordKey(s.uid,s.installationId,s.binding.profileId));return {id:s.binding.profileId,ciphertext:record.ciphertext,hasSamples:'samples'in record,hasLocalKey:'wrappedKey'in record,extractable:s.keys.wrappingKey.extractable,state:window.api.faceSessionState()};});
     assert.equal(original.hasSamples,false);assert.equal(original.hasLocalKey,false);assert.equal(original.extractable,false);assert.equal(original.state.verified,true);assert.equal(authCount,1);
     const signed=await page.evaluate(()=>window.api.faceStudyAuthorization({controllerId:'controller',tracking:true,sequence:1}));assert.ok(signed.signature);
@@ -59,8 +62,9 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     await page.screenshot({path:resolve(root,'.codex-face-enrollment-mobile.png')});
     await page.getByRole('button',{name:'취소',exact:true}).click();await page.waitForFunction(()=>window.error);assert.equal(await page.locator('.face-enrollment').count(),0);assert.equal(rows.get('faceSecurity/owner').active.profileId,original.id);
     await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.waitForFunction(()=>window.finished);
-    await page.evaluate(()=>{window.failStorage=true;});await runVault(page,true);assert.equal(rows.get('faceSecurity/other').active,undefined);assert.equal(await page.evaluate(()=>window.api.faceSessionState().verified),false);
+    await page.evaluate(()=>{window.verificationResult=null;window.verificationWait=window.api.waitForFaceVerification().then(result=>{window.verificationResult=result;});window.failStorage=true;});await runVault(page,true);assert.equal(rows.get('faceSecurity/other').active,undefined);assert.equal(await page.evaluate(()=>window.api.faceSessionState().verified),false);
     await page.evaluate(()=>window.api.handleFaceWorkerEvent({type:'face-progress',state:'RECOVERY_REQUIRED',label:'저장 실패. 취소 후 다시 시도해 주세요.'}));assert.equal(await page.getByRole('button',{name:'취소',exact:true}).isEnabled(),true);await page.getByRole('button',{name:'취소',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.verificationResult),false);
     await page.evaluate(()=>{window.testUid='owner';window.pendingDelete=window.api.deleteFaceEnrollment();});await page.locator('.face-enrollment input[type=checkbox]').check();await page.locator('input[type=password]').fill('not-a-real-password');await page.getByRole('button',{name:'계정 인증',exact:true}).click();await page.evaluate(()=>window.pendingDelete);assert.equal(rows.get('faceSecurity/owner').active.revoked,true);
     const erased=await page.evaluate(async()=>{const {faceStore}=await import('/face-storage.js');const installation=await faceStore('settings','readonly','installation');return await faceStore('keys','readonly',`owner:${installation}`);});assert.equal(erased,undefined);assert.deepEqual(failures,[]);
   }finally{await context?.close();}

@@ -41,6 +41,20 @@ function addPreview(){
 export function attachFacePreview(stream){addPreview();const video=dialog?.querySelector('video');if(video){video.srcObject=stream;void video.play().catch(()=>{});}}
 export function faceWorkerContext(){return session;}
 export function faceSessionState(){return {phase,verified,profileId:session?.binding?.profileId};}
+export function waitForFaceVerification(){
+  const current=session;
+  if(!current)return Promise.resolve(false);
+  if(verified)return Promise.resolve(true);
+  return new Promise(resolve=>{
+    const finish=()=>{
+      window.removeEventListener('study:face-verified',finish);
+      window.removeEventListener('study:face-locked',finish);
+      resolve(session===current&&verified);
+    };
+    window.addEventListener('study:face-verified',finish);
+    window.addEventListener('study:face-locked',finish);
+  });
+}
 export function lockFaceSession(reason='얼굴 확인을 다시 시작해 주세요.',{remote=false}={}) {
   const old=session;epoch++;session=null;verified=false;phase='PROFILE_LOCKED';
   clearTimeout(expiryTimer);clearTimeout(hiddenTimer);closeDialog();
@@ -145,7 +159,7 @@ export function handleFaceWorkerEvent(data){
     const directions=dialog?.querySelector('[data-face-directions]');if(directions&&data.counts)directions.textContent=['정면','왼쪽','오른쪽','위','아래'].map((label,i)=>`${label} ${data.counts[i]>=(i?2:4)?'✓':'○'}`).join(' · ');
   }
   if(data.type==='face-unlocked'){session.binding=data.binding;setPhase('VERIFYING','저장된 얼굴을 다시 확인합니다. 정면을 봐 주세요.');}
-  if(data.type==='face-verified'&&!verified){verified=true;setPhase('VERIFIED','✓ 얼굴 확인이 완료됐어요');setTimeout(()=>{if(verified)closeDialog();},500);}
+  if(data.type==='face-verified'&&!verified){verified=true;setPhase('VERIFIED','✓ 얼굴 확인이 완료됐어요');window.dispatchEvent(new Event('study:face-verified'));setTimeout(()=>{if(verified)closeDialog();},500);}
 }
 export async function faceStudyAuthorization(data){
   const current=session;

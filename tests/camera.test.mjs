@@ -6,6 +6,22 @@ import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURAT
 import { createFocusTracker } from '../camera-focus.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
+test('camera startup waits for face verification before allowing study to start',async()=>{
+  let finishVerification,waiting=false,finished=false;
+  const video={setAttribute(){},play:async()=>{},remove(){}};
+  const stream={getVideoTracks:()=>[],getTracks:()=>[]};
+  const document={hidden:false,createElement:()=>video,querySelector:()=>null,addEventListener(){},body:{append(){}}};
+  const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+  const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>0},window:{addEventListener(){},dispatchEvent(){}},
+    navigator:{mediaDevices:{getUserMedia:async()=>stream}},prepareFaceSession:async()=>{},attachFacePreview(){},
+    waitForFaceVerification:()=>{waiting=true;return new Promise(resolve=>{finishVerification=resolve;});}});
+  vm.runInContext(`${source}\nstartRecognitionWorker=()=>{};startCameraWatchdog=()=>{};frame=async()=>{};globalThis.startCamera=startCamera;`,context);
+  const start=context.startCamera().then(result=>{finished=true;return result;});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(waiting,true);assert.equal(finished,false);
+  finishVerification(true);assert.equal(await start,true);
+});
+
 test('repeated slow phone inference switches once to the light worker and ignores the replaced worker',async()=>{
   const workers=[];
   class Worker{constructor(){workers.push(this);}postMessage(data){this.init=data;}terminate(){this.terminated=true;}}
