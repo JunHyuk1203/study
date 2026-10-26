@@ -28,54 +28,56 @@ test('encrypted-profile matcher keeps its owner and requires fresh observations'
   assert.equal(createIdentityMatcher().observe(owner).matched,false);
 });
 
-test('identity warning waits eight seconds while all unverified time is held',()=>{
+test('timer keeps running during a ten second identity grace and pauses at its exact boundary',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,{...healthy,identity:{matched:true,status:'matched',enrolled:true}},0,2000);
-  for(let t=2200;t<10200;t+=200){const result=tracker.update(wrong,t);assert.equal(result.tracking,false);assert.equal(Boolean(result.identityWarning),false);}
-  assert.equal(tracker.update(wrong,10200).identityWarning,true);
-  const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},10400);
+  for(let t=2200;t<12200;t+=200){const result=tracker.update(wrong,t);assert.equal(result.tracking,true);assert.equal(Boolean(result.identityWarning),false);}
+  assert.equal(tracker.update(wrong,12199).tracking,true);
+  const expired=tracker.update(wrong,12200);assert.equal(expired.identityWarning,true);assert.equal(expired.tracking,false);
+  const restored=tracker.update({...healthy,identity:{matched:true,status:'matched',enrolled:true}},12400);
   assert.equal(restored.status,'scanning');assert.equal(Boolean(restored.identityWarning),false);
   for(const status of ['enrolling','checking','missing','multiple']){
     const signals={...healthy,face:status!=='missing',identity:{matched:false,status,enrolled:false}};
     assert.equal(createFocusTracker().update(signals,0).tracking,false);
   }
 });
-test('five second absence grace affects warning only and never credits an unknown returning face',()=>{
+test('missing faces and unknown returning faces share one uninterrupted ten second deadline',()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
   const wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,owner,0,2000);
   const absent={...healthy,face:false,identity:{matched:false,status:'missing',enrolled:true}};
-  assert.equal(advance(tracker,absent,2500,7000).tracking,false);
-  assert.equal(tracker.update(absent,7499).status,'scanning');
-  assert.equal(tracker.update(absent,7500).status,'paused');
-  assert.equal(tracker.update(wrong,7700).tracking,false);
-  assert.equal(advance(tracker,wrong,7900,15500,200).tracking,false);
-  assert.equal(tracker.update(wrong,15700).identityWarning,true);
+  assert.equal(advance(tracker,absent,2500,7000).tracking,true);
+  assert.equal(tracker.update(absent,7499).tracking,true);
+  assert.equal(tracker.update(wrong,7700).tracking,true);
+  assert.equal(advance(tracker,wrong,7900,12300,200).tracking,true);
+  const expired=tracker.update(wrong,12500);assert.equal(expired.identityWarning,true);assert.equal(expired.tracking,false);
 });
 test('only the recognized owner clears a continuous mismatch deadline',()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}},wrong={...healthy,identity:{matched:false,status:'mismatch',enrolled:true}};
   advance(tracker,owner,0,2000);advance(tracker,wrong,2200,6000,200);
   tracker.update({...wrong,identity:{matched:false,status:'checking',enrolled:true}},6200);
-  assert.equal(advance(tracker,wrong,6400,10200,200).identityWarning,true);
-  assert.equal(Boolean(tracker.update(owner,10400).identityWarning),false);
-  assert.equal(advance(tracker,owner,10600,12400,200).tracking,true);
-  assert.equal(advance(tracker,wrong,12600,20400,200).tracking,false);
-  assert.equal(tracker.update(wrong,20600).identityWarning,true);
+  assert.equal(advance(tracker,wrong,6400,12200,200).identityWarning,true);
+  assert.equal(Boolean(tracker.update(owner,12400).identityWarning),false);
+  assert.equal(advance(tracker,owner,12600,14400,200).tracking,true);
+  assert.equal(advance(tracker,wrong,14600,24400,200).tracking,true);
+  assert.equal(tracker.update(wrong,24600).identityWarning,true);
 });
-for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`invalid observations hold credit during face grace: ${JSON.stringify(loss)}`,()=>{
+for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`invalid observations pause after ten continuous seconds: ${JSON.stringify(loss)}`,()=>{
   const tracker=createFocusTracker(),owner={...healthy,identity:{matched:true,status:'matched',enrolled:true}};
   advance(tracker,owner,0,2000);
-  assert.equal(advance(tracker,loss,2200,7000,200).tracking,false);
-  assert.equal(tracker.update(loss,7199).tracking,false);
-  assert.equal(tracker.update(loss,7200).tracking,false);
-  assert.equal(tracker.update(owner,7400).tracking,true);
+  assert.equal(advance(tracker,loss,2200,12000,200).tracking,true);
+  assert.equal(tracker.update(loss,12199).tracking,true);
+  assert.equal(tracker.update(loss,12200).tracking,false);
+  assert.equal(tracker.update(owner,12400).tracking,false);
+  assert.equal(advance(tracker,owner,12600,14400,200).tracking,true);
 });
-test('an initial unverified face never starts credit',()=>{
+test('learning can start before the first match but an unrecognized face pauses after ten seconds',()=>{
   const tracker=createFocusTracker(),wrong={...healthy,identity:{matched:false,status:'checking',enrolled:true}};
   assert.equal(tracker.update(wrong,0).tracking,false);
-  assert.equal(tracker.update(wrong,2000).tracking,false);
-  assert.equal(advance(tracker,wrong,2200,7800,200).tracking,false);
-  assert.equal(tracker.update(wrong,8000).identityWarning,true);
+  assert.equal(tracker.update(wrong,2000).tracking,true);
+  assert.equal(advance(tracker,wrong,2200,9800,200).tracking,true);
+  assert.equal(tracker.update(wrong,9999).tracking,true);
+  assert.equal(tracker.update(wrong,10000).identityWarning,true);
 });
 test('sleep and phone counters remain visible together with the idle timer',()=>{
   const tracker=createFocusTracker();advance(tracker,healthy,0,2000);

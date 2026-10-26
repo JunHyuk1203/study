@@ -6,7 +6,7 @@ import { checkReach, checkSegment, facePose, mergePath, mergeStroke, MERGE_DURAT
 import { createFocusTracker } from '../camera-focus.js';
 const healthySignals = { reliable:true, face:true, body:true, eyesClosed:false, phoneUse:false, studyActivity:true };
 
-test('camera startup waits for face verification before allowing study to start',async()=>{
+test('camera startup waits for encrypted profile readiness without requiring a face match',async()=>{
   let finishVerification,waiting=false,finished=false;
   const video={setAttribute(){},play:async()=>{},remove(){}};
   const stream={getVideoTracks:()=>[],getTracks:()=>[]};
@@ -14,7 +14,7 @@ test('camera startup waits for face verification before allowing study to start'
   const source=(await readFile(new URL('../camera.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'').replaceAll('import.meta.url',JSON.stringify(import.meta.url));
   const context=vm.createContext({document,crypto,Event,createFocusTracker,performance:{now:()=>0},window:{addEventListener(){},dispatchEvent(){}},
     navigator:{mediaDevices:{getUserMedia:async()=>stream}},prepareFaceSession:async()=>{},attachFacePreview(){},
-    waitForFaceVerification:()=>{waiting=true;return new Promise(resolve=>{finishVerification=resolve;});}});
+    waitForFaceSessionReady:()=>{waiting=true;return new Promise(resolve=>{finishVerification=resolve;});}});
   vm.runInContext(`${source}\nstartRecognitionWorker=()=>{};startCameraWatchdog=()=>{};frame=async()=>{};globalThis.startCamera=startCamera;`,context);
   const start=context.startCamera().then(result=>{finished=true;return result;});
   await new Promise(resolve=>setImmediate(resolve));

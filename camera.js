@@ -1,7 +1,7 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261025-8';
+import { createFocusTracker } from './camera-focus.js?v=20261026-face6';
 import { paintCameraDebug } from './camera-debug.js?v=20261025-8';
-import {prepareFaceSession,waitForFaceVerification,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
+import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
 const focusTracker = createFocusTracker();
 // Rollback switch: false selects the previous search and temporal policy together.
@@ -204,7 +204,7 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261026-face5', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261026-face6', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
@@ -316,8 +316,8 @@ export async function startCamera() {
     }
     startCameraWatchdog(token);
     void frame(token);
-    const verified=await waitForFaceVerification();
-    return verified&&token===revision;
+    const prepared=await waitForFaceSessionReady();
+    return prepared&&token===revision;
   } catch (error) {
     if (token !== revision) return false;
     const messages = { NotAllowedError: '카메라 권한을 허용한 뒤 다시 켜 주세요.', NotFoundError: '연결된 웹캠을 찾지 못했습니다.', NotReadableError: '다른 앱의 카메라 사용을 종료하고 다시 켜 주세요.' };

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
+import {createFocusTracker} from '../camera-focus.js';
 
 const cacheSource=(await readFile(new URL('../client-cache.js',import.meta.url),'utf8')).replace(/^export /gm,'');
 const toastSource=(await readFile(new URL('../notifications.js',import.meta.url),'utf8')).replace(/^export /gm,'');
@@ -255,6 +256,21 @@ for(const skew of [6000,-6000])test(`camera timer starts at zero and pauses/resu
   t.camera.tracking=false;t.handlers['study:camera-changed']();
   t.ui.observeSession(t.snapshot(5,false,3));t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
   t.tick(6000);t.ui.paintTimer();assert.equal(t.display.textContent,'00:00:05');
+});
+
+test('ten seconds without an owner match freezes the visible timer and sends a paused checkpoint',async()=>{
+  const t=timerUi(0),tracker=createFocusTracker(),requests=[];
+  const owner={reliable:true,face:true,studyActivity:true,identity:{enrolled:true,matched:true}};
+  const wrong={...owner,identity:{enrolled:true,matched:false,status:'checking'}};
+  for(let now=0;now<=2000;now+=200)tracker.update(owner,now);
+  t.configure(async data=>{requests.push(data);return {data:{}};});t.ui.observeSession(t.snapshot(0));
+  for(let now=2200;now<=12200;now+=200){
+    t.tick(200);Object.assign(t.camera,tracker.update(wrong,now));
+    t.handlers['study:camera-changed']();await t.ui.syncCamera();
+    assert.equal(t.camera.tracking,now<12200);
+  }
+  assert.equal(requests.at(-1).tracking,false);
+  const paused=t.display.textContent;t.tick(3000);t.ui.paintTimer();assert.equal(t.display.textContent,paused);
 });
 
 test('a remote word handoff closes this device camera when its active session changes',()=>{

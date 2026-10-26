@@ -1,14 +1,14 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261024-10';
 import { createPhoneTracker } from './camera-phone.js?v=20261025-8';
-export const FOCUS_LIMITS = Object.freeze({ identity: 8000, faceGrace: 5000, sleep: 4500, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
+export const FOCUS_LIMITS = Object.freeze({ identity: 10000, faceGrace: 5000, sleep: 4500, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',
   away: '자리 이탈 감지 · 자리로 돌아오면 자동 재개됩니다',
   idle: '장시간 움직임·학습 행동 없음 · 학습 행동이 돌아오면 자동 재개됩니다',
   unknown: '얼굴을 확인할 수 없습니다 · 인식되면 자동 재개됩니다',
-  identity: '시작한 얼굴을 확인하는 중 · 정면을 봐 주세요',
+  identity: '본인 얼굴 확인 중 · 10초 동안 확인되지 않으면 자동 정지',
 });
 export function createFocusTracker() {
   let lastTime = null, candidate = null, since = null, healthySince = null, warning = null;
@@ -23,6 +23,7 @@ export function createFocusTracker() {
   let identityKnown=false,resumeOnFace=false;
   function reset(preserveOwner=false) {
     const keepIdentity=preserveOwner&&identityKnown;
+    const keepFailure=keepIdentity?identityFailureSince:null;
     lastTime = candidate = since = healthySince = warning = null;
     idle.reset();
     trackingNow = false;
@@ -31,7 +32,7 @@ export function createFocusTracker() {
     phoneObservationId=null;phonePositives=0;
     phoneTracker=createPhoneTracker();phoneState=null;
     behaviorSince={sleep:null,phone:null,away:null};
-    identityFailureSince=null;
+    identityFailureSince=keepFailure;
     identityKnown=keepIdentity;resumeOnFace=false;
   }
   function update(signals, now) {
@@ -51,21 +52,22 @@ export function createFocusTracker() {
     const phoneUnavailable=phoneState?.status==='unavailable';
     const phoneActive=tracked?phoneState.confirmed:signals?.phoneUse;
     const visible = valid && signals.face;
-    const identity=signals?.identity,ownerReady=!identity || identity.matched===true;
+    const identity=signals?.identity;
     identityKnown ||= Boolean(identity);
+    const ownerReady=!identityKnown || valid&&signals.face&&identity?.matched===true;
     const enrolling=identity && (identity.enrolled===false || identity.status==='enrolling');
     const observations={sleep:visible&&signals.eyesClosed,phone:valid&&phoneActive,away:valid&&!signals.face};
     for(const key of Object.keys(behaviorSince))behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
     const faceReturned=visible&&missingSince!==null&&resumeOnFace;
     missingSince = !visible ? missingSince ?? now : null;
-    if(identity?.matched)identityFailureSince=null;
+    if(identityKnown&&ownerReady)identityFailureSince=null;
     if(faceReturned){
-      resumeOnFace=false;identityFailureSince=null;
+      resumeOnFace=false;
       healthySince=now-FOCUS_LIMITS.resume;
       if(warning==='away')warning=null;
     }
-    if(visible&&!enrolling&&!ownerReady)identityFailureSince??=now;
-    const identityWarning=Boolean(visible&&!enrolling&&!ownerReady&&identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity);
+    if(identityKnown&&!enrolling&&!ownerReady)identityFailureSince??=now;
+    const identityWarning=Boolean(identityKnown&&!enrolling&&!ownerReady&&identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity);
     if(warning==='identity'&&!identityWarning)warning=null;
     if (!valid || !ownerReady || missingSince !== null && now-missingSince >= FOCUS_LIMITS.away) idle.reset();
     const observeIdle=visible && ownerReady && !signals.eyesClosed;
@@ -75,6 +77,17 @@ export function createFocusTracker() {
     const phoneConfirmed=valid&&phoneActive&&(tracked||elapsedFor('phone')>=FOCUS_LIMITS.phone&&(!observation||phonePositives>=2));
     // Expired evidence is an observation failure, never a fresh negative or an old phone claim.
     if(tracked&&phoneState.status==='unavailable'&&warning==='phone')warning=null;
+    if(identityWarning){
+      healthySince=null;trackingNow=false;warning='identity';
+      return {tracking:false,status:'paused',reason:'identity',identityWarning:true,message:'10초 동안 본인 얼굴이 확인되지 않아 일시정지했습니다 · 본인이 확인되면 자동 재개됩니다'};
+    }
+    if(identityKnown&&!enrolling&&!ownerReady&&!visible&&!phoneConfirmed){
+      healthySince??=now;
+      trackingNow=now-healthySince>=FOCUS_LIMITS.resume;
+      const tracking=trackingNow&&!warning;
+      return {tracking,status:tracking?'tracking':warning?'paused':'scanning',reason:warning,identityWarning:false,
+        message:warning?FOCUS_MESSAGES[warning]:'본인 얼굴 확인 중 · 10초 동안 확인되지 않으면 자동 정지'};
+    }
     if(!visible&&(trackingNow||resumeOnFace||valid&&identity)&&!enrolling&&!phoneConfirmed){
       resumeOnFace ||= trackingNow;
       const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
@@ -86,10 +99,9 @@ export function createFocusTracker() {
       healthySince=null;trackingNow=false;warning=null;
       return {tracking:false,status:'scanning',reason:'identity',identityWarning:false,message:'인식 중…'};
     }
-    if(valid && identity && (enrolling || !ownerReady)){
-      healthySince=null;trackingNow=false;warning=identityWarning?'identity':null;
-      return {tracking:false,status:identityWarning?'paused':'scanning',reason:'identity',identityWarning,
-        message:identityWarning?'등록한 얼굴과 다릅니다 · 본인이 돌아오면 자동 재개됩니다':'본인 확인 중 · 학습시간 보류'};
+    if(enrolling){
+      healthySince=null;trackingNow=false;warning=null;
+      return {tracking:false,status:'scanning',reason:'identity',identityWarning:false,message:'얼굴 등록 중 · 촬영과 저장을 완료해 주세요'};
     }
     const sleepConfirmed=visible&&signals.eyesClosed&&elapsedFor('sleep')>=FOCUS_LIMITS.sleep;
     const awayConfirmed=valid&&!signals.face&&elapsedFor('away')>=FOCUS_LIMITS.away;

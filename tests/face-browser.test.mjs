@@ -91,7 +91,12 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     const seals=actionCounts.get('sealFaceKeyEnvelope');
     await page.getByRole('button',{name:'저장 다시 시도',exact:true}).click();
     await frame();await frame();
-    await page.waitForFunction(()=>window.api.faceSessionState().phase==='VERIFYING');
+    await page.waitForFunction(()=>window.api.faceSessionState().phase==='READY');
+    assert.equal(await page.locator('.face-enrollment').count(),0);
+    assert.equal(await page.evaluate(()=>window.api.faceSessionState().verified),false);
+    assert.equal(await page.evaluate(()=>window.api.waitForFaceSessionReady()),true);
+    const beforeFirstMatch=await page.evaluate(()=>window.api.faceStudyAuthorization({controllerId:'controller'}));
+    assert.equal((await db.runTransaction(tx=>authorizeFaceStudy(tx,db,'owner',{controllerId:'controller',faceAuthorization:beforeFirstMatch}))).verificationType,'face-browser');
     assert.equal(actionCounts.get('sealFaceKeyEnvelope'),seals,'retry reuses the existing ciphertext and envelope');
     for(let i=0;i<6;i++)await frame();
     assert.equal(await page.evaluate(()=>window.api.faceSessionState().verified),true);
@@ -117,7 +122,7 @@ test('Chromium stores cloned CryptoKeys, seals in a Worker, survives process res
     assert.equal(original.hasSamples,false);assert.equal(original.hasLocalKey,false);assert.equal(original.extractable,false);assert.equal(original.state.verified,true);assert.equal(authCount,1);
     const signed=await page.evaluate(()=>window.api.faceStudyAuthorization({controllerId:'controller',tracking:true,sequence:1}));assert.ok(signed.signature);
     assert.equal((await db.runTransaction(tx=>authorizeFaceStudy(tx,db,'owner',{controllerId:'controller',tracking:true,sequence:1,faceAuthorization:signed}))).verificationType,'face-browser');
-    await context.close();page=await open();await page.click('#start');await page.waitForFunction(()=>window.finished);assert.equal(await page.locator('input[type=password]').count(),0);await runVault(page);assert.equal(authCount,1);
+    await context.close();page=await open();await page.click('#start');await page.waitForFunction(()=>window.finished);assert.equal(await page.locator('input[type=password]').count(),0);assert.equal(await page.locator('.face-enrollment').count(),0);await runVault(page);assert.equal(authCount,1);
     const restored=await page.evaluate(()=>({id:window.api.faceWorkerContext().binding.profileId,ciphertext:window.api.faceWorkerContext().record.ciphertext}));assert.equal(restored.id,original.id);assert.equal(restored.ciphertext,original.ciphertext);
     await page.evaluate(()=>{window.testUid='other';window.dispatchEvent(new Event('study:auth-changed'));});assert.equal(await page.evaluate(()=>window.api.faceWorkerContext()),null);
     await page.click('#start');await page.locator('.face-enrollment input[type=checkbox]').waitFor();

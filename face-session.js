@@ -5,7 +5,7 @@ import {signFace,hashFace} from './face-crypto.js';
 import {FACE_POLICY,FACE_ORIGIN,studyNonce} from './functions/face-protocol.js';
 
 let session=null,dialog=null,previousFocus=null,expiryTimer=null,hiddenTimer=null,progressTimer=null,epoch=0,verified=false;
-let phase='SIGNED_OUT',lastProgress=-1,lastProgressAt=0;
+let phase='SIGNED_OUT',lastProgress=-1,lastProgressAt=0,profileReady=false;
 let channel;
 let previewFrame=null,previewFraming=null;
 const element=(tag,text,className)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;};
@@ -63,7 +63,16 @@ export function attachFacePreview(stream){
   };draw();
 }
 export function faceWorkerContext(){return session;}
-export function faceSessionState(){return {phase,verified,profileId:session?.binding?.profileId};}
+export function faceSessionState(){return {phase,verified,ready:profileReady,profileId:session?.binding?.profileId};}
+export function waitForFaceSessionReady(){
+  const current=session;
+  if(!current)return Promise.resolve(false);
+  if(profileReady)return Promise.resolve(true);
+  return new Promise(resolve=>{
+    const finish=()=>{window.removeEventListener('study:face-ready',finish);window.removeEventListener('study:face-locked',finish);resolve(session===current&&profileReady);};
+    window.addEventListener('study:face-ready',finish);window.addEventListener('study:face-locked',finish);
+  });
+}
 export function waitForFaceVerification(){
   const current=session;
   if(!current)return Promise.resolve(false);
@@ -79,7 +88,7 @@ export function waitForFaceVerification(){
   });
 }
 export function lockFaceSession(reason='얼굴 확인을 다시 시작해 주세요.',{remote=false}={}) {
-  const old=session;epoch++;session=null;verified=false;phase='PROFILE_LOCKED';
+  const old=session;epoch++;session=null;verified=false;profileReady=false;phase='PROFILE_LOCKED';
   clearTimeout(expiryTimer);clearTimeout(hiddenTimer);closeDialog();
   if(old?.ticket)void signFace(old.keys,'cancel',old.uid,old.installationId,old.ticket.id).then(signature=>invoke('cancelFaceEnrollment',{installationId:old.installationId,ticketId:old.ticket.id,signature})).catch(()=>{});
   if(remote&&old?.grant)void signFace(old.keys,'lock',old.uid,old.installationId,old.grant.id).then(signature=>invoke('lockFaceEnrollment',{installationId:old.installationId,signature})).catch(()=>{});
@@ -122,7 +131,7 @@ async function askReauthentication({enrolling,replace,keys,uid,installationId,re
 export async function prepareFaceSession(){
   if(!await authReady||!getAuthUser())throw new Error('로그인 후 이용해 주세요.');
   if(location.origin!==FACE_ORIGIN||!crypto.subtle||!globalThis.indexedDB)throw new Error('정식 HTTPS 학습 사이트와 보안 저장소를 지원하는 브라우저가 필요합니다.');
-  const attempt=++epoch,uid=getAuthUser().uid;verified=false;
+  const attempt=++epoch,uid=getAuthUser().uid;verified=false;profileReady=false;
   let installationId=await faceStore('settings','readonly','installation');
   if(!installationId){installationId=crypto.randomUUID();await faceStore('settings','readwrite','installation',installationId);}
   const keyId=`${uid}:${installationId}`;
@@ -137,8 +146,8 @@ export async function prepareFaceSession(){
   const recovering=Boolean(keys&&pending&&pending.binding.profileId===status.pending?.profileId&&pending.ticketId===status.pending.id);
   const enrolling=(!record||!keys)&&!recovering;
   if(!keys){keys=await createBrowserFaceKeys();await faceStore('keys','readwrite',keyId,keys);keys=await faceStore('keys','readonly',keyId);if(!keys?.signingKey||!keys.wrappingKey)throw new Error('이 브라우저는 보안 키 저장을 지원하지 않습니다.');}
-  makeDialog();
   let grant=status.grant;
+  if(enrolling||!grant)makeDialog();
   if(enrolling||!grant)grant=await askReauthentication({enrolling,replace:Boolean(status.active),keys,uid,installationId});
   if(attempt!==epoch||getAuthUser()?.uid!==uid)throw new Error('얼굴 확인이 취소되었습니다.');
   if(recovering){
@@ -155,7 +164,8 @@ export async function prepareFaceSession(){
     ({ticket}=await invoke('beginFaceEnrollment',{installationId,idempotencyKey,signature}));
   }
   session={uid,installationId,keys,grant,record,ticket,binding:record?.binding||ticket.binding};
-  setPhase(enrolling?'ENROLLING':'VERIFYING',enrolling?'정면을 바라본 뒤 자세 확인 · 촬영 버튼을 눌러 주세요':'기존에 등록한 얼굴을 확인합니다. 정면을 봐 주세요.');addPreview();
+  if(enrolling){setPhase('ENROLLING','정면을 바라본 뒤 자세 확인 · 촬영 버튼을 눌러 주세요');addPreview();}
+  else{closeDialog();setPhase('PROFILE_LOADING','학습 화면에서 얼굴을 확인합니다.');}
   lastProgressAt=performance.now();lastProgress=-1;
   progressTimer=setInterval(()=>{if(dialog&&phase==='ENROLLING'&&performance.now()-lastProgressAt>45000)setPhase('ENROLLING','촬영이 진행되지 않습니다. 조명·거리·카메라 속도를 확인하거나 취소 후 다시 시도해 주세요. 고개를 움직이기 어렵다면 관리자에게 문의해 주세요.');},5000);
   const now=performance.now(),serverNowMs=grant.serverNowMs||status.serverNowMs,duration=grant.expiresAtMs-serverNowMs;
@@ -184,12 +194,12 @@ export function handleFaceWorkerEvent(data){
     const ring=dialog?.querySelector('[role="progressbar"]');if(ring&&data.progress!==undefined){ring.setAttribute('aria-valuenow',String(data.progress));ring.style.setProperty('--face-progress',String(data.progress/12));}
     const directions=dialog?.querySelector('[data-face-directions]');if(directions&&data.counts)directions.textContent=['정면','왼쪽','오른쪽','위','아래'].map((label,i)=>`${label} ${data.counts[i]>=(i?2:4)?'✓':'○'}`).join(' · ');
   }
-  if(data.type==='face-unlocked'){session.binding=data.binding;setPhase('VERIFYING','저장된 얼굴을 다시 확인합니다. 정면을 봐 주세요.');}
+  if(data.type==='face-unlocked'){session.binding=data.binding;profileReady=true;setPhase('READY','학습 준비가 완료됐습니다.');closeDialog();window.dispatchEvent(new Event('study:face-ready'));}
   if(data.type==='face-verified'&&!verified){verified=true;setPhase('VERIFIED','✓ 얼굴 확인이 완료됐어요');window.dispatchEvent(new Event('study:face-verified'));setTimeout(()=>{if(verified)closeDialog();},500);}
 }
 export async function faceStudyAuthorization(data){
   const current=session;
-  if(!current||!verified||getAuthUser()?.uid!==current.uid||performance.now()>=current.deadline)throw new Error('오늘의 계정 인증과 얼굴 확인을 완료해 주세요.');
+  if(!current||!profileReady||getAuthUser()?.uid!==current.uid||performance.now()>=current.deadline)throw new Error('오늘의 계정 인증과 얼굴 등록을 완료해 주세요.');
   const faceAuthorization={installationId:current.installationId,profileId:current.binding.profileId,generation:current.binding.generation,grantId:current.grant.id,issuedAt:Math.floor(current.serverNowMs+performance.now()-current.monotonicStart)};
   faceAuthorization.signature=await signFace(current.keys,'study',current.uid,current.installationId,studyNonce({...data,faceAuthorization}));return faceAuthorization;
 }

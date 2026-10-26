@@ -114,7 +114,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
             saving=true;current={matched:false,status:'saving',progress:12};
             void vault.save(observed.samples).then(restored=>{
               if(closed)return;matcher=createIdentityMatcher(restored);collector.reset();collector=null;current={matched:false,status:'checking'};
-              notify({type:'face-progress',state:'VERIFYING',manualCapture:false,label:'저장이 완료됐습니다. 정면을 바라보면 얼굴 확인이 끝납니다.'});
+              notify({type:'face-progress',state:'READY',manualCapture:false,label:'저장이 완료됐습니다. 학습 화면에서 얼굴을 계속 확인합니다.'});
             }).catch(error=>{
               if(closed)return;saveError=error.message||'얼굴 정보를 저장하지 못했습니다.';current={matched:false,status:'save-error',progress:12};
               progress({state:'RECOVERY_REQUIRED',label:`저장 실패: ${saveError}`,canCapture:true,captureLabel:'저장 다시 시도'});
