@@ -121,8 +121,8 @@ test('phone inference failure does not turn a real face into an absent face',()=
   const absent=createFocusTracker();
   for(let at=0;at<=10000;at+=1000){
     const result=absent.update({...healthy,face:false,identity:{enrolled:true,matched:false},phoneObservation:observation(at,[],{status:'error'})},at);
-    if(at===5000)assert.equal(result.tracking,true);
-    if(at===10000){assert.equal(result.reason,'identity');assert.equal(result.tracking,false);}
+    if(at===5000){assert.equal(result.tracking,false);assert.equal(result.reason,'away');}
+    if(at===10000){assert.equal(result.reason,'away');assert.equal(result.tracking,false);assert.equal(result.identityWarning,false);}
   }
 });
 test('inference emits phone completion independently and preserves capture time and epoch',async()=>{

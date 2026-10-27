@@ -77,23 +77,18 @@ export function createFocusTracker() {
     const phoneConfirmed=valid&&phoneActive&&(tracked||elapsedFor('phone')>=FOCUS_LIMITS.phone&&(!observation||phonePositives>=2));
     // Expired evidence is an observation failure, never a fresh negative or an old phone claim.
     if(tracked&&phoneState.status==='unavailable'&&warning==='phone')warning=null;
+    // No visible face takes priority over the longer owner-verification grace.
+    if(!visible&&(trackingNow||resumeOnFace||identityKnown)&&!enrolling&&!phoneConfirmed){
+      resumeOnFace ||= trackingNow;
+      const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
+      if(expired){healthySince=null;trackingNow=false;warning='away';}
+      const tracking=identityKnown&&trackingNow&&!warning;
+      return {tracking,status:warning?'paused':tracking?'tracking':'scanning',reason:warning,
+        identityWarning:false,message:warning?FOCUS_MESSAGES[warning]:'얼굴 인식 유예 중 · 5초 안에 얼굴을 보여 주세요'};
+    }
     if(identityWarning){
       healthySince=null;trackingNow=false;warning='identity';
       return {tracking:false,status:'paused',reason:'identity',identityWarning:true,message:'10초 동안 본인 얼굴이 확인되지 않아 일시정지했습니다 · 본인이 확인되면 자동 재개됩니다'};
-    }
-    if(identityKnown&&!enrolling&&!ownerReady&&!visible&&!phoneConfirmed){
-      healthySince??=now;
-      trackingNow=now-healthySince>=FOCUS_LIMITS.resume;
-      const tracking=trackingNow&&!warning;
-      return {tracking,status:tracking?'tracking':warning?'paused':'scanning',reason:warning,identityWarning:false,
-        message:warning?FOCUS_MESSAGES[warning]:'본인 얼굴 확인 중 · 10초 동안 확인되지 않으면 자동 정지'};
-    }
-    if(!visible&&(trackingNow||resumeOnFace||valid&&identity)&&!enrolling&&!phoneConfirmed){
-      resumeOnFace ||= trackingNow;
-      const expired=now-missingSince>=FOCUS_LIMITS.faceGrace;
-      if(expired){healthySince=null;trackingNow=false;warning='away';identityFailureSince=null;}
-      return {tracking:false,status:expired?'paused':'scanning',reason:expired?'away':null,
-        identityWarning:false,message:expired?FOCUS_MESSAGES.away:'얼굴 인식 유예 중 · 5초 안에 얼굴을 보여 주세요'};
     }
     if(!valid && identityKnown){
       healthySince=null;trackingNow=false;warning=null;
