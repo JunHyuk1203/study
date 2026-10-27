@@ -127,6 +127,34 @@ function avatarMount() {
   return { dataset: {}, querySelector: selector => selector === '.cam-avatar' ? avatar : recognition, querySelectorAll: () => [] };
 }
 
+for (const failure of ['identity-failed', 'behavior-warning']) test(`${failure} keeps a red warning through recovery and returns directly to the avatar`, () => {
+  const mount = avatarMount(), pose = { x: 0, y: 0, roll: 0 };
+  const styles = {}, attributes = {};
+  const lookup = mount.querySelector;
+  mount.querySelector = selector => selector === '.recovery-ring-progress'
+    ? { style: { setProperty: (key, value) => { styles[key] = value; } } }
+    : selector === '.cam-warning' ? { setAttribute: (key, value) => { attributes[key] = value; } } : lookup(selector);
+  paintAvatar(mount, pose, false, failure, 0);
+  assert.equal(mount.dataset.avatarPhase, 'warning');
+  assert.equal(styles['stroke-dashoffset'], '1');
+  paintAvatar(mount, pose, false, 'scanning', 1000, { remainingMs: 1000, durationMs: 2000 });
+  assert.equal(mount.dataset.avatarPhase, 'warning');
+  assert.equal(styles['stroke-dashoffset'], '0.5');
+  assert.match(attributes['aria-label'], /1.0초 남음/);
+  paintAvatar(mount, null, false, failure, 1300, { remainingMs: null, durationMs: 2000 });
+  assert.equal(styles['stroke-dashoffset'], '1');
+  paintAvatar(mount, pose, false, 'paused', 2000, { remainingMs: 200, durationMs: 2000 });
+  assert.equal(mount.dataset.avatarPhase, 'warning');
+  assert.equal(styles['stroke-dashoffset'], String(1 - .9));
+  paintAvatar(mount, pose, true, 'tracking', 2200, { remainingMs: 0, durationMs: 2000 });
+  assert.equal(mount.dataset.avatarPhase, 'avatar');
+  assert.equal(attributes['aria-hidden'], 'true');
+  paintAvatar(mount, null, false, 'manual-paused', 2300);
+  assert.equal(mount.dataset.avatarPhase, 'paused');
+  paintAvatar(mount, null, false, 'off', 2400);
+  assert.equal(mount.dataset.avatarPhase, 'idle');
+});
+
 test('all eight original strokes tile one connected check including its corner', () => {
   const segments = Array.from({ length: 8 }, (_, index) => checkSegment(index));
   assert.deepEqual(segments[0][0], [133, 160]);

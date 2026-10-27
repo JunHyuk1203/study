@@ -227,6 +227,10 @@ html:not([data-keyboard-navigation]) :is(a,button):focus-visible{outline:none}
 .cam-avatar:not(.is-tracked) .avatar-eyes{opacity:.35}
 .cam-video-mount .cam-avatar,.cam-recognition,.cam-paused,.cam-warning{position:absolute;inset:0;display:block;width:100%;height:100%;transition:opacity .22s,transform .3s}
 .cam-warning{color:#cf3838;opacity:0;pointer-events:none}
+.recovery-ring-track,.recovery-ring-progress{fill:none;stroke:currentColor;stroke-width:3.5}
+.recovery-ring-track{opacity:.14}
+.recovery-ring-progress{stroke-dasharray:1;stroke-dashoffset:1;stroke-linecap:round;transition:stroke-dashoffset .3s linear}
+@media(prefers-reduced-motion:reduce){.recovery-ring-progress{transition:none}}
 [data-avatar-phase="warning"] .cam-warning{opacity:1}
 [data-avatar-phase="warning"] .cam-recognition{display:none}
 .cam-paused{color:var(--green);opacity:0;pointer-events:none}

@@ -140,7 +140,7 @@ export function facePose(landmarks) {
   };
 }
 
-export function paintAvatar(mount, pose, active, status = 'tracking', now = performance.now()) {
+export function paintAvatar(mount, pose, active, status = 'tracking', now = performance.now(), recovery = null) {
   if (!mount.querySelector('.cam-avatar')) {
     // Static artwork only. Camera pixels and facial landmarks never enter the DOM.
     mount.innerHTML = `<svg class="cam-avatar" viewBox="0 0 320 320" role="img" aria-label="스터디캠 졸라맨 아바타">
@@ -168,6 +168,8 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
     </svg><svg class="cam-paused" viewBox="0 0 320 320" role="img" aria-label="수동 일시정지" aria-hidden="true">
       <g fill="currentColor"><rect x="127" y="120" width="22" height="80" rx="5"/><rect x="171" y="120" width="22" height="80" rx="5"/></g>
     </svg><svg class="cam-warning" viewBox="0 0 320 320" role="img" aria-label="학습 행동 경고" aria-hidden="true">
+      <circle class="recovery-ring-track" cx="160" cy="160" r="82"/>
+      <circle class="recovery-ring-progress" cx="160" cy="160" r="82" pathLength="1" transform="rotate(-90 160 160)"/>
       <path d="M160 110v65" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round"/><circle cx="160" cy="203" r="9" fill="currentColor"/>
     </svg>`;
   }
@@ -178,15 +180,17 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
     else presentation.missingSince = null;
   }
   const briefLoss = active && status === 'scanning' && presentation?.desired === 'recognized' && now - presentation.missingSince <= 3000;
-  const desired = status === 'identity-failed' ? 'rejected' : status === 'behavior-warning' ? 'warning' : status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  const recovering = presentation?.desired === 'warning' && ['scanning', 'paused'].includes(status);
+  const desired = status === 'identity-failed' || status === 'behavior-warning' || recovering ? 'warning' : status === 'manual-paused' ? 'paused' : briefLoss || status === 'tracking' && pose ? 'recognized' : status === 'off' ? 'idle' : status === 'error' ? 'error' : 'searching';
+  const recovered = presentation?.desired === 'warning' && desired === 'recognized';
   if (!presentation || presentation.desired !== desired || returnedAfterLongLoss) {
-    const parts = desired === 'recognized' ? captureFace(mount) : [];
+    const parts = desired === 'recognized' && !recovered ? captureFace(mount) : [];
     clearTimeout(presentation?.timer);
     presentation?.cancelMerge?.();
     presentation = { desired, timer: null, cancelMerge: null };
     presentations.set(mount, presentation);
-    mount.dataset.avatarPhase = desired === 'recognized' ? 'success' : desired;
-    if (desired === 'recognized') presentation.cancelMerge = mergeFace(parts, () => {
+    mount.dataset.avatarPhase = desired === 'recognized' ? recovered ? 'avatar' : 'success' : desired;
+    if (desired === 'recognized' && !recovered) presentation.cancelMerge = mergeFace(parts, () => {
       if (presentations.get(mount) !== presentation) return;
       mount.dataset.avatarPhase = 'check';
       presentation.timer = setTimeout(() => {
@@ -204,6 +208,12 @@ export function paintAvatar(mount, pose, active, status = 'tracking', now = perf
   mount.querySelector('.cam-recognition').setAttribute('aria-hidden', String(['avatar', 'idle', 'paused', 'warning'].includes(mount.dataset.avatarPhase)));
   mount.querySelector('.cam-paused').setAttribute('aria-hidden', String(desired !== 'paused'));
   mount.querySelector('.cam-warning').setAttribute('aria-hidden', String(desired !== 'warning'));
+  const remaining = recovery?.remainingMs;
+  const progress = desired === 'warning' && Number.isFinite(remaining) && recovery.durationMs > 0
+    ? clamp(1 - remaining / recovery.durationMs, 0, 1) : 0;
+  mount.querySelector('.recovery-ring-progress').style.setProperty('stroke-dashoffset', String(1 - progress));
+  mount.querySelector('.cam-warning').setAttribute('aria-label', desired === 'warning' && Number.isFinite(remaining)
+    ? `복귀 확인 중 · ${(Math.max(0, remaining) / 1000).toFixed(1)}초 남음` : '학습 인식 실패 · 복귀 대기');
   avatar.classList.toggle('is-tracked', Boolean(pose));
   avatar.classList.toggle('is-active', active);
   avatar.style.setProperty('--avatar-x', `${pose?.x || 0}px`);

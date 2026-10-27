@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker } from './camera-focus.js?v=20261026-face7';
+import { createFocusTracker, FOCUS_LIMITS } from './camera-focus.js?v=20261026-face7';
 import { paintCameraDebug } from './camera-debug.js?v=20261026-ui21';
 import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
@@ -134,7 +134,8 @@ function paint() {
   root.dataset.identityPhase=identityPhase||'';
   root.classList.toggle('is-open', enabled);
   const mount = root.querySelector('[data-camera-video]');
-  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status==='paused'&&['sleep','phone','away','idle'].includes(reason) ? 'behavior-warning' : status);
+  paintAvatar(mount, avatarPose, tracking, manuallyPaused ? 'manual-paused' : ['mismatch','multiple'].includes(identityStatus) ? 'identity-failed' : status==='paused'&&reason ? 'behavior-warning' : status,
+    performance.now(), { remainingMs: diagnostics?.resumeRemainingMs, durationMs: FOCUS_LIMITS.resume });
   root.querySelector('[data-camera-status]').textContent = message;
   const toggle = root.querySelector('[data-camera-toggle]');
   toggle?.setAttribute('aria-label', enabled ? '스터디캠 실행 중' : '얼굴 인식으로 학습 시작');
