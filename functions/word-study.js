@@ -4,7 +4,7 @@ import { FieldValue, getFirestore, Timestamp } from './platform-store.js';
 import { HttpsError, onCall } from './platform-http.js';
 import { checkpointCamera, WORD_LEASE_MS, WORD_PRESENCE_MS, STUDY_CONTRACT_VERSION, MAX_SESSION_MS } from './domain.js';
 import {settleWordStats} from './word-stats.js';
-import {expireUserSessions} from './session-lifecycle.js';
+import {expireUserSessions,prepareSessionFinish} from './session-lifecycle.js';
 import {readActivityRoom,publishWordRoom} from './room-service.js';
 
 const db = getFirestore(getApps()[0] ?? initializeApp(), 'study-data');
@@ -37,14 +37,22 @@ export const startWordStudy = onCall(options, async request => {
   await expireUserSessions(db,uid);
   const profileRef = db.doc(`users/${uid}`), sessionRef = profileRef.collection('sessions').doc();
   return db.runTransaction(async tx => {
-    const snapshot = await tx.get(profileRef), profile = snapshot.data();
+    const snapshot = await tx.get(profileRef);
+    const retired=(await tx.get(profileRef.collection('wordRetiredControllers').doc(controllerId))).data();
+    if(retired)throw new HttpsError('failed-precondition','다른 기기·탭에서 학습을 시작하여 이 창의 적립을 중지했습니다.',{terminalReason:'session-replaced',canResume:false});
+    let profile = snapshot.data(), finishPrevious = null, previousId = null;
+    let previousController = null;
     if (!profile) throw new HttpsError('failed-precondition','스터디 계정을 먼저 설정해 주세요.');
     const now = Timestamp.fromMillis(Math.floor(Date.now()/1000)*1000);
     if (profile.wordStudySessionId) {
       const existing = await tx.get(profileRef.collection('sessions').doc(profile.wordStudySessionId));
       const session = existing.data();
       if (session?.status === 'active' && session.source === 'superword' && session.controllerId === controllerId) return reply(existing.id,session,now);
-      throw new HttpsError('already-exists','다른 SP word 창에서 학습 중입니다. 해당 창을 먼저 닫아 주세요.');
+      if (request.data?.takeover !== true || !counting || session?.source !== 'superword' || session.status !== 'active') throw new HttpsError('already-exists','다른 SP word 창에서 학습 중입니다. 해당 창을 먼저 닫아 주세요.');
+      previousId=existing.id;
+      previousController=session.controllerId;
+      finishPrevious=await prepareSessionFinish(db,tx,uid,previousId,null,now);
+      profile={...profile,activeSessionId:profile.activeSessionId===previousId?null:profile.activeSessionId,wordStudySessionId:null};
     }
     let cameraRef=null,camera=null;
     if (profile.activeSessionId) {
@@ -63,6 +71,11 @@ export const startWordStudy = onCall(options, async request => {
       subject = {id:`s_${randomUUID()}`,name:'영단어'};
     }
     const activityRoom=await readActivityRoom(tx,db,uid,profile);
+    if(finishPrevious){
+      finishPrevious();
+      tx.update(profileRef.collection('sessions').doc(previousId),{terminalReason:'session-replaced',replacedBySessionId:sessionRef.id});
+      tx.set(profileRef.collection('wordRetiredControllers').doc(previousController),{sessionId:previousId,replacedAt:now});
+    }
     const cameraId=cameraRef?interruptCamera(tx,cameraRef,camera,sessionRef.id,now,true):null;
     const session = {uid,subjectId:subject.id,source:'superword',verificationType:'word-activity',activityMode:true,controllerId,status:'active',sequence:0,segments:[],accumulatedSeconds:0,activeSinceMs:null,leaseUntilMs:null,cameraStatus:'paused',startedAt:now,createdAt:now,cameraSessionId:cameraId,presenceUntilMs:now.toMillis()+WORD_PRESENCE_MS};
     if(counting)Object.assign(session,checkpointCamera({...session,startedAtMs:now.toMillis()},now.toMillis(),true,WORD_LEASE_MS));
@@ -82,12 +95,13 @@ export const syncWordStudy = onCall(options, async request => {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId) || !Number.isSafeInteger(sequence) || sequence < 1 || typeof tracking !== 'boolean' || typeof present !== 'boolean') throw new HttpsError('invalid-argument','학습 상태가 올바르지 않습니다.');
   return db.runTransaction(async tx => {
     const ref = db.doc(`users/${uid}/sessions/${sessionId}`), snapshot = await tx.get(ref), session = snapshot.data();
-    if (!session || session.status !== 'active') throw new HttpsError('failed-precondition','진행 중인 영단어 학습이 없습니다.',{terminalReason:'finished',canResume:false});
+    if (!session || session.status !== 'active') throw new HttpsError('failed-precondition',session?.terminalReason==='session-replaced'?'다른 기기·탭에서 학습을 시작하여 이 창의 적립을 중지했습니다.':'진행 중인 영단어 학습이 없습니다.',{terminalReason:session?.terminalReason||'finished',canResume:false});
     if (session.source !== 'superword' || !session.activityMode || session.controllerId !== controllerId) throw new HttpsError('permission-denied','학습을 시작한 단어앱에서만 제어할 수 있습니다.');
     const now = Timestamp.now();
     if((session.presenceUntilMs??Infinity)<=now.toMillis())throw new HttpsError('failed-precondition','영단어 학습 연결이 만료되었습니다.',{terminalReason:'presence-expired',canResume:false});
-    if (sequence <= session.sequence) return {...reply(ref.id,session,now),ignored:true};
     const profile=(await tx.get(db.doc(`users/${uid}`))).data();
+    if(profile?.wordStudySessionId!==sessionId)throw new HttpsError('failed-precondition','다른 기기·탭에서 학습 중입니다.',{terminalReason:'session-replaced',canResume:false});
+    if (sequence <= session.sequence) return {...reply(ref.id,session,now),ignored:true};
     const cameraRef=session.cameraSessionId?db.doc(`users/${uid}/sessions/${session.cameraSessionId}`):null;
     const camera=cameraRef?(await tx.get(cameraRef)).data():null;
     const linkedCamera=profile?.activeSessionId===session.cameraSessionId && profile?.wordStudySessionId===sessionId && profile?.wordCameraSessionId===session.cameraSessionId && camera?.status==='active' && camera.cameraMode;

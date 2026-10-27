@@ -2,24 +2,42 @@ import {createFaceVault} from './face-vault.js';
 const MODEL='https://cdn.jsdelivr.net/npm/@vladmandic/human@3.3.6/models/faceres.json';
 export function normalized(values){
   if(!Array.isArray(values)&&!ArrayBuffer.isView(values))return null;
-  if(values.length!==1024||!Array.from(values).every(Number.isFinite))return null;
+  if(![1024,2048].includes(values.length)||!Array.from(values).every(Number.isFinite))return null;
   const norm=Math.hypot(...values);return norm>0?Array.from(values,value=>value/norm):null;
 }
 const similarity=(a,b)=>a.reduce((sum,value,i)=>sum+value*b[i],0);
+export const EYE_SCORE_WEIGHT=.75;
+function faceSimilarity(sample,descriptor){
+  const savedFull=normalized(sample.slice(0,1024)),observedFull=normalized(descriptor.slice(0,1024));
+  if(!savedFull||!observedFull)return -1;
+  const full=similarity(savedFull,observedFull);
+  if(sample.length===1024)return full;
+  if(descriptor.length!==2048)return -1;
+  const eyes=normalized(sample.slice(1024)),observedEyes=normalized(descriptor.slice(1024));
+  if(!eyes||!observedEyes)return -1;
+  const eyeScore=similarity(eyes,observedEyes);
+  // A strong full-face score must not compensate for different eyes.
+  return eyeScore>=.65?EYE_SCORE_WEIGHT*eyeScore+(1-EYE_SCORE_WEIGHT)*full:-1;
+}
 export function createIdentityMatcher(saved=[]) {
   const samples=saved.map(normalized).filter(Boolean);let votes=[];
   return {
     get enrolled(){return samples.length===12;},
     get samples(){return samples.map(row=>[...row]);},
     reset(){votes=[];},
-    observe(values){
-      const descriptor=normalized(values);
-      if(!descriptor||samples.length!==12){votes=[];return {matched:false,status:'locked'};}
-      const scores=samples.map(sample=>similarity(sample,descriptor)).sort((a,b)=>b-a);
-      const score=scores.slice(0,3).reduce((a,b)=>a+b,0)/3;
-      votes.push(score>=.65);votes=votes.slice(-5);
+    observe(values){return this.observeFaces([values]);},
+    observeFaces(values,{vote=true}={}){
+      let score=-Infinity,faceIndex=-1;
+      if(samples.length===12)values.forEach((value,index)=>{
+        const descriptor=normalized(value);if(!descriptor)return;
+        const scores=samples.map(sample=>faceSimilarity(sample,descriptor)).sort((a,b)=>b-a);
+        const candidate=scores.slice(0,3).reduce((a,b)=>a+b,0)/3;
+        if(candidate>score){score=candidate;faceIndex=index;}
+      });
+      if(faceIndex<0){votes=[];return {matched:false,status:'locked'};}
+      if(vote){votes.push(score>=.65);votes=votes.slice(-5);}
       const matched=votes.length===5&&votes.filter(Boolean).length>=4&&score>=.65;
-      return {matched,status:matched?'matched':score<.65?'mismatch':'checking',score};
+      return {matched,status:matched?'matched':score<.65?'mismatch':'checking',score,faceIndex};
     },
   };
 }
@@ -59,10 +77,10 @@ export function createEnrollmentCollector() {
     },
   };
 }
-export function faceImageQuality(image) {
+export function faceImageQuality(image,{eyesOnly=false}={}) {
   let sum=0,sum2=0,dark=0,bright=0,left=0,right=0,count=0;
   const {data,width,height}=image,gray=(x,y)=>{const i=(y*width+x)*4;return .2126*data[i]+.7152*data[i+1]+.0722*data[i+2];};
-  for(let y=40;y<Math.min(height-1,180);y+=2)for(let x=48;x<Math.min(width-1,176);x+=2){const value=gray(x,y);sum+=value;sum2+=value*value;dark+=value<25;bright+=value>240;if(x<112)left+=value;else right+=value;count++;}
+  for(let y=eyesOnly?60:40;y<Math.min(height-1,eyesOnly?110:180);y+=2)for(let x=48;x<Math.min(width-1,176);x+=2){const value=gray(x,y);sum+=value;sum2+=value*value;dark+=value<25;bright+=value>240;if(x<112)left+=value;else right+=value;count++;}
   if(!count)return '카메라 영상 품질을 확인할 수 없습니다';
   const mean=sum/count;
   if(mean<45||dark/count>.45)return '얼굴 앞쪽을 조금 더 밝게 해 주세요';
@@ -73,11 +91,30 @@ export function faceImageQuality(image) {
   if(sum2/count-mean*mean<16)return '얼굴의 윤곽을 구분하기 어렵습니다. 카메라 초점과 조명을 확인해 주세요';
   return null;
 }
+// Preserve aligned eye positions; fade hair, cheeks, nose and mouth to neutral.
+// This is a second model input, never a reinterpretation of embedding dimensions.
+export function eyeRegionImage(image){
+  const {width,height}=image,data=new Uint8ClampedArray(image.data);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+    const weight=Math.max(0,Math.min(1,(x-32)/12,(192-x)/12,(y-48)/12,(122-y)/12));
+    const index=(y*width+x)*4;
+    for(let channel=0;channel<3;channel++)data[index+channel]=128+(data[index+channel]-128)*weight;
+    data[index+3]=255;
+  }
+  return {data,width,height};
+}
 export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
   if(!security?.uid)throw new Error('계정 인증과 암호화된 얼굴 등록이 필요합니다.');
   const vault=createFaceVault(security,rpc,notify);
   let matcher=createIdentityMatcher(await vault.load()||[]),collector=matcher.enrolled?null:createEnrollmentCollector();
   const model=await tf.loadGraphModel(MODEL);
+  // Keep enrollment usable while an older self-hosted server still issues v2 tickets.
+  const compareEyes=collector?security.ticket?.binding?.schemaVersion===3:matcher.samples[0]?.length===2048;
+  async function describe(image){
+    const input=tf.tidy(()=>tf.browser.fromPixels(image).toFloat().expandDims(0));let descriptor;
+    try{descriptor=model.execute(input,'global_pooling/Mean');const values=await descriptor.data();if(values.length!==1024)throw new Error('얼굴 모델 특징 크기가 올바르지 않습니다.');return normalized(values);}
+    finally{input.dispose();descriptor?.dispose();}
+  }
   const canvas=new OffscreenCanvas(224,224),context=canvas.getContext('2d',{willReadFrequently:true});
   let lastCheck=-Infinity,current={matched:false,status:matcher.enrolled?'checking':'enrolling'},closed=false,saving=false,saveError='';
   const state=()=>({...current,enrolled:matcher.enrolled});
@@ -91,21 +128,27 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
       // Keep frame replies flowing while storage/KMS requests are pending.
       if(saving)return state();
       if(saveError)return state();
-      const faces=result.faceLandmarks||[],face=faces[0];
-      if(faces.length!==1||!face?.[473])return hold(faces.length>1?'화면에 한 사람만 나오게 해 주세요':'얼굴 전체가 카메라에 나오게 해 주세요. 크기와 위치는 자동으로 맞춥니다',faces.length>1);
-      if(time-lastCheck<500)return state();
-      lastCheck=time;
+      const faces=result.faceLandmarks||[];
+      if(!faces.length||collector&&faces.length>1)return hold(faces.length>1?'화면에 한 사람만 나오게 해 주세요':'얼굴 전체가 카메라에 나오게 해 주세요. 크기와 위치는 자동으로 맞춥니다',faces.length>1);
+      // A face index belongs only to the frame that was actually compared.
+      if(time-lastCheck<500&&faces.length===1)return {...state(),faceIndex:current.score>=.65?0:undefined};
+      const vote=time-lastCheck>=500;
+      if(vote)lastCheck=time;
       const width=source.videoWidth||source.width,height=source.videoHeight||source.height;
-      const framing=faceFrameGeometry(face,width,height);
-      if(!framing)return hold('얼굴 전체가 보이게 하고 너무 멀리 앉지 말아 주세요. 크기와 위치는 자동으로 맞춥니다');
-      notify({type:'face-framing',framing});
-      context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
-      context.setTransform(...framing.transform);context.drawImage(source,0,0);context.setTransform(1,0,0,1,0,0);
-      const image=context.getImageData(0,0,224,224),quality=faceImageQuality(image);
-      if(quality)return hold(quality);
-      const input=tf.tidy(()=>tf.browser.fromPixels(image).toFloat().expandDims(0));let descriptor;
-      try {
-        descriptor=model.execute(input,'global_pooling/Mean');const values=await descriptor.data();
+      const candidates=[];let qualityLabel='얼굴 전체가 보이게 하고 너무 멀리 앉지 말아 주세요. 크기와 위치는 자동으로 맞춥니다';
+      for(const [faceIndex,face] of faces.entries()){
+        const framing=face?.[473]&&faceFrameGeometry(face,width,height);
+        if(!framing)continue;
+        context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
+        context.setTransform(...framing.transform);context.drawImage(source,0,0);context.setTransform(1,0,0,1,0,0);
+        const image=context.getImageData(0,0,224,224),eyeImage=compareEyes?eyeRegionImage(image):null,quality=faceImageQuality(image,{eyesOnly:compareEyes});
+        if(quality){qualityLabel=quality;continue;}
+        const full=await describe(image),eyes=eyeImage?await describe(eyeImage):null;
+        if(!full||eyeImage&&!eyes)continue;
+        candidates.push({values:eyes?normalized([...full,...eyes]):full,faceIndex,framing});
+      }
+      if(!candidates.length)return hold(qualityLabel);
+      const values=candidates[0].values;
         if(collector){
           const observed=collector.observe(values,{time});
           current={matched:false,status:'enrolling',progress:observed.progress};
@@ -120,10 +163,15 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
               progress({state:'RECOVERY_REQUIRED',label:`저장 실패: ${saveError}`,canCapture:true,captureLabel:'저장 다시 시도'});
             }).finally(()=>{saving=false;});
           }
-        }else current=matcher.observe(values);
+        }else {
+          current=matcher.observeFaces(candidates.map(candidate=>candidate.values),{vote});
+          const selected=candidates[current.faceIndex];
+          current={...current,faceIndex:current.score>=.65?selected?.faceIndex:undefined};
+        }
+        const selected=candidates.find(candidate=>candidate.faceIndex===current.faceIndex)||(collector?candidates[0]:null);
+        if(selected)notify({type:'face-framing',framing:selected.framing});
         if(current.matched)notify({type:'face-verified'});
         return state();
-      }finally{input.dispose();descriptor?.dispose();}
     },
     close(){closed=true;collector?.reset();matcher=createIdentityMatcher();vault.close();model.dispose();canvas.width=canvas.height=0;},
   };

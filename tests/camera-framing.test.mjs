@@ -51,7 +51,7 @@ test('fresh cropped detection feeds identity using the original image; missing f
     getContext() { return { drawImage: (...args) => drawings.push(args), getImageData: () => ({}) }; }
   };
   let full = { faceLandmarks: [] }, cropped = makeFace(.3,.3,.2), created = 0, disposed = 0;
-  const checks = [], modes = [];
+  const checks = [], modes = [];let selectedIndex;
   const source = { width: 1280, height: 720 };
   let engine;
   try {
@@ -65,7 +65,7 @@ test('fresh cropped detection feeds identity using the original image; missing f
       HandLandmarker: { createFromOptions: async () => ({ detectForVideo: () => ({ landmarks: [] }), close() {} }) },
     }, { load: async () => ({ detect: async () => [], dispose() {} }) },
     { setBackend: async () => true, ready: async () => {}, getBackend: () => 'cpu' }, undefined,
-    { identityFactory: async () => ({ check: async (image, result) => { checks.push({ image, result }); return { status: 'checking' }; }, close() {} }) });
+    { identityFactory: async () => ({ check: async (image, result) => { checks.push({ image, result }); return { status: 'checking',faceIndex:selectedIndex }; }, close() {} }) });
     const recovered = await engine.detect(source, 0);
     assert.equal(checks[0].image, source);
     assert.equal(checks[0].result.faceLandmarks.length, 1);
@@ -90,6 +90,15 @@ test('fresh cropped detection feeds identity using the original image; missing f
     full = { faceLandmarks: [...makeFace().faceLandmarks, ...makeFace(.2).faceLandmarks] };
     await engine.detect(source, 400);
     assert.equal(checks.at(-1).result.faceLandmarks.length, 2);
+    const owner=Array.from({length:478},()=>({x:.7,y:.3}));
+    owner[33]={x:.6,y:.3};owner[263]={x:.8,y:.3};
+    full={faceLandmarks:[owner.map(point=>({...point,x:point.x-.4})),owner],faceBlendshapes:[{categories:[]},{categories:[{categoryName:'eyeBlinkLeft',score:.95},{categoryName:'eyeBlinkRight',score:.95}]}]};
+    selectedIndex=1;
+    const selected=await engine.detect(source,500);
+    assert.equal(selected.signals.face,true);
+    assert.equal(selected.signals.eyesClosed,true,'eye state must come from the owner, not the first person');
+    assert.equal(selected.signals.activityVector[0],.7,'head position must come from the owner');
+    selectedIndex=undefined;
     full = { faceLandmarks: [] };
     cropped = { faceLandmarks: [...makeFace(.1).faceLandmarks, ...makeFace(.6).faceLandmarks] };
     await engine.detect(source, 600);

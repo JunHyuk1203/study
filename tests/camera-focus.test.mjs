@@ -51,8 +51,10 @@ test('missing faces pause at five seconds while unknown returning faces retain t
   const missing=tracker.update(absent,7500);
   assert.equal(missing.tracking,false);assert.equal(missing.status,'paused');assert.equal(missing.reason,'away');
   assert.equal(missing.identityWarning,false);
-  assert.equal(tracker.update(wrong,7700).tracking,true);
-  assert.equal(advance(tracker,wrong,7900,12300,200).tracking,true);
+  assert.equal(tracker.update(wrong,7700).tracking,false);
+  assert.equal(advance(tracker,wrong,7900,9500,200).tracking,false);
+  assert.equal(tracker.update(wrong,9700).tracking,true);
+  assert.equal(advance(tracker,wrong,9900,12300,200).tracking,true);
   const expired=tracker.update(wrong,12500);assert.equal(expired.identityWarning,true);assert.equal(expired.tracking,false);
 });
 test('only the recognized owner clears a continuous mismatch deadline',()=>{
@@ -74,8 +76,30 @@ for(const loss of [null,{reliable:false},{...healthy,face:false}])test(`missing 
   assert.equal(paused.tracking,false);assert.equal(paused.reason,'away');assert.equal(paused.identityWarning,false);
   const stillMissing=advance(tracker,loss,7400,12200,200);
   assert.equal(stillMissing.tracking,false);assert.equal(stillMissing.reason,'away');assert.equal(stillMissing.identityWarning,false);
-  assert.equal(tracker.update(owner,12400).tracking,true);
+  assert.equal(tracker.update(owner,12400).tracking,false);
   assert.equal(advance(tracker,owner,12600,14400,200).tracking,true);
+});
+
+for(const withIdentity of [false,true])test(`away recovery waits two continuous seconds and resets on another face loss (identity: ${withIdentity})`,()=>{
+  const tracker=createFocusTracker();
+  const owner={...healthy,studyActivity:true,...(withIdentity?{identity:{matched:true,enrolled:true}}:{})};
+  const absent={...owner,face:false,...(withIdentity?{identity:{matched:false,enrolled:true}}:{})};
+  advance(tracker,owner,0,2000);
+  advance(tracker,absent,2200,7200,200);
+  assert.equal(tracker.update(owner,7400).reason,'away');
+  assert.equal(tracker.getDebug().resumeRemainingMs,2000);
+  assert.equal(tracker.update(owner,8400).tracking,false);
+  assert.equal(tracker.getDebug().resumeRemainingMs,1000);
+  assert.equal(tracker.update(absent,8500).tracking,false);
+  assert.equal(tracker.getDebug().resumeRemainingMs,null);
+  assert.equal(tracker.update(owner,8600).tracking,false);
+  assert.equal(tracker.getDebug().resumeRemainingMs,2000);
+  advance(tracker,owner,8800,10400,200);
+  const before=tracker.update(owner,10599);
+  assert.equal(before.tracking,false);assert.equal(before.reason,'away');
+  assert.equal(tracker.getDebug().resumeRemainingMs,1);
+  const resumed=tracker.update(owner,10600);
+  assert.equal(resumed.tracking,true);assert.equal(resumed.reason,null);
 });
 
 test('missing face grace takes priority even when the identity deadline expires first',()=>{
@@ -236,7 +260,7 @@ for (const [reason, signals, delay] of [
   assert.equal(warned.reason, reason);
   assert.equal(warned.status, 'paused');
   const recoverAt=2500+delay+500;
-  assert.equal(tracker.update(healthy, recoverAt).tracking, reason==='away');
+  assert.equal(tracker.update(healthy, recoverAt).tracking, false);
   assert.equal(advance(tracker, healthy, recoverAt+500, recoverAt+2000).tracking, true);
 });
 test('a blink or brief occlusion never becomes a persistent behavior warning', () => {

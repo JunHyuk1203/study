@@ -60,11 +60,12 @@ export function createFocusTracker() {
     for(const key of Object.keys(behaviorSince))behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
     const faceReturned=visible&&missingSince!==null&&resumeOnFace;
     missingSince = !visible ? missingSince ?? now : null;
+    if(!visible&&warning)healthySince=null;
     if(identityKnown&&ownerReady)identityFailureSince=null;
     if(faceReturned){
       resumeOnFace=false;
-      healthySince=now-FOCUS_LIMITS.resume;
-      if(warning==='away')warning=null;
+      // Brief losses can return immediately; a confirmed pause must recover normally.
+      healthySince=warning?null:now-FOCUS_LIMITS.resume;
     }
     if(identityKnown&&!enrolling&&!ownerReady)identityFailureSince??=now;
     const identityWarning=Boolean(identityKnown&&!enrolling&&!ownerReady&&identityFailureSince!==null&&now-identityFailureSince>=FOCUS_LIMITS.identity);

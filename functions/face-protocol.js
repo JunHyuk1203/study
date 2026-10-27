@@ -1,8 +1,8 @@
 // Shared wire format. Never add mutable display names or client clocks to AAD.
 export const FACE_POLICY = 'face-v1';
 export const FACE_MODEL = 'human-faceres-3.3.6-1024';
-export const FACE_PREPROCESS = 'eyes-aligned-rgb224-v1';
-export const FACE_SCHEMA = 2;
+export const FACE_PREPROCESS = 'eyes-aligned-rgb224-periocular-v2';
+export const FACE_SCHEMA = 3;
 export const FACE_ORIGIN = 'https://study.junhyuk.site';
 export const encode64 = bytes => {const array=new Uint8Array(bytes);let value='';for(let i=0;i<array.length;i+=8192)value+=String.fromCharCode(...array.subarray(i,i+8192));return btoa(value);};
 export const decode64 = value => Uint8Array.from(atob(value), c => c.charCodeAt(0));

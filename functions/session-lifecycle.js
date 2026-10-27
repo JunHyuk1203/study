@@ -6,31 +6,39 @@ import {settleWordStats} from './word-stats.js';
 import {readActivityRoom,publishRoomActivity} from './room-service.js';
 
 export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) {
+  return db.runTransaction(async transaction => (await prepareSessionFinish(db, transaction, uid, sessionId, expiredBeforeMs))());
+}
+
+// Read first, then let callers commit this settlement alongside a replacement.
+// This keeps handoff atomic without reading after writes in Firestore.
+export async function prepareSessionFinish(db, transaction, uid, sessionId, expiredBeforeMs = null, finishAt = null) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{20,128}$/.test(sessionId)) throw new HttpsError('invalid-argument', '학습 기록 ID가 올바르지 않습니다.');
   const profileRef = db.doc(`users/${uid}`);
   const sessionRef = profileRef.collection('sessions').doc(sessionId);
   const summaryRef = profileRef.collection('stats').doc('summary');
-  return db.runTransaction(async (transaction) => {
     const [profileDoc, sessionDoc, summaryDoc] = await transaction.getAll(profileRef, sessionRef, summaryRef);
     if (!profileDoc.exists || !sessionDoc.exists) throw new HttpsError('not-found', '학습 기록이 없습니다.');
     const session = sessionDoc.data();
     // Recheck inside the transaction: a heartbeat may have renewed this lease
     // after the cleanup query selected it.
-    if (expiredBeforeMs != null && (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+WORD_LEASE_MS) > expiredBeforeMs) return {notExpired:true};
+    if (expiredBeforeMs != null && (session.presenceUntilMs ?? session.leaseUntilMs ?? session.startedAt.toMillis()+WORD_LEASE_MS) > expiredBeforeMs) return () => ({notExpired:true});
     if (session.status === 'finished') {
+      return () => {
       transaction.delete(db.doc(`wordStudyLeases/${sessionId}`));
       return { creditedSeconds: session.creditedSeconds, alreadyFinished: true, studyRevision: profileDoc.data()?.studyRevision || 0 };
+      };
     }
     const profile = profileDoc.data();
     const wordSession=session.source==='superword';
     if (profile.activeSessionId !== sessionId && !(wordSession && profile.wordStudySessionId===sessionId)) throw new HttpsError('failed-precondition', '진행 중인 학습 기록이 일치하지 않습니다.');
     const cameraRef=wordSession&&session.cameraSessionId?profileRef.collection('sessions').doc(session.cameraSessionId):null;
     const camera=cameraRef?(await transaction.get(cameraRef)).data():null;
-    const now = Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
+    const now = finishAt ?? Timestamp.fromMillis(Math.floor(Date.now() / 1000) * 1000);
     const startedMs = session.startedAt.toMillis();
     const endedMs = Math.max(startedMs,Math.min(now.toMillis(), startedMs + MAX_SESSION_MS, session.presenceUntilMs??Infinity));
     const activity=await readActivityRoom(transaction,db,uid,profile);
     const checkpoint = session.cameraMode || session.activityMode ? checkpointCamera({ ...session, startedAtMs: startedMs }, endedMs, false) : null;
+    return () => {
     if(activity&&(!activity.room.members[uid]?.activitySource||activity.room.members[uid].activitySource===(wordSession?'word':'camera')))publishRoomActivity(transaction,activity,uid,profile,null,now.toMillis(),'',wordSession?'word':'camera');
     if(camera?.status==='active' && camera.wordSessionId===sessionId)transaction.update(cameraRef,{...checkpointCamera({...camera,startedAtMs:camera.startedAt.toMillis()},now.toMillis(),false),wordSessionId:null,wordLeaseUntilMs:null,wordPaused:false,sequence:(camera.sequence||0)+1,updatedAt:now});
     const segments = checkpoint ? checkpoint.segments : splitStudyInterval(startedMs, endedMs);
@@ -62,7 +70,7 @@ export async function finishSession(db, uid, sessionId, expiredBeforeMs = null) 
     transaction.delete(db.doc(`wordStudyLeases/${sessionId}`));
     transaction.update(profileRef, {activeSessionId:wordSession?(profile.activeSessionId===sessionId?null:profile.activeSessionId):(profile.wordStudySessionId||null),...(wordSession?{wordStudySessionId:null,wordCameraSessionId:null,wordPresenceUntilMs:null,wordAppUntilMs:null,wordTracking:false,wordSnapshot:null}:session.cameraMode?{wordCameraSessionId:null}:{}), studyRevision: FieldValue.increment(1), updatedAt: now });
     return { creditedSeconds, alreadyFinished: false, studyRevision:(profile.studyRevision || 0)+1 };
-  });
+    };
 }
 export async function expireUserSessions(db, uid) {
   const profile=(await db.doc(`users/${uid}`).get()).data();

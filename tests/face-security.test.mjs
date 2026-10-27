@@ -4,8 +4,8 @@ import {randomUUID,randomBytes,createCipheriv,createDecipheriv} from 'node:crypt
 import {createFaceService,authorizeFaceStudy,envelopeHash,faceDayEnd,seoulDay} from '../functions/face-service.js';
 import {FACE_MODEL,FACE_PREPROCESS,FACE_SCHEMA,FACE_ORIGIN,studyNonce} from '../functions/face-protocol.js';
 import {createBrowserFaceKeys} from '../face-storage.js';
-import {signFace,encryptFaceSamples,decryptFaceSamples} from '../face-crypto.js';
-import {createIdentityMatcher,createEnrollmentCollector,faceImageQuality,faceFrameGeometry,createLocalFaceGuard} from '../camera-identity.js';
+import {signFace,encryptFaceSamples,decryptFaceSamples,validateFaceSamples} from '../face-crypto.js';
+import {createIdentityMatcher,createEnrollmentCollector,faceImageQuality,faceFrameGeometry,createLocalFaceGuard,normalized,eyeRegionImage} from '../camera-identity.js';
 import {checkpointCamera} from '../functions/domain.js';
 import {createStudyRevocationCheck} from '../functions/study-auth.js';
 
@@ -49,6 +49,48 @@ test('envelope round trip binds account, browser, profile, versions and cipherte
   await assert.rejects(decryptFaceSamples({...encrypted,ciphertext:'A'+encrypted.ciphertext.slice(1)},h.keys,opened.wrappedKey,h.uid,h.installationId));
   const stored=JSON.stringify([...h.db.rows.values()]);assert.ok(!stored.includes('samples'));assert.ok(!stored.includes(encrypted.wrappedKey));
 });
+test('eye profiles encrypt both descriptors and legacy profiles remain readable',async()=>{
+  const h=await harness();await h.begin();
+  const samples=Array(12).fill(normalized([...owner,...owner]));
+  const encrypted=await encryptFaceSamples(samples,h.keys,h.ticket.binding);
+  const restored=await decryptFaceSamples(encrypted,h.keys,encrypted.wrappedKey,h.uid,h.installationId);
+  assert.equal(restored[0].length,2048);
+  assert.ok(Math.abs(restored[0][0]-samples[0][0])<1e-7);
+  const binding={...h.ticket.binding,preprocessVersion:'eyes-aligned-rgb224-v1',schemaVersion:2};
+  const legacy=await encryptFaceSamples(Array(12).fill(owner),h.keys,binding);
+  assert.deepEqual(await decryptFaceSamples(legacy,h.keys,legacy.wrappedKey,h.uid,h.installationId),Array(12).fill(owner));
+  await assert.rejects(encryptFaceSamples(samples,h.keys,binding));
+  assert.throws(()=>validateFaceSamples([owner,...samples.slice(1)]));
+  assert.throws(()=>validateFaceSamples(Array(12).fill([...owner,...Array(1024).fill(0)])));
+});
+
+test('eye weighting tolerates changed lower-face features but rejects different eyes',()=>{
+  const combined=(full,eyes)=>normalized([...full,...eyes]);
+  const matcher=createIdentityMatcher(Array(12).fill(combined(owner,owner)));
+  for(let i=0;i<5;i++)matcher.observe(combined(other,owner));
+  const masked=matcher.observe(combined(other,owner));
+  assert.equal(masked.matched,true);assert.ok(Math.abs(masked.score-.75)<1e-8);
+  assert.equal(matcher.observe(combined(owner,other)).matched,false);
+  assert.equal(matcher.observe(owner).matched,false,'eye profiles cannot fall back to full-face only');
+  const legacy=createIdentityMatcher(Array(12).fill(owner));
+  for(let i=0;i<5;i++)legacy.observe(combined(owner,other));
+  assert.equal(legacy.observe(combined(owner,other)).matched,true);
+});
+
+test('eye input excludes masks and hair while retaining both aligned eyes',()=>{
+  const image=smoothFaceImage(),eyes=eyeRegionImage(image),at=(input,x,y)=>input.data[(y*224+x)*4];
+  for(const [x,y] of [[80,85],[144,85]])assert.equal(at(eyes,x,y),at(image,x,y));
+  for(const [x,y] of [[80,20],[112,150],[10,85]])assert.equal(at(eyes,x,y),128);
+  assert.notEqual(at(image,112,150),128,'source pixels remain intact');
+  assert.equal(faceImageQuality(eyes),null);
+  const dark={...image,data:new Uint8ClampedArray(image.data)};
+  for(let y=48;y<122;y++)for(let x=32;x<192;x++)for(let c=0;c<3;c++)dark.data[(y*224+x)*4+c]=10;
+  assert.match(faceImageQuality(dark,{eyesOnly:true}),/밝게/);
+  const mask={...image,data:new Uint8ClampedArray(image.data)};
+  for(let y=122;y<224;y++)for(let x=0;x<224;x++)for(let c=0;c<3;c++)mask.data[(y*224+x)*4+c]=245;
+  assert.equal(faceImageQuality(mask,{eyesOnly:true}),null);
+});
+
 test('browser keys stay nonextractable after structured cloning and use AES-KW',async()=>{
   const keys=structuredClone(await createBrowserFaceKeys());
   await assert.rejects(crypto.subtle.exportKey('raw',keys.wrappingKey));
@@ -161,15 +203,15 @@ test('soft webcam texture can pass quality while blank, dark and overexposed fra
   assert.match(faceImageQuality(solid(245)),/강한 빛/);
 });
 
-test('soft webcam frames wait for confirmation and then collect frontal enrollment',async()=>{
+for(const schemaVersion of [2,3])test(`soft webcam frames collect frontal enrollment with server schema ${schemaVersion}`,async()=>{
   const previous=Object.getOwnPropertyDescriptor(globalThis,'OffscreenCanvas'),events=[],image=smoothFaceImage();
   const context={setTransform(){},fillRect(){},drawImage(){},getImageData:()=>image};
   globalThis.OffscreenCanvas=class{getContext(){return context;}};
-  let guard;
+  let guard,descriptions=0;
   try{
     const input={toFloat(){return this;},expandDims(){return this;},dispose(){}};
-    const tf={loadGraphModel:async()=>({execute:()=>({data:async()=>owner,dispose(){}}),dispose(){}}),tidy:fn=>fn(),browser:{fromPixels:()=>input}};
-    guard=await createLocalFaceGuard(tf,{uid:'owner',ticket:{id:'enrollment-test'}},()=>{throw Error('No server call should be made before all directions are collected');},event=>events.push(event));
+    const tf={loadGraphModel:async()=>({execute:()=>{descriptions++;return {data:async()=>owner,dispose(){}};},dispose(){}}),tidy:fn=>fn(),browser:{fromPixels:()=>input}};
+    guard=await createLocalFaceGuard(tf,{uid:'owner',ticket:{id:'enrollment-test',binding:{schemaVersion}}},()=>{throw Error('No server call should be made before all directions are collected');},event=>events.push(event));
     guard.confirmCapture();
     const face=Array.from({length:478},()=>({x:.5,y:160/480}));
     for(const i of [33,133])face[i]={x:280/640,y:160/480};
@@ -178,11 +220,27 @@ test('soft webcam frames wait for confirmation and then collect frontal enrollme
     let state;
     for(let time=0;time<=4500;time+=500)state=await guard.check({width:640,height:480},{faceLandmarks:[face]},time);
     assert.equal(state.progress,4);assert.equal(state.enrolled,false);
+    assert.equal(descriptions,schemaVersion===3?20:10);
     assert.equal(events.filter(event=>event.type==='face-progress').at(-1).direction,'left');
     assert.ok(!events.some(event=>event.label?.includes('가리는 물체')));
   }finally{
     guard?.close();if(previous)Object.defineProperty(globalThis,'OffscreenCanvas',previous);else delete globalThis.OffscreenCanvas;
   }
+});
+
+test('multi-face matching selects the owner regardless of order and counts each frame once',()=>{
+  const matcher=createIdentityMatcher(Array(12).fill(owner));
+  for(let i=0;i<8;i++)assert.equal(matcher.observeFaces([other,owner],{vote:false}).matched,false);
+  for(let i=0;i<4;i++)assert.equal(matcher.observeFaces([other,owner,other]).matched,false);
+  const matched=matcher.observeFaces([owner,other]);
+  assert.equal(matched.matched,true);assert.equal(matched.faceIndex,0);
+  const reordered=matcher.observeFaces([other,owner]);
+  assert.equal(reordered.matched,true);assert.equal(reordered.faceIndex,1);
+  assert.equal(matcher.observeFaces([other,other]).matched,false);
+  assert.equal(matcher.observeFaces([null,owner]).faceIndex,1);
+  matcher.observeFaces([]);
+  assert.equal(matcher.observeFaces([other,owner]).matched,false);
+  assert.deepEqual(matcher.samples,Array(12).fill(owner));
 });
 
 test('quality, multi-face and repeated-frame holds cannot add enrollment samples',()=>{

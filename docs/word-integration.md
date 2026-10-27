@@ -2,6 +2,10 @@
 
 단어앱 저장소: `superword`.
 
+2026-10-26 자동 입력 방지: SP word 작업 사본에 반복 클릭·스크롤·키 입력의 간격과 위치를 검사하는 감지기를 추가했다. 단순 마우스 이동과 키 자동 반복은 무입력 시간을 연장하지 않는다. 지속적인 자동 입력이 의심되면 기기·스터디 적립을 일시정지하며, 차단 상태는 계정별로 기기에 저장된다. 위치가 매번 바뀌는 4단계 확인을 완료해야 재개한다. 이미 쌓인 시간은 취소하지 않는다. 동작 감지는 휴리스틱이므로 모든 매크로·변조 클라이언트를 판별하는 보증은 아니다.
+
+동시 적립 제한: 새 기기·탭에서 실제 학습을 시작하면 `takeover:true` 요청으로 기존 단어 세션의 정산·종료와 새 세션 생성을 같은 서버 트랜잭션에서 수행한다. 이전 세션의 갱신과 제어 ID 재사용은 `session-replaced`로 거절한다. 이전 창은 자동으로 소유권을 다시 가져오지 않으며 설정의 ‘이 창에서 다시 학습’을 눌러야 전환한다. Web Locks로 복제 탭의 sessionStorage가 같은 제어 기록을 공유하지 않게 한다. Web Locks가 없는 환경에서는 문서마다 별도 ID를 사용한다. 서버 소스 재빌드와 SP word 웹 배포가 모두 필요하다.
+
 2026-10-24 자체 서버 전환: SP word 작업 사본 `.codex-superword-sync`에서 연결·학습·종료 요청과 스터디 기록 조회를 `https://api.study.junhyuk.site`로 전환했다. Word 자체 기록과 양쪽 Firebase Auth는 유지한다. 스터디 연결 문서는 PostgreSQL에 저장하며, 복원 요청은 스터디 로그인 없이 Word 토큰을 검증한다. 서버와 SP word 웹을 함께 배포해야 적용된다. 기존 클라우드 연결 문서를 이관하지 않았으므로 스터디 로그인도 유실된 경우 한 번 다시 연결해야 한다. 아래 Firestore·Functions 설명은 이전 배포 구조의 기록이다.
 
 - 단어 카드·쇼츠·테스트 화면에서 자동 시작한다. 플래시카드·객관식·주관식·따라쓰기 테스트도 모두 합산한다. 편집·설정·기록·테스트 결과 화면 또는 10초 무입력 시 시간을 보존한 채 일시정지하고, 학습 화면에서 다시 입력하면 재개한다. 백그라운드·페이지 종료·로그아웃에서는 저장 후 종료한다. 상단 캡슐은 오늘 누적시간을 표시하므로 새 세션에서도 초기화되지 않는다.
@@ -33,6 +37,6 @@
 
 ## 검증
 
-스터디: `npm run test:unit`, `npm run test:firebase`.
+스터디: `npm run test:unit`, `npm run test:selfhost`. Firebase 배포 구조를 검증할 때는 `npm run test:firebase`.
 
-단어앱: `node --test tests/study-timer.test.mjs`, `npm run test:rules`. Playwright를 NODE_PATH에 지정한 환경에서 `node tests/study-integration-ui.cjs`로 모바일/데스크톱 화면과 자동 시작·종료·기록 집계를 검증한다.
+단어앱: `npm run test:study`, `npm run test:rules`. Playwright를 NODE_PATH에 지정한 환경에서 `node tests/study-integration-ui.cjs`로 모바일/데스크톱 화면과 자동 시작·종료·기록 집계·자동 입력 차단·확인 후 재개·기기 전환을 검증한다.

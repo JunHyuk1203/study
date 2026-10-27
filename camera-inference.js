@@ -189,6 +189,10 @@ export async function createCameraInference(vision, cocoSsd, tf, canvas, { light
         modelMs.face = fullFaceMs + performance.now() - faceStarted;
         if (faceResult.faceLandmarks?.length === 1) { lastBounds = faceBounds(faceResult); lastFaceTime = time; }
         const identityState=identity?await identity.check(source,faceResult,time):null;
+        if(Number.isInteger(identityState?.faceIndex)){
+          const index=identityState.faceIndex;
+          faceResult={...faceResult,faceLandmarks:[faceResult.faceLandmarks[index]],faceBlendshapes:[faceResult.faceBlendshapes?.[index]]};
+        }
         if(time-handTime>=400){began=performance.now();handResult=hand.detectForVideo(source,time);handTime=time;modelMs.hand=performance.now()-began;}
         // ImageData is supported by TF.js fromPixels in workers and the main thread.
         if (phoneRedesign && !objectPending) {

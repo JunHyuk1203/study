@@ -184,6 +184,51 @@ test('camera and word handoff preserves mutual exclusion and duplicate event bou
   assert.equal((await ref.get()).data().status,'finished');
   await rpc('finishStudySession',uid,{sessionId:word.sessionId});
 });
+test('word takeover atomically settles the old device and prevents stale heartbeats and finishes from touching the new device',async()=>{
+  const uid='word-device-owner',firstController=randomUUID(),secondController=randomUUID();
+  await rpc('ensureProfile',uid,{displayName:'단일 기기'});
+  const old=await rpc('startWordStudy',uid,{controllerId:firstController,tracking:true});
+  const now=Math.floor(Date.now()/1000)*1000;
+  const oldRef=db.doc(`users/${uid}/sessions/${old.sessionId}`);
+  await oldRef.update({startedAt:Timestamp.fromMillis(now-10000),activeSinceMs:now-5000,leaseUntilMs:now+10000});
+  await assert.rejects(rpc('startWordStudy',uid,{controllerId:secondController,tracking:true}),{code:'already-exists'});
+  const next=await rpc('startWordStudy',uid,{controllerId:secondController,tracking:true,takeover:true});
+  assert.notEqual(next.sessionId,old.sessionId);
+  const settled=(await oldRef.get()).data();
+  assert.equal(settled.status,'finished');assert.equal(settled.terminalReason,'session-replaced');assert.equal(settled.replacedBySessionId,next.sessionId);
+  assert.ok(settled.creditedSeconds>=5);assert.ok(settled.endedAt.toMillis()<=next.session.activeSinceMs);
+  await assert.rejects(rpc('syncWordStudy',uid,{sessionId:old.sessionId,controllerId:firstController,sequence:999,tracking:true,present:true}),error=>error.details?.terminalReason==='session-replaced');
+  await assert.rejects(rpc('startWordStudy',uid,{controllerId:firstController,tracking:true,takeover:true}),error=>error.details?.terminalReason==='session-replaced');
+  const total=(await db.doc(`users/${uid}/stats/summary`).get()).data().totalSeconds;
+  await rpc('finishStudySession',uid,{sessionId:old.sessionId});
+  assert.equal((await db.doc(`users/${uid}`).get()).data().wordStudySessionId,next.sessionId);
+  assert.equal((await db.doc(`users/${uid}/stats/summary`).get()).data().totalSeconds,total);
+  assert.equal((await db.doc(`wordStudyLeases/${old.sessionId}`).get()).exists,false);
+  await assert.rejects(rpc('syncWordStudy',uid,{sessionId:next.sessionId,controllerId:firstController,sequence:1,tracking:true,present:true}),{code:'permission-denied'});
+  await rpc('finishStudySession',uid,{sessionId:next.sessionId});
+});
+
+test('simultaneous word takeovers leave exactly one active server session',async()=>{
+  const uid='word-device-race';await rpc('ensureProfile',uid,{displayName:'기기 경합'});
+  const starts=await Promise.all(Array.from({length:4},()=>rpc('startWordStudy',uid,{controllerId:randomUUID(),tracking:true,takeover:true})));
+  const profile=(await db.doc(`users/${uid}`).get()).data();
+  const sessions=await Promise.all(starts.map(row=>db.doc(`users/${uid}/sessions/${row.sessionId}`).get()));
+  assert.equal(sessions.filter(row=>row.data().status==='active').length,1);
+  assert.equal(sessions.find(row=>row.data().status==='active').id,profile.wordStudySessionId);
+  await rpc('finishStudySession',uid,{sessionId:profile.wordStudySessionId});
+});
+
+test('word device takeover keeps camera handoff exclusive and clears the old lease',async()=>{
+  const uid='word-device-camera';await rpc('ensureProfile',uid,{displayName:'카메라 기기'});
+  const camera=await rpc('startStudySession',uid,{controllerId:randomUUID(),subjectId:'other',cameraMode:true});
+  const first=await rpc('startWordStudy',uid,{controllerId:randomUUID(),tracking:true});
+  const next=await rpc('startWordStudy',uid,{controllerId:randomUUID(),tracking:true,takeover:true});
+  const saved=(await db.doc(`users/${uid}/sessions/${camera.sessionId}`).get()).data();
+  assert.equal(saved.wordSessionId,next.sessionId);assert.equal(saved.wordPaused,true);assert.equal(saved.activeSinceMs,null);
+  assert.equal((await db.doc(`wordStudyLeases/${first.sessionId}`).get()).exists,false);
+  await rpc('finishStudySession',uid,{sessionId:next.sessionId});await rpc('finishStudySession',uid,{sessionId:camera.sessionId});
+});
+
 test('private room code joins and final departure remove room and code mappings',async()=>{
   const {roomId}=await rpc('updateStudySocial','alice',{action:'createRoom',title:'시험 스터디',visibility:'private'});
   const {code}=await rpc('updateStudySocial','alice',{action:'roomCode',roomId});
