@@ -1,5 +1,5 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
-import { createFocusTracker, FOCUS_LIMITS } from './camera-focus.js?v=20261026-face7';
+import { createFocusTracker, FOCUS_LIMITS } from './camera-focus.js?v=20261028-eyes1';
 import { paintCameraDebug } from './camera-debug.js?v=20261026-ui21';
 import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';

@@ -280,6 +280,64 @@ test('eye closure continues timing before confirmation and warns exactly when it
   const confirmed=tracker.update({...healthy,eyesClosed:true},6700);
   assert.equal(confirmed.tracking,false);assert.equal(confirmed.status,'paused');assert.equal(confirmed.reason,'sleep');
 });
+test('brief false-open runs preserve closure timing and cannot confirm sleep on an open frame', () => {
+  const tracker=createFocusTracker(),closed={...healthy,eyesClosed:true};
+  advance(tracker,healthy,0,2000);
+  for(let t=2200;t<6700;t+=100){
+    const falseOpen=(t>=3400&&t<=3800)||t===5200||t>=6500;
+    assert.equal(tracker.update(falseOpen?healthy:closed,t).tracking,true);
+  }
+  assert.equal(tracker.update(healthy,6700).tracking,true);
+  assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').elapsedMs,4500);
+  const state=tracker.update(closed,6800);
+  assert.equal(state.reason,'sleep');assert.equal(state.tracking,false);
+});
+
+test('sustained eye opening clears closure evidence at the reopen boundary', () => {
+  const tracker=createFocusTracker(),closed={...healthy,eyesClosed:true};
+  advance(tracker,healthy,0,2000);
+  advance(tracker,closed,2200,4000,200);
+  tracker.update(healthy,4200);
+  tracker.update(healthy,4200+FOCUS_LIMITS.eyeReopen-1);
+  assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').active,true);
+  tracker.update(healthy,4200+FOCUS_LIMITS.eyeReopen);
+  assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').active,false);
+  tracker.update(closed,5000);
+  assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').elapsedMs,0);
+});
+
+test('a closed frame after a sustained open interval starts fresh closure evidence', () => {
+  const tracker=createFocusTracker(),closed={...healthy,eyesClosed:true};
+  advance(tracker,healthy,0,2000);
+  advance(tracker,closed,2200,4000,200);
+  tracker.update(healthy,4200);
+  tracker.update(closed,5000);
+  assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').elapsedMs,0);
+});
+
+test('false-open frames cannot accumulate recovery time across continued sleep', () => {
+  const tracker=createFocusTracker(),closed={...healthy,eyesClosed:true};
+  advance(tracker,healthy,0,2000);
+  advance(tracker,closed,2200,6800,200);
+  for(let t=7000;t<=10000;t+=200){
+    const result=tracker.update(t%600===0?healthy:closed,t);
+    assert.equal(result.reason,'sleep');assert.equal(result.tracking,false);
+  }
+  tracker.update(healthy,10200);
+  assert.equal(advance(tracker,healthy,10400,12200,200).tracking,true);
+});
+
+test('face loss and explicit reset discard pending closure evidence', () => {
+  for(const reset of [tracker=>tracker.reset(),tracker=>tracker.update({...healthy,face:false},4200)]){
+    const tracker=createFocusTracker(),closed={...healthy,eyesClosed:true};
+    advance(tracker,healthy,0,2000);
+    advance(tracker,closed,2200,4000,200);
+    reset(tracker);
+    tracker.update(closed,4400);
+    assert.equal(tracker.getDebug().rows.find(row=>row.key==='sleep').elapsedMs,0);
+  }
+});
+
 test('idle requires fifteen seconds of stillness and exits on observed movement', () => {
   const tracker = createFocusTracker();
   assert.equal(advance(tracker, healthy, 0, IDLE_AT-500).tracking, true);

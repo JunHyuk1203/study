@@ -1,7 +1,7 @@
 // Temporal policy: no images, networking, storage, or user calibration.
 import { createIdleTracker } from './camera-idle.js?v=20261024-10';
 import { createPhoneTracker } from './camera-phone.js?v=20261025-8';
-export const FOCUS_LIMITS = Object.freeze({ identity: 10000, faceGrace: 5000, sleep: 4500, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
+export const FOCUS_LIMITS = Object.freeze({ identity: 10000, faceGrace: 5000, sleep: 4500, eyeReopen: 750, phone: 750, away: 5000, idle: 15000, resume: 2000, gap: 3000 });
 export const FOCUS_MESSAGES = Object.freeze({
   sleep: '수면·졸음 감지 · 눈을 뜨고 학습하면 자동 재개됩니다',
   phone: '휴대폰 사용 감지 · 휴대폰을 내려놓으면 자동 재개됩니다',
@@ -19,6 +19,7 @@ export function createFocusTracker() {
   let phoneObservationId=null,phonePositives=0;
   let phoneTracker=createPhoneTracker(),phoneState=null;
   let behaviorSince={sleep:null,phone:null,away:null};
+  let eyesOpenSince=null;
   let identityFailureSince=null;
   let identityKnown=false,resumeOnFace=false;
   function reset(preserveOwner=false) {
@@ -32,6 +33,7 @@ export function createFocusTracker() {
     phoneObservationId=null;phonePositives=0;
     phoneTracker=createPhoneTracker();phoneState=null;
     behaviorSince={sleep:null,phone:null,away:null};
+    eyesOpenSince=null;
     identityFailureSince=keepFailure;
     identityKnown=keepIdentity;resumeOnFace=false;
   }
@@ -57,7 +59,19 @@ export function createFocusTracker() {
     const ownerReady=!identityKnown || valid&&signals.face&&identity?.matched===true;
     const enrolling=identity && (identity.enrolled===false || identity.status==='enrolling');
     const observations={sleep:visible&&signals.eyesClosed,phone:valid&&phoneActive,away:valid&&!signals.face};
-    for(const key of Object.keys(behaviorSince))behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
+    // Bridge short false-open runs without confirming sleep on an open frame.
+    // Missing faces and reset still discard all closure evidence immediately.
+    if(!visible){behaviorSince.sleep=null;eyesOpenSince=null;}
+    else if(observations.sleep){
+      if(eyesOpenSince!==null&&now-eyesOpenSince>=FOCUS_LIMITS.eyeReopen)behaviorSince.sleep=null;
+      behaviorSince.sleep??=now;
+      eyesOpenSince=null;
+      if(!trackingNow||warning)healthySince=null;
+    }else if(behaviorSince.sleep!==null){
+      eyesOpenSince??=now;
+      if(now-eyesOpenSince>=FOCUS_LIMITS.eyeReopen){behaviorSince.sleep=null;eyesOpenSince=null;}
+    }
+    for(const key of ['phone','away'])behaviorSince[key]=observations[key]?behaviorSince[key]??now:null;
     const faceReturned=visible&&missingSince!==null&&resumeOnFace;
     missingSince = !visible ? missingSince ?? now : null;
     if(!visible&&warning)healthySince=null;
