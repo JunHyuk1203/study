@@ -6,7 +6,8 @@ export function focusDebugRows(debug) {
   return Object.entries(LABELS).map(([key, label]) => {
     if(key==='identity'){
       const identity=debug?.identity;
-      const text=Number.isFinite(identity?.score)?`${(identity.score*100).toFixed(1)}% · 본인 기준 65.0% · ${identity.matched?'일치':'확인 중'}`:
+      const threshold=identity?.threshold??.8;
+      const text=Number.isFinite(identity?.score)?`비교 점수 ${identity.score.toFixed(3)} · 기준 ${threshold.toFixed(3)} · ${identity.matched?'일치':'확인 중'} (본인 확률 아님)`:
         !identity?'분석 대기':identity.enrolled===false||identity.status==='enrolling'?'얼굴 등록 중 · 점수 대기':
         identity.status==='missing'?'얼굴 미감지 · 점수 없음':identity.status==='multiple'?'여러 얼굴 감지 · 점수 없음':'얼굴 비교 중 · 점수 대기';
       return {key,label,text,active:Number.isFinite(identity?.score)};

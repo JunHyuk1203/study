@@ -6,20 +6,24 @@ export function normalized(values){
   const norm=Math.hypot(...values);return norm>0?Array.from(values,value=>value/norm):null;
 }
 const similarity=(a,b)=>a.reduce((sum,value,i)=>sum+value*b[i],0);
-export const EYE_SCORE_WEIGHT=.75;
-function faceSimilarity(sample,descriptor){
+// Provisional operating point: calibrate with genuine/impostor webcam pairs.
+// Cosine similarity is a score, not a probability of identity.
+export const IDENTITY_THRESHOLD=.8;
+function faceSimilarity(sample,descriptor,dualFull){
   const savedFull=normalized(sample.slice(0,1024)),observedFull=normalized(descriptor.slice(0,1024));
   if(!savedFull||!observedFull)return -1;
   const full=similarity(savedFull,observedFull);
-  if(sample.length===1024)return full;
-  if(descriptor.length!==2048)return -1;
-  const eyes=normalized(sample.slice(1024)),observedEyes=normalized(descriptor.slice(1024));
-  if(!eyes||!observedEyes)return -1;
-  const eyeScore=similarity(eyes,observedEyes);
-  // A strong full-face score must not compensate for different eyes.
-  return eyeScore>=.65?EYE_SCORE_WEIGHT*eyeScore+(1-EYE_SCORE_WEIGHT)*full:-1;
+  // Legacy periocular embeddings are intentionally ignored. A masked input to
+  // a whole-face model must never authenticate someone with different features.
+  if(!dualFull)return full;
+  if(sample.length!==2048||descriptor.length!==2048)return -1;
+  const savedLight=normalized(sample.slice(1024)),observedLight=normalized(descriptor.slice(1024));
+  if(!savedLight||!observedLight)return -1;
+  const light=similarity(savedLight,observedLight);
+  // Lighting-normalized features lead, but cannot rescue an unrelated RGB face.
+  return Math.min(.75*light+.25*full,full+.08);
 }
-export function createIdentityMatcher(saved=[]) {
+export function createIdentityMatcher(saved=[],{dualFull=false}={}) {
   const samples=saved.map(normalized).filter(Boolean);let votes=[];
   return {
     get enrolled(){return samples.length===12;},
@@ -30,14 +34,21 @@ export function createIdentityMatcher(saved=[]) {
       let score=-Infinity,faceIndex=-1;
       if(samples.length===12)values.forEach((value,index)=>{
         const descriptor=normalized(value);if(!descriptor)return;
-        const scores=samples.map(sample=>faceSimilarity(sample,descriptor)).sort((a,b)=>b-a);
-        const candidate=scores.slice(0,3).reduce((a,b)=>a+b,0)/3;
+        const scores=samples.map(sample=>faceSimilarity(sample,descriptor,dualFull));
+        // Require two supporting samples from ONE enrolled pose. Averaging the
+        // best three across different poses penalizes genuine side views and
+        // lets unrelated isolated matches combine into a passing score.
+        let offset=0;
+        const candidate=Math.max(...FACE_DIRECTIONS.map(({count})=>{
+          const pose=scores.slice(offset,offset+=count).sort((a,b)=>b-a);
+          return (pose[0]+pose[1])/2;
+        }));
         if(candidate>score){score=candidate;faceIndex=index;}
       });
       if(faceIndex<0){votes=[];return {matched:false,status:'locked'};}
-      if(vote){votes.push(score>=.65);votes=votes.slice(-5);}
-      const matched=votes.length===5&&votes.filter(Boolean).length>=4&&score>=.65;
-      return {matched,status:matched?'matched':score<.65?'mismatch':'checking',score,faceIndex};
+      if(vote){votes.push(score>=IDENTITY_THRESHOLD);votes=votes.slice(-5);}
+      const matched=votes.length===5&&votes.filter(Boolean).length>=4&&score>=IDENTITY_THRESHOLD;
+      return {matched,status:matched?'matched':score<IDENTITY_THRESHOLD?'mismatch':'checking',score,threshold:IDENTITY_THRESHOLD,faceIndex};
     },
   };
 }
@@ -103,15 +114,37 @@ export function eyeRegionImage(image){
   }
   return {data,width,height};
 }
+// Deterministic whole-face view: remove color cast and standardize face-interior
+// exposure/contrast. No common gray mask is fed to the model.
+export function lightingNormalizedFace(image){
+  const {width,height}=image,data=new Uint8ClampedArray(image.data);
+  const gray=index=>.299*image.data[index]+.587*image.data[index+1]+.114*image.data[index+2];
+  let count=0,sum=0,sum2=0;
+  for(let y=Math.floor(height*.18);y<height*.85;y++)for(let x=Math.floor(width*.2);x<width*.8;x++){
+    const value=gray((y*width+x)*4);sum+=value;sum2+=value*value;count++;
+  }
+  const mid=sum/Math.max(1,count),deviation=Math.sqrt(Math.max(0,sum2/Math.max(1,count)-mid*mid));
+  const gain=Math.min(8,Math.max(.5,40/Math.max(5,deviation)));
+  for(let index=0;index<data.length;index+=4){
+    const value=Math.max(0,Math.min(255,128+(gray(index)-mid)*gain));
+    data[index]=data[index+1]=data[index+2]=value;data[index+3]=255;
+  }
+  return {data,width,height};
+}
 export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
   if(!security?.uid)throw new Error('계정 인증과 암호화된 얼굴 등록이 필요합니다.');
   const vault=createFaceVault(security,rpc,notify);
-  let matcher=createIdentityMatcher(await vault.load()||[]),collector=matcher.enrolled?null:createEnrollmentCollector();
+  const binding=security.ticket?.binding||security.record?.binding;
+  const dualFull=binding?.schemaVersion===4;
+  let matcher=createIdentityMatcher(await vault.load()||[],{dualFull}),collector=matcher.enrolled?null:createEnrollmentCollector();
   const model=await tf.loadGraphModel(MODEL);
-  // Keep enrollment usable while an older self-hosted server still issues v2 tickets.
+  // Preserve old enrollment wire formats when connected to an older server.
   const compareEyes=collector?security.ticket?.binding?.schemaVersion===3:matcher.samples[0]?.length===2048;
   async function describe(image){
-    const input=tf.tidy(()=>tf.browser.fromPixels(image).toFloat().expandDims(0));let descriptor;
+    // Synthesized lighting/eye views are plain RGBA buffers; browsers need a
+    // native ImageData object at the TF.js pixel boundary.
+    const pixels=typeof ImageData==='function'?new ImageData(image.data,image.width,image.height):image;
+    const input=tf.tidy(()=>tf.browser.fromPixels(pixels).toFloat().expandDims(0));let descriptor;
     try{descriptor=model.execute(input,'global_pooling/Mean');const values=await descriptor.data();if(values.length!==1024)throw new Error('얼굴 모델 특징 크기가 올바르지 않습니다.');return normalized(values);}
     finally{input.dispose();descriptor?.dispose();}
   }
@@ -131,7 +164,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
       const faces=result.faceLandmarks||[];
       if(!faces.length||collector&&faces.length>1)return hold(faces.length>1?'화면에 한 사람만 나오게 해 주세요':'얼굴 전체가 카메라에 나오게 해 주세요. 크기와 위치는 자동으로 맞춥니다',faces.length>1);
       // A face index belongs only to the frame that was actually compared.
-      if(time-lastCheck<500&&faces.length===1)return {...state(),faceIndex:current.score>=.65?0:undefined};
+      if(time-lastCheck<500&&faces.length===1)return {...state(),faceIndex:current.score>=IDENTITY_THRESHOLD?0:undefined};
       const vote=time-lastCheck>=500;
       if(vote)lastCheck=time;
       const width=source.videoWidth||source.width,height=source.videoHeight||source.height;
@@ -141,7 +174,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
         if(!framing)continue;
         context.setTransform(1,0,0,1,0,0);context.fillStyle='#808080';context.fillRect(0,0,224,224);
         context.setTransform(...framing.transform);context.drawImage(source,0,0);context.setTransform(1,0,0,1,0,0);
-        const image=context.getImageData(0,0,224,224),eyeImage=compareEyes?eyeRegionImage(image):null,quality=faceImageQuality(image,{eyesOnly:compareEyes});
+        const image=context.getImageData(0,0,224,224),eyeImage=dualFull?lightingNormalizedFace(image):compareEyes?eyeRegionImage(image):null,quality=faceImageQuality(image);
         if(quality){qualityLabel=quality;continue;}
         const full=await describe(image),eyes=eyeImage?await describe(eyeImage):null;
         if(!full||eyeImage&&!eyes)continue;
@@ -156,7 +189,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
           if(observed.complete){
             saving=true;current={matched:false,status:'saving',progress:12};
             void vault.save(observed.samples).then(restored=>{
-              if(closed)return;matcher=createIdentityMatcher(restored);collector.reset();collector=null;current={matched:false,status:'checking'};
+              if(closed)return;matcher=createIdentityMatcher(restored,{dualFull});collector.reset();collector=null;current={matched:false,status:'checking'};
               notify({type:'face-progress',state:'READY',manualCapture:false,label:'저장이 완료됐습니다. 학습 화면에서 얼굴을 계속 확인합니다.'});
             }).catch(error=>{
               if(closed)return;saveError=error.message||'얼굴 정보를 저장하지 못했습니다.';current={matched:false,status:'save-error',progress:12};
@@ -166,7 +199,7 @@ export async function createLocalFaceGuard(tf,security,rpc,notify=()=>{}) {
         }else {
           current=matcher.observeFaces(candidates.map(candidate=>candidate.values),{vote});
           const selected=candidates[current.faceIndex];
-          current={...current,faceIndex:current.score>=.65?selected?.faceIndex:undefined};
+          current={...current,faceIndex:current.score>=IDENTITY_THRESHOLD?selected?.faceIndex:undefined};
         }
         const selected=candidates.find(candidate=>candidate.faceIndex===current.faceIndex)||(collector?candidates[0]:null);
         if(selected)notify({type:'face-framing',framing:selected.framing});

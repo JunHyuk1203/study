@@ -1,6 +1,6 @@
 import { facePose, paintAvatar } from './camera-avatar.js?v=20261024-17';
 import { createFocusTracker, FOCUS_LIMITS } from './camera-focus.js?v=20261028-eyes1';
-import { paintCameraDebug } from './camera-debug.js?v=20261026-ui21';
+import { paintCameraDebug } from './camera-debug.js?v=20261031-light1';
 import {showToast} from './notifications.js?v=20261022-18';
 import {prepareFaceSession,waitForFaceSessionReady,faceWorkerContext,handleFaceWorkerRPC,handleFaceWorkerEvent,attachFacePreview,lockFaceSession} from './face-session.js';
 // Raw frames stay off-screen; only derived behavior and tracking state reach the UI.
@@ -210,7 +210,7 @@ function applyResult(data,now) {
 }
 function startRecognitionWorker(token, light = false) {
   latestFaceResult=latestPhoneObservation=latestPhoneSearch=null;
-  const target = new Worker(new URL('./camera-worker.js?v=20261027-eyes1', import.meta.url));
+  const target = new Worker(new URL('./camera-worker.js?v=20261031-light1', import.meta.url));
   worker = target;
   target.onerror = error => { error.preventDefault(); if (worker === target) recoverRecognition(token, error.message); };
   target.onmessage = ({ data }) => {
